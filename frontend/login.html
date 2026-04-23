@@ -11,6 +11,7 @@
   <link rel="icon" type="image/svg+xml" href="/icon.svg" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   <link rel="stylesheet" href="style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
 </head>
 <body class="login-page">
   <main class="login-main">
@@ -44,6 +45,11 @@
         <button type="submit">進入系統</button>
       </form>
 
+      <div class="login-qr">
+        <p class="login-qr-label">掃碼在手機開啟</p>
+        <canvas id="qrCanvas" width="160" height="160"></canvas>
+      </div>
+
     </div>
   </main>
 
@@ -51,6 +57,11 @@
     const p = new URLSearchParams(window.location.search);
     if (p.get('next')) document.getElementById('nextField').value = p.get('next');
     if (p.get('error')) document.getElementById('errMsg').hidden = false;
+
+    window.QRCode.toCanvas(document.getElementById('qrCanvas'), window.location.origin + '/', {
+      width: 160, margin: 2,
+      color: { dark: '#1f2937', light: '#ffffff' }
+    }, () => {});
   </script>
 </body>
 </html>

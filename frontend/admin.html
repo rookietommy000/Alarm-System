@@ -31,24 +31,6 @@
     </div>
 
     <section class="admin-grid">
-      <section class="qr-section">
-        <header>
-          <h2>掃碼開啟系統</h2>
-          <button class="qr-toggle" @click="toggleQR" :aria-expanded="showQR">
-            {{ showQR ? '收合 ▴' : '展開 ▾' }}
-          </button>
-        </header>
-        <div v-if="showQR" class="qr-panel">
-          <canvas ref="qrCanvas" width="240" height="240"></canvas>
-          <p class="qr-url">{{ qrUrl || '（請輸入網址）' }}</p>
-          <label>
-            網址（預設為本系統）
-            <input v-model="qrUrl" @input="scheduleRender" inputmode="url" autocomplete="off" placeholder="https://..." />
-          </label>
-          <button class="download" @click="downloadQR" :disabled="!qrUrl">下載 QR（PNG）</button>
-        </div>
-      </section>
-
       <aside class="list-pane">
         <button class="primary" @click="newRecord">＋ 新增代碼</button>
         <ul class="codelist">
