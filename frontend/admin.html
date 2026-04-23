@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#1f2937" />
+  <meta name="theme-color" content="#987d84" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -13,8 +13,50 @@
   <link rel="icon" type="image/svg+xml" href="/icon.svg" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
   <link rel="stylesheet" href="style.css" />
+  <style>
+    :root {
+      --bg: #e8e1db;
+      --surface: #f2ede8;
+      --text: #2c2118;
+      --muted: #8a7d74;
+      --border: #d4cdc6;
+      --border-strong: #bfb8b0;
+      --nav: #987d84;
+      --nav-link: #f0e8ea;
+      --primary: #2c2118;
+      --primary-ink: #f2ede8;
+    }
+    .topbar { border-bottom: 1px solid #7d6870; }
+    .topbar h1 { font-weight: 500; color: #f2ede8; }
+    .topbar a { color: #f0e8ea; font-size: 13px; }
+    .topbar a:hover { background: rgba(255,255,255,.12); color: #fff; }
+    .admin-banner {
+      background: #947f7a;
+      color: #f2ede8;
+      font-weight: 700;
+      font-size: 14px;
+      letter-spacing: 0.03em;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.18);
+    }
+    .admin-banner-dot { background: #f2ede8; }
+    .list-pane { background: #f2ede8; }
+    .codelist li { color: #2c2118; }
+    .codelist li:hover { background: #e8e1db; }
+    .codelist li.active { background: #ddd4cc; }
+    .form-pane { background: #f2ede8; }
+    .form-pane label { color: #8a7d74; }
+    .form-pane input, .form-pane select, .form-pane textarea {
+      background: #e8e1db;
+      border: 1px solid #d4cdc6;
+      color: #2c2118;
+    }
+    .form-pane input:focus, .form-pane select:focus, .form-pane textarea:focus {
+      border-color: #a89e97;
+      outline: none;
+    }
+    .empty-pane { color: #8a7d74; }
+  </style>
 </head>
 <body>
   <div id="app">
@@ -82,7 +124,7 @@
       </main>
 
       <main class="form-pane empty-pane" v-else>
-        <p>從左側選擇一筆代碼以編輯，或點擊「新增代碼」。</p>
+        <p>選擇一筆代碼以編輯，或點擊「新增代碼」。</p>
       </main>
     </section>
   </div>
@@ -94,19 +136,11 @@
         return {
           items: [], devices: [],
           editing: null, isNew: false, error: '',
-          keywordsText: '',
-          showQR: false,
-          qrUrl: '',
-          qrTimer: null
+          keywordsText: ''
         };
       },
       mounted() {
-        this.qrUrl = window.location.origin + '/';
         this.load();
-        fetch('/api/server-url')
-          .then(r => r.json())
-          .then(d => { if (d.url) { this.qrUrl = d.url; if (this.showQR) this.renderQR(); } })
-          .catch(() => {});
       },
       watch: {
         'editing.keywords'() {
@@ -151,31 +185,6 @@
           await this.load();
           this.editing = null;
         },
-        toggleQR() {
-          this.showQR = !this.showQR;
-          if (this.showQR) this.$nextTick(() => this.renderQR());
-        },
-        scheduleRender() {
-          clearTimeout(this.qrTimer);
-          this.qrTimer = setTimeout(() => this.renderQR(), 250);
-        },
-        renderQR() {
-          const canvas = this.$refs.qrCanvas;
-          if (!canvas || !window.QRCode || !this.qrUrl) return;
-          window.QRCode.toCanvas(canvas, this.qrUrl, {
-            width: 240,
-            margin: 2,
-            color: { dark: '#1f2937', light: '#ffffff' }
-          }, err => { if (err) console.warn('QR render failed:', err); });
-        },
-        downloadQR() {
-          const canvas = this.$refs.qrCanvas;
-          if (!canvas) return;
-          const link = document.createElement('a');
-          link.download = 'alarm-system-qr.png';
-          link.href = canvas.toDataURL('image/png');
-          link.click();
-        }
       }
     }).mount('#app');
 

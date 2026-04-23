@@ -14,15 +14,70 @@
   <link rel="icon" type="image/svg+xml" href="/icon.svg" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
   <link rel="stylesheet" href="style.css" />
+  <style>
+    :root {
+      --bg: #e8e1db;
+      --surface: #f2ede8;
+      --text: #2c2118;
+      --muted: #8a7d74;
+      --border: #d4cdc6;
+      --border-strong: #bfb8b0;
+      --nav: #987d84;
+      --nav-link: #f2ede8;
+      --primary: #2c2118;
+      --primary-ink: #f2ede8;
+    }
+    .topbar { border-bottom: 1px solid #7d6870; }
+    .topbar h1 { font-weight: 500; letter-spacing: -0.2px; color: #f2ede8; }
+    .topbar a { color: #f0e8ea; font-size: 13px; }
+    .topbar a:hover { background: rgba(255,255,255,.12); color: #fff; }
+    .filters { background: #e8e1db; border-bottom: 1px solid #d4cdc6; }
+    .filters input, .filters select {
+      background: #f2ede8;
+      border: 1px solid #d4cdc6;
+      color: #2c2118;
+      border-radius: 8px;
+    }
+    .filters input::placeholder { color: #a89e97; }
+    .filters input:focus, .filters select:focus { border-color: #a89e97; outline: none; box-shadow: 0 0 0 2px rgba(44,33,24,0.08); }
+    table { border-collapse: collapse; }
+    thead th {
+      background: #e8e1db;
+      color: #8a7d74;
+      font-weight: 500;
+      font-size: 12px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      border-bottom: 1px solid #d4cdc6;
+    }
+    tbody tr { border-bottom: 1px solid #ddd6cf; }
+    tbody tr:hover { background: #ede7e1; }
+    tbody td { color: #3d3028; }
+    .code { color: #2c2118 !important; font-weight: 600; }
+    tbody td button {
+      background: #e0d9d2;
+      color: #6b5e55;
+      border: 1px solid #cdc6be;
+      border-radius: 6px;
+      font-size: 12px;
+      padding: 5px 12px;
+    }
+    tbody td button:hover { background: #d4cdc6; color: #2c2118; }
+    .modal { background: rgba(44,33,24,0.4); }
+    .modal-body { background: #f2ede8; border-top: 1px solid #d4cdc6; }
+    .modal-body h2 { color: #2c2118; }
+    .modal-body dt { color: #8a7d74; }
+    .modal-body dd { color: #3d3028; }
+    .modal-body > button { background: #e0d9d2; color: #6b5e55; border: 1px solid #cdc6be; }
+    .modal-body > button:hover { background: #d4cdc6; color: #2c2118; }
+  </style>
 </head>
 <body>
   <div id="app">
     <header class="topbar">
       <h1>設備警報代碼查詢</h1>
       <nav>
-        <button class="nav-btn" @click="openQR" aria-label="顯示掃碼連結">掃碼分享</button>
         <a href="/admin">後台管理</a>
         <a href="/logout">登出</a>
       </nav>
@@ -66,16 +121,6 @@
       </table>
     </section>
 
-    <div v-if="showQR" class="modal" @click.self="showQR = false" role="dialog" aria-modal="true">
-      <div class="modal-body qr-modal">
-        <h2>掃碼開啟查詢系統</h2>
-        <canvas ref="qrCanvas" width="240" height="240"></canvas>
-        <p class="qr-url">{{ qrUrl || '載入中…' }}</p>
-        <p class="qr-note">請確認手機與伺服器連到同一個 Wi-Fi / 區域網路</p>
-        <button @click="showQR = false">關閉</button>
-      </div>
-    </div>
-
     <div v-if="selected" class="modal" @click.self="selected = null" role="dialog" aria-modal="true">
       <div class="modal-body">
         <h2>{{ selected.code }} · {{ selected.description }}</h2>
@@ -95,7 +140,7 @@
     const { createApp } = Vue;
     createApp({
       data() {
-        return { q: '', line: '', device: '', severity: '', items: [], devices: [], selected: null, loading: false, timer: null, showQR: false, qrUrl: '' };
+        return { q: '', line: '', device: '', severity: '', items: [], devices: [], selected: null, loading: false, timer: null };
       },
       computed: {
         filteredDevices() {
@@ -133,29 +178,7 @@
           this.items = data;
           this.loading = false;
         },
-        sevClass(s) { return { '嚴重': 'sev-high', '警告': 'sev-mid', '資訊': 'sev-low' }[s] || ''; },
-        async openQR() {
-          if (!this.qrUrl) {
-            try {
-              const r = await fetch('/api/server-url');
-              const d = await r.json();
-              this.qrUrl = d.url;
-            } catch (e) {
-              this.qrUrl = window.location.origin + '/';
-            }
-          }
-          this.showQR = true;
-          this.$nextTick(() => this.renderQR());
-        },
-        renderQR() {
-          const canvas = this.$refs.qrCanvas;
-          if (!canvas || !window.QRCode || !this.qrUrl) return;
-          window.QRCode.toCanvas(canvas, this.qrUrl, {
-            width: 240,
-            margin: 2,
-            color: { dark: '#1f2937', light: '#ffffff' }
-          }, err => { if (err) console.warn('QR render failed:', err); });
-        }
+        sevClass(s) { return { '嚴重': 'sev-high', '警告': 'sev-mid', '資訊': 'sev-low' }[s] || ''; }
       }
     }).mount('#app');
 

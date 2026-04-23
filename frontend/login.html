@@ -3,64 +3,170 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#1f2937" />
+  <meta name="theme-color" content="#ffffff" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <title>登入 — 設備警報查詢系統</title>
   <link rel="icon" type="image/svg+xml" href="/icon.svg" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-  <link rel="stylesheet" href="style.css" />
   <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
-</head>
-<body class="login-page">
-  <main class="login-main">
-    <div class="login-card">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-      <div class="login-icon">
-        <img src="/icon.svg" alt="" width="64" height="64" />
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+      background: #f5f5f5;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    .card {
+      background: #ffffff;
+      border-radius: 16px;
+      padding: 48px 40px 40px;
+      width: 100%;
+      max-width: 420px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 4px 24px rgba(0,0,0,0.06);
+    }
+
+    .title {
+      font-size: 22px;
+      font-weight: 600;
+      color: #111;
+      letter-spacing: -0.3px;
+      margin-bottom: 32px;
+      text-align: center;
+    }
+
+    .error-msg {
+      background: #fff0f0;
+      color: #d00;
+      font-size: 13px;
+      padding: 10px 14px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      text-align: center;
+    }
+
+    .input-wrap {
+      position: relative;
+      margin-bottom: 12px;
+    }
+
+    input[type=password] {
+      width: 100%;
+      padding: 14px 16px;
+      font-size: 15px;
+      font-family: inherit;
+      border: 1.5px solid #e0e0e0;
+      border-radius: 10px;
+      background: #fafafa;
+      color: #111;
+      outline: none;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    input[type=password]:focus {
+      border-color: #111;
+      background: #fff;
+    }
+    input[type=password]::placeholder { color: #aaa; }
+
+    button[type=submit] {
+      width: 100%;
+      padding: 14px;
+      background: #111;
+      color: #fff;
+      font-size: 15px;
+      font-weight: 500;
+      font-family: inherit;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: background 0.15s;
+      margin-top: 4px;
+    }
+    button[type=submit]:hover { background: #333; }
+    button[type=submit]:active { background: #000; }
+
+    .divider {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin: 28px 0;
+    }
+    .divider::before, .divider::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: #ebebeb;
+    }
+    .divider span {
+      font-size: 12px;
+      color: #bbb;
+      white-space: nowrap;
+    }
+
+    .qr-wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+    }
+    .qr-wrap canvas {
+      border-radius: 10px;
+      display: block;
+    }
+    .qr-hint {
+      font-size: 12px;
+      color: #bbb;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <p class="title">設備警報查詢系統</p>
+
+    <form method="post" action="/login" id="loginForm">
+      <input type="hidden" name="next" id="nextField" value="" />
+
+      <div class="error-msg" id="errMsg" style="display:none">
+        密碼錯誤，請再試一次
       </div>
 
-      <h1>設備警報查詢系統</h1>
-      <p class="login-sub">請輸入密碼以進入系統</p>
-
-      <form method="post" action="/login" class="login-form">
-        <input type="hidden" name="next" id="nextField" value="" />
-
-        <div id="errMsg" class="login-error" hidden>
-          密碼錯誤，請再試一次
-        </div>
-
-        <label for="pw">密碼</label>
+      <div class="input-wrap">
         <input
           type="password"
-          id="pw"
           name="password"
+          id="pw"
           autocomplete="current-password"
           placeholder="輸入密碼"
           autofocus
           required
         />
-
-        <button type="submit">進入系統</button>
-      </form>
-
-      <div class="login-qr">
-        <p class="login-qr-label">掃碼在手機開啟</p>
-        <canvas id="qrCanvas" width="160" height="160"></canvas>
       </div>
 
+      <button type="submit">進入系統</button>
+    </form>
+
+    <div class="divider"><span>或掃碼開啟</span></div>
+
+    <div class="qr-wrap">
+      <canvas id="qrCanvas" width="148" height="148"></canvas>
+      <span class="qr-hint">手機掃碼直接進入</span>
     </div>
-  </main>
+  </div>
 
   <script>
     const p = new URLSearchParams(window.location.search);
     if (p.get('next')) document.getElementById('nextField').value = p.get('next');
-    if (p.get('error')) document.getElementById('errMsg').hidden = false;
+    if (p.get('error')) document.getElementById('errMsg').style.display = 'block';
 
     window.QRCode.toCanvas(document.getElementById('qrCanvas'), window.location.origin + '/', {
-      width: 160, margin: 2,
-      color: { dark: '#1f2937', light: '#ffffff' }
+      width: 148, margin: 1,
+      color: { dark: '#111111', light: '#ffffff' }
     }, () => {});
   </script>
 </body>
