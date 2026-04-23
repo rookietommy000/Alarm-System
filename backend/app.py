@@ -168,6 +168,9 @@ def create_app() -> Flask:
     @app.get("/api/server-url")
     @login_required
     def server_url():
+        public = os.environ.get("RENDER_EXTERNAL_URL") or os.environ.get("PUBLIC_URL")
+        if public:
+            return jsonify({"url": public.rstrip("/") + "/"})
         host = request.host or ""
         port = host.split(":", 1)[1] if ":" in host else "5001"
         return jsonify({"url": f"http://{_lan_ip()}:{port}/"})
