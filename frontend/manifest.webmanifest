@@ -1,0 +1,39 @@
+{
+  "name": "設備警報代碼查詢",
+  "short_name": "警報查詢",
+  "description": "整合 GMP Audit Trail 與設備維護歷史資料，提供警報代碼查詢與後台管理。",
+  "lang": "zh-Hant",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f5f6f8",
+  "theme_color": "#1f2937",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "後台管理",
+      "short_name": "後台",
+      "url": "/admin"
+    }
+  ]
+}

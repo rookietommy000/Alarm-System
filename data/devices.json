@@ -1,0 +1,86 @@
+[
+  {
+    "id": "M-101",
+    "model": "SDDM003",
+    "category": "針筒卸載機",
+    "line": "2.1"
+  },
+  {
+    "id": "M-102",
+    "model": "PILM003",
+    "category": "推桿組裝貼標機",
+    "line": "2.1"
+  },
+  {
+    "id": "M-103",
+    "model": "TFM001",
+    "category": "泡殼自動成形裁切機",
+    "line": "2.1"
+  },
+  {
+    "id": "M-201",
+    "model": "ACM001",
+    "category": "自動裝盒機",
+    "line": "2.1"
+  },
+  {
+    "id": "M-301",
+    "model": "DTS002-SL-A210",
+    "category": "藥品追溯序列化系統SL",
+    "line": "2.1"
+  },
+  {
+    "id": "M-401",
+    "model": "DTS002-BL-A210",
+    "category": "藥品追溯序列化系統BL",
+    "line": "2.1"
+  },
+  {
+    "id": "M-501",
+    "model": "ACP001",
+    "category": "自動裝箱機",
+    "line": "2.1"
+  },
+  {
+    "id": "M-104",
+    "model": "SDDM004",
+    "category": "針筒卸載機",
+    "line": "2.2"
+  },
+  {
+    "id": "M-105",
+    "model": "PILM004",
+    "category": "推桿組裝貼標機",
+    "line": "2.2"
+  },
+  {
+    "id": "M-106",
+    "model": "TFM002",
+    "category": "泡殼自動成形裁切機",
+    "line": "2.2"
+  },
+  {
+    "id": "M-202",
+    "model": "ACM002",
+    "category": "自動裝盒機",
+    "line": "2.2"
+  },
+  {
+    "id": "M-302",
+    "model": "DTS003-SL-A210",
+    "category": "藥品追溯序列化系統SL",
+    "line": "2.2"
+  },
+  {
+    "id": "M-402",
+    "model": "DTS003-BL-A210",
+    "category": "藥品追溯序列化系統BL",
+    "line": "2.2"
+  },
+  {
+    "id": "M-502",
+    "model": "ACP002",
+    "category": "自動裝箱機",
+    "line": "2.2"
+  }
+]

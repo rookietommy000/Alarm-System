@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#1f2937" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="警報查詢後台" />
+  <title>警報代碼後台管理</title>
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <h1>警報代碼 · 後台管理</h1>
+      <nav>
+        <a href="/admin/logout">登出後台</a>
+      </nav>
+    </header>
+
+    <div class="admin-banner">
+      <span class="admin-banner-dot"></span>
+      管理員模式 — 可新增、編輯、刪除警報代碼
+    </div>
+
+    <section class="admin-grid">
+      <section class="qr-section">
+        <header>
+          <h2>掃碼開啟系統</h2>
+          <button class="qr-toggle" @click="toggleQR" :aria-expanded="showQR">
+            {{ showQR ? '收合 ▴' : '展開 ▾' }}
+          </button>
+        </header>
+        <div v-if="showQR" class="qr-panel">
+          <canvas ref="qrCanvas" width="240" height="240"></canvas>
+          <p class="qr-url">{{ qrUrl || '（請輸入網址）' }}</p>
+          <label>
+            網址（預設為本系統）
+            <input v-model="qrUrl" @input="scheduleRender" inputmode="url" autocomplete="off" placeholder="https://..." />
+          </label>
+          <button class="download" @click="downloadQR" :disabled="!qrUrl">下載 QR（PNG）</button>
+        </div>
+      </section>
+
+      <aside class="list-pane">
+        <button class="primary" @click="newRecord">＋ 新增代碼</button>
+        <ul class="codelist">
+          <li v-for="a in items" :key="a.code"
+              :class="{ active: editing && editing.code === a.code && !isNew }"
+              @click="edit(a)">
+            <span class="code">{{ a.code }}</span>
+            <span class="desc">{{ a.description }}</span>
+          </li>
+        </ul>
+      </aside>
+
+      <main class="form-pane" v-if="editing">
+        <button class="back-to-list" @click="editing = null" aria-label="返回列表">← 返回列表</button>
+        <h2>{{ isNew ? '新增警報代碼' : '編輯 ' + editing.code }}</h2>
+        <label>代碼
+          <input v-model="editing.code" :disabled="!isNew" />
+        </label>
+        <label>機種
+          <select v-model="editing.device_model">
+            <option value="">（未指定）</option>
+            <option v-for="d in devices" :key="d.id" :value="d.model">{{ d.model }}（{{ d.line ? d.line + '線 · ' : '' }}{{ d.category }}）</option>
+          </select>
+        </label>
+        <label>嚴重度
+          <select v-model="editing.severity">
+            <option value="">（未指定）</option>
+            <option>嚴重</option><option>警告</option><option>資訊</option>
+          </select>
+        </label>
+        <label>描述
+          <input v-model="editing.description" />
+        </label>
+        <label>原因
+          <textarea v-model="editing.cause" rows="2"></textarea>
+        </label>
+        <label>解決方案
+          <textarea v-model="editing.solution" rows="3"></textarea>
+        </label>
+        <label>關鍵字（以逗號分隔）
+          <input v-model="keywordsText" />
+        </label>
+        <p v-if="error" class="error">{{ error }}</p>
+        <div class="actions">
+          <button class="primary" @click="save">儲存</button>
+          <button v-if="!isNew" class="danger" @click="remove">刪除</button>
+          <button @click="editing = null">取消</button>
+        </div>
+      </main>
+
+      <main class="form-pane empty-pane" v-else>
+        <p>從左側選擇一筆代碼以編輯，或點擊「新增代碼」。</p>
+      </main>
+    </section>
+  </div>
+
+  <script>
+    const { createApp } = Vue;
+    createApp({
+      data() {
+        return {
+          items: [], devices: [],
+          editing: null, isNew: false, error: '',
+          keywordsText: '',
+          showQR: false,
+          qrUrl: '',
+          qrTimer: null
+        };
+      },
+      mounted() {
+        this.qrUrl = window.location.origin + '/';
+        this.load();
+        fetch('/api/server-url')
+          .then(r => r.json())
+          .then(d => { if (d.url) { this.qrUrl = d.url; if (this.showQR) this.renderQR(); } })
+          .catch(() => {});
+      },
+      watch: {
+        'editing.keywords'() {
+          if (this.editing) this.keywordsText = (this.editing.keywords || []).join(', ');
+        }
+      },
+      methods: {
+        async load() {
+          const [ra, rd] = await Promise.all([fetch('/api/alarms'), fetch('/api/devices')]);
+          if (ra.status === 401 || rd.status === 401) { location.href = '/login'; return; }
+          if (ra.status === 403 || rd.status === 403) { location.href = '/admin/login'; return; }
+          this.items = await ra.json();
+          this.devices = await rd.json();
+        },
+        newRecord() {
+          this.isNew = true;
+          this.editing = { code: '', device_model: '', severity: '', description: '', cause: '', solution: '', keywords: [] };
+          this.keywordsText = '';
+          this.error = '';
+        },
+        edit(a) {
+          this.isNew = false;
+          this.editing = JSON.parse(JSON.stringify(a));
+          this.keywordsText = (a.keywords || []).join(', ');
+          this.error = '';
+        },
+        async save() {
+          this.error = '';
+          const payload = { ...this.editing, keywords: this.keywordsText.split(',').map(s => s.trim()).filter(Boolean) };
+          const url = this.isNew ? '/api/alarms' : `/api/alarms/${encodeURIComponent(this.editing.code)}`;
+          const method = this.isNew ? 'POST' : 'PUT';
+          const r = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+          if (r.status === 403) { location.href = '/admin/login'; return; }
+          if (!r.ok) { this.error = (await r.json()).error || '儲存失敗'; return; }
+          await this.load();
+          this.editing = null;
+        },
+        async remove() {
+          if (!confirm(`確定刪除 ${this.editing.code}？`)) return;
+          const r = await fetch(`/api/alarms/${encodeURIComponent(this.editing.code)}`, { method: 'DELETE' });
+          if (!r.ok) { this.error = '刪除失敗'; return; }
+          await this.load();
+          this.editing = null;
+        },
+        toggleQR() {
+          this.showQR = !this.showQR;
+          if (this.showQR) this.$nextTick(() => this.renderQR());
+        },
+        scheduleRender() {
+          clearTimeout(this.qrTimer);
+          this.qrTimer = setTimeout(() => this.renderQR(), 250);
+        },
+        renderQR() {
+          const canvas = this.$refs.qrCanvas;
+          if (!canvas || !window.QRCode || !this.qrUrl) return;
+          window.QRCode.toCanvas(canvas, this.qrUrl, {
+            width: 240,
+            margin: 2,
+            color: { dark: '#1f2937', light: '#ffffff' }
+          }, err => { if (err) console.warn('QR render failed:', err); });
+        },
+        downloadQR() {
+          const canvas = this.$refs.qrCanvas;
+          if (!canvas) return;
+          const link = document.createElement('a');
+          link.download = 'alarm-system-qr.png';
+          link.href = canvas.toDataURL('image/png');
+          link.click();
+        }
+      }
+    }).mount('#app');
+
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js').catch(() => {});
+      });
+    }
+  </script>
+</body>
+</html>

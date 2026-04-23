@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#1f2937" />
+  <meta name="description" content="設備警報代碼查詢 — 快速搜尋警報代碼、機種、嚴重度與解決方案" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="警報查詢" />
+  <title>設備警報代碼查詢</title>
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <h1>設備警報代碼查詢</h1>
+      <nav>
+        <button class="nav-btn" @click="openQR" aria-label="顯示掃碼連結">掃碼分享</button>
+        <a href="/admin">後台管理</a>
+        <a href="/logout">登出</a>
+      </nav>
+    </header>
+
+    <section class="filters">
+      <input v-model="q" @input="search" placeholder="輸入代碼 / 關鍵字 / 描述" class="q" inputmode="search" autocomplete="off" />
+      <select v-model="line" @change="onLineChange">
+        <option value="">全部產線</option>
+        <option value="2.1">2.1 線</option>
+        <option value="2.2">2.2 線</option>
+      </select>
+      <select v-model="device" @change="search">
+        <option value="">全部機種</option>
+        <option v-for="d in filteredDevices" :key="d.id" :value="d.model">{{ d.model }}（{{ d.category }}）</option>
+      </select>
+      <select v-model="severity" @change="search">
+        <option value="">全部嚴重度</option>
+        <option>嚴重</option><option>警告</option><option>資訊</option>
+      </select>
+    </section>
+
+    <section class="results">
+      <p v-if="loading">載入中…</p>
+      <p v-else-if="!items.length" class="empty">無符合資料</p>
+      <table v-else>
+        <thead>
+          <tr>
+            <th>代碼</th><th>機種</th><th>嚴重度</th><th>描述</th><th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="a in items" :key="a.code">
+            <td data-label="代碼" class="code">{{ a.code }}</td>
+            <td data-label="機種">{{ a.device_model || '—' }}</td>
+            <td data-label="嚴重度"><span class="tag" :class="sevClass(a.severity)">{{ a.severity || '—' }}</span></td>
+            <td data-label="描述">{{ a.description }}</td>
+            <td class="actions-cell"><button @click="selected = a" aria-label="查看詳情">詳情</button></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <div v-if="showQR" class="modal" @click.self="showQR = false" role="dialog" aria-modal="true">
+      <div class="modal-body qr-modal">
+        <h2>掃碼開啟查詢系統</h2>
+        <canvas ref="qrCanvas" width="240" height="240"></canvas>
+        <p class="qr-url">{{ qrUrl || '載入中…' }}</p>
+        <p class="qr-note">請確認手機與伺服器連到同一個 Wi-Fi / 區域網路</p>
+        <button @click="showQR = false">關閉</button>
+      </div>
+    </div>
+
+    <div v-if="selected" class="modal" @click.self="selected = null" role="dialog" aria-modal="true">
+      <div class="modal-body">
+        <h2>{{ selected.code }} · {{ selected.description }}</h2>
+        <dl>
+          <dt>機種</dt><dd>{{ selected.device_model || '—' }}</dd>
+          <dt>嚴重度</dt><dd>{{ selected.severity || '—' }}</dd>
+          <dt>原因</dt><dd>{{ selected.cause || '—' }}</dd>
+          <dt>解決方案</dt><dd>{{ selected.solution || '—' }}</dd>
+          <dt>關鍵字</dt><dd>{{ (selected.keywords || []).join('、') || '—' }}</dd>
+        </dl>
+        <button @click="selected = null">關閉</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const { createApp } = Vue;
+    createApp({
+      data() {
+        return { q: '', line: '', device: '', severity: '', items: [], devices: [], selected: null, loading: false, timer: null, showQR: false, qrUrl: '' };
+      },
+      computed: {
+        filteredDevices() {
+          if (!this.line) return this.devices;
+          return this.devices.filter(d => d.line === this.line);
+        }
+      },
+      mounted() {
+        fetch('/api/devices').then(r => r.json()).then(d => { this.devices = d; this.fetchAlarms(); });
+      },
+      methods: {
+        search() {
+          clearTimeout(this.timer);
+          this.timer = setTimeout(() => this.fetchAlarms(), 200);
+        },
+        onLineChange() {
+          if (this.device && !this.filteredDevices.find(d => d.model === this.device)) {
+            this.device = '';
+          }
+          this.fetchAlarms();
+        },
+        async fetchAlarms() {
+          this.loading = true;
+          const p = new URLSearchParams();
+          if (this.q) p.set('q', this.q);
+          if (this.device) p.set('device', this.device);
+          if (this.severity) p.set('severity', this.severity);
+          const r = await fetch('/api/alarms?' + p.toString());
+          if (r.status === 401) { location.href = '/login'; return; }
+          let data = await r.json();
+          if (this.line && !this.device) {
+            const lineModels = new Set(this.filteredDevices.map(d => d.model));
+            data = data.filter(a => lineModels.has(a.device_model));
+          }
+          this.items = data;
+          this.loading = false;
+        },
+        sevClass(s) { return { '嚴重': 'sev-high', '警告': 'sev-mid', '資訊': 'sev-low' }[s] || ''; },
+        async openQR() {
+          if (!this.qrUrl) {
+            try {
+              const r = await fetch('/api/server-url');
+              const d = await r.json();
+              this.qrUrl = d.url;
+            } catch (e) {
+              this.qrUrl = window.location.origin + '/';
+            }
+          }
+          this.showQR = true;
+          this.$nextTick(() => this.renderQR());
+        },
+        renderQR() {
+          const canvas = this.$refs.qrCanvas;
+          if (!canvas || !window.QRCode || !this.qrUrl) return;
+          window.QRCode.toCanvas(canvas, this.qrUrl, {
+            width: 240,
+            margin: 2,
+            color: { dark: '#1f2937', light: '#ffffff' }
+          }, err => { if (err) console.warn('QR render failed:', err); });
+        }
+      }
+    }).mount('#app');
+
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js').catch(() => {});
+      });
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,1674 @@
+[
+  {
+    "code": "0001",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Main Power Cut 主電源切斷",
+    "cause": "機台初次送電或因電源故障導致停機",
+    "solution": "檢查主電源供應狀況",
+    "keywords": [
+      "電源",
+      "停機"
+    ]
+  },
+  {
+    "code": "0002",
+    "device_model": "TFM001",
+    "severity": "資訊",
+    "description": "Ethercat Network Configuration in Progress",
+    "cause": "Ethercat 主通訊正在控制並分析網絡",
+    "solution": "等待網絡配置完成",
+    "keywords": [
+      "Ethercat",
+      "配置"
+    ]
+  },
+  {
+    "code": "0003",
+    "device_model": "TFM001",
+    "severity": "資訊",
+    "description": "Driver Default Procedure in Progress",
+    "cause": "驅動器基本參數自動檢查中，或正在執行預設程序",
+    "solution": "等待程序執行完畢",
+    "keywords": [
+      "驅動器",
+      "預設"
+    ]
+  },
+  {
+    "code": "0004",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "PC-PLC Communication Error 台PC PLC邊線異常",
+    "cause": "PC 與 PLC 之間的通訊中斷",
+    "solution": "檢查接線並確保 PLC 功能正常",
+    "keywords": [
+      "PC",
+      "PLC",
+      "通訊"
+    ]
+  },
+  {
+    "code": "0006",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Ethercat Link Alarm 網路連接錯誤",
+    "cause": "網路控制器偵測到連線設備發生異常",
+    "solution": "檢查 Ethercat 連接是否正確",
+    "keywords": [
+      "Ethercat",
+      "網路"
+    ]
+  },
+  {
+    "code": "0008",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "PC-LMS Communication Error 台PC與SCADA連線異常",
+    "cause": "PC 與 SCADA 系統通訊中斷",
+    "solution": "檢查網絡連線狀態",
+    "keywords": [
+      "PC",
+      "SCADA",
+      "通訊"
+    ]
+  },
+  {
+    "code": "0018",
+    "device_model": "TFM001",
+    "severity": "資訊",
+    "description": "Robot Manual Controls Active 手動控制機械手臂模式",
+    "cause": "軸手動移動功能已啟用",
+    "solution": "手動操作完成後切回自動模式",
+    "keywords": [
+      "手臂",
+      "手動"
+    ]
+  },
+  {
+    "code": "0019",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Open Units/Checks Disable",
+    "cause": "維修選單中停用了某個單元或檢查項",
+    "solution": "若非必要請重新啟用檢查項",
+    "keywords": [
+      "維修",
+      "停用"
+    ]
+  },
+  {
+    "code": "0022",
+    "device_model": "TFM001",
+    "severity": "資訊",
+    "description": "Push Start to Rephase",
+    "cause": "機台需要執行定位同步",
+    "solution": "按下 Start 按鈕執行 Rephase",
+    "keywords": [
+      "Rephase",
+      "同步"
+    ]
+  },
+  {
+    "code": "0024",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Forming Panel Heating Units Automatic 成型加熱站點位異常(保險開關跳脫)",
+    "cause": "加熱單元保護斷路器跳脫",
+    "solution": "檢查加熱板溫度及 Sensor B42.0/B42.3，確認後手動復位 F43.1/F43.3",
+    "keywords": [
+      "成型",
+      "加熱",
+      "跳脫"
+    ]
+  },
+  {
+    "code": "0025",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Sealing Panel Heating Units Automatic 封膜加熱站點位異常(保險開關跳脫)",
+    "cause": "封膜加熱單元保護斷路器跳脫",
+    "solution": "檢查溫度及 Sensor B142.6，復位 F143.5 或至電路箱開啟點位 147.5 開關閥",
+    "keywords": [
+      "封膜",
+      "加熱",
+      "跳脫"
+    ]
+  },
+  {
+    "code": "0033",
+    "device_model": "TFM001",
+    "severity": "資訊",
+    "description": "Area 1 Running",
+    "cause": "單元運行中",
+    "solution": "正常狀態",
+    "keywords": [
+      "運行"
+    ]
+  },
+  {
+    "code": "0034",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Waiting Drivers Enabling",
+    "cause": "啟動前須等待驅動器上電",
+    "solution": "等待數秒後再執行啟動",
+    "keywords": [
+      "驅動器",
+      "等待"
+    ]
+  },
+  {
+    "code": "0035",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Manual Stop 手動停機",
+    "cause": "機台停機按鈕被按下",
+    "solution": "檢查按鈕是否被鎖定或按下",
+    "keywords": [
+      "手動",
+      "停機"
+    ]
+  },
+  {
+    "code": "0036",
+    "device_model": "TFM001",
+    "severity": "資訊",
+    "description": "Machine Running",
+    "cause": "機台正在運行",
+    "solution": "正常狀態",
+    "keywords": [
+      "運行"
+    ]
+  },
+  {
+    "code": "0038",
+    "device_model": "TFM001",
+    "severity": "資訊",
+    "description": "Machine Ready to Start",
+    "cause": "所有安全裝置已復位",
+    "solution": "可執行啟動",
+    "keywords": [
+      "就緒",
+      "啟動"
+    ]
+  },
+  {
+    "code": "0039",
+    "device_model": "TFM001",
+    "severity": "資訊",
+    "description": "Prestart in Progress",
+    "cause": "機台啟動預熱/預備中，零件將移動至工作位",
+    "solution": "等待訊息消失後再操作",
+    "keywords": [
+      "預啟動",
+      "定位"
+    ]
+  },
+  {
+    "code": "0040",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Rephase Machine",
+    "cause": "啟動後機台須重新對時",
+    "solution": "使用選擇開關進行 Rephase",
+    "keywords": [
+      "對時",
+      "Rephase"
+    ]
+  },
+  {
+    "code": "0041",
+    "device_model": "TFM001",
+    "severity": "資訊",
+    "description": "Machine Rephasing in Progress",
+    "cause": "給料機構正在執行歸零/對時",
+    "solution": "等待訊息清除",
+    "keywords": [
+      "歸零",
+      "同步"
+    ]
+  },
+  {
+    "code": "0042",
+    "device_model": "TFM001",
+    "severity": "資訊",
+    "description": "Jog Control Plugged in",
+    "cause": "吋動控制按鈕已插入插槽",
+    "solution": "提醒操作人員吋動模式中",
+    "keywords": [
+      "吋動"
+    ]
+  },
+  {
+    "code": "0043",
+    "device_model": "TFM001",
+    "severity": "資訊",
+    "description": "Machine Repositioning in Progress",
+    "cause": "重定位循環執行中",
+    "solution": "等待循環結束",
+    "keywords": [
+      "重定位"
+    ]
+  },
+  {
+    "code": "0044",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "No Compressed Air on The Thermoformer 機台氣壓異常",
+    "cause": "壓力開關偵測到氣壓不足",
+    "solution": "檢查氣壓源及壓力開關設定值",
+    "keywords": [
+      "氣壓",
+      "不足"
+    ]
+  },
+  {
+    "code": "0046",
+    "device_model": "TFM001",
+    "severity": "資訊",
+    "description": "Machine Cooling Being Run",
+    "cause": "冷卻程序執行中",
+    "solution": "等待執行結束",
+    "keywords": [
+      "冷卻"
+    ]
+  },
+  {
+    "code": "0048",
+    "device_model": "TFM001",
+    "severity": "資訊",
+    "description": "Unwinders Manual Command on",
+    "cause": "更換規格時選擇了手動控制模式",
+    "solution": "用於開蓋狀態下的手動操作",
+    "keywords": [
+      "手動",
+      "給料"
+    ]
+  },
+  {
+    "code": "0049",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Unwinders Manual Command Error 給料桿異常",
+    "cause": "手動邏輯指令與實際啟用狀態不符",
+    "solution": "檢查手動模式選單、KM21.8/A30.2 及 A131.2 腳位",
+    "keywords": [
+      "給料",
+      "異常"
+    ]
+  },
+  {
+    "code": "0052",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "No Vacuum 無真空",
+    "cause": "真空計偵測到真空度不足",
+    "solution": "檢查真空泵運作是否正確",
+    "keywords": [
+      "真空",
+      "不足"
+    ]
+  },
+  {
+    "code": "0054",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Error for Formed Web Positioning 成型泡殼位置錯誤(B60.1/B156.3偵測)",
+    "cause": "封膜步進失準、熔斷或偏移",
+    "solution": "檢查成型柱、站位及溫度；按 054 排除程序執行 Rephase 或手動重拉泡殼",
+    "keywords": [
+      "成型",
+      "位置",
+      "Rephase"
+    ]
+  },
+  {
+    "code": "0055",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Stray Product Check 1 on Formed Material 針劑產品翹起(B60.2偵測)",
+    "cause": "產品在軌道上位移或翹起",
+    "solution": "排除翹起針劑或不良泡殼，重新定位產品",
+    "keywords": [
+      "針劑",
+      "翹起"
+    ]
+  },
+  {
+    "code": "0059",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Communication Error with Motor %1 馬達連線異常",
+    "cause": "與指定馬達通訊發生錯誤",
+    "solution": "檢查馬達驅動器狀態及 X20 電器盒連接",
+    "keywords": [
+      "馬達",
+      "通訊"
+    ]
+  },
+  {
+    "code": "0060",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Enabling Error on Motor %1 馬達作動異常",
+    "cause": "邏輯指令與馬達致能狀態不符",
+    "solution": "檢查馬達驅動器狀態",
+    "keywords": [
+      "馬達",
+      "致能"
+    ]
+  },
+  {
+    "code": "0070",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Emergency Pressed 緊急停止鈕被按下",
+    "cause": "急停按鈕被觸發",
+    "solution": "檢查按鈕並復位",
+    "keywords": [
+      "急停",
+      "復位"
+    ]
+  },
+  {
+    "code": "0071",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Forming Zone Emergency Control Unit Alarm 成型站點位異常",
+    "cause": "緊急控制單元故障",
+    "solution": "檢查控制單元及 K20.6 點位",
+    "keywords": [
+      "成型",
+      "緊急控制"
+    ]
+  },
+  {
+    "code": "0072",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Cutter Zone Emergencies Control Unit Alarm 裁切站點位異常",
+    "cause": "緊急控制單元故障",
+    "solution": "檢查控制單元及 K120.6 點位",
+    "keywords": [
+      "裁切",
+      "緊急控制"
+    ]
+  },
+  {
+    "code": "0073",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Rear Loader Guard Open",
+    "cause": "後方加載防護門開啟",
+    "solution": "關閉防護門",
+    "keywords": [
+      "安全門",
+      "後方"
+    ]
+  },
+  {
+    "code": "0074",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Feeding Guard Open",
+    "cause": "入料防護門開啟",
+    "solution": "關閉防護門",
+    "keywords": [
+      "安全門",
+      "入料"
+    ]
+  },
+  {
+    "code": "0075",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Chain and Starwheel Guards Open",
+    "cause": "鏈條與星盤防護門開啟",
+    "solution": "關閉防護門",
+    "keywords": [
+      "安全門",
+      "星盤"
+    ]
+  },
+  {
+    "code": "0076",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Forming Guard Open",
+    "cause": "成型站防護門開啟",
+    "solution": "關閉防護門",
+    "keywords": [
+      "安全門",
+      "成型"
+    ]
+  },
+  {
+    "code": "0077",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Sealing/Cutting Guard Open",
+    "cause": "封膜/裁切站防護門開啟",
+    "solution": "關閉防護門",
+    "keywords": [
+      "安全門",
+      "封膜"
+    ]
+  },
+  {
+    "code": "0079",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Final Transfer Guard Open",
+    "cause": "最終輸送站防護門開啟",
+    "solution": "關閉防護門",
+    "keywords": [
+      "安全門",
+      "輸送"
+    ]
+  },
+  {
+    "code": "0080",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Forming Zone Safety Devices Control Unit Alarm 成型區域安全裝置控制點位異常",
+    "cause": "安全控制單元故障",
+    "solution": "檢查 K21.4 是否異常",
+    "keywords": [
+      "成型",
+      "安全裝置"
+    ]
+  },
+  {
+    "code": "0081",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Cutter Zone Safety Devices Control Unit Alarm 裁切站區域安全控制裝置點位異常",
+    "cause": "安全控制單元故障",
+    "solution": "檢查 K121.4 是否異常",
+    "keywords": [
+      "裁切",
+      "安全裝置"
+    ]
+  },
+  {
+    "code": "0082",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Chain and Starwheel Zone Safety Devices Control Unit Alarm 軌道與星盤區安全控制裝置點位異常",
+    "cause": "安全控制單元故障",
+    "solution": "檢查控制單元",
+    "keywords": [
+      "星盤",
+      "安全裝置"
+    ]
+  },
+  {
+    "code": "0085",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Forming Panel Overloads/Automatic Switches 成型站保險過載/跳脫",
+    "cause": "馬達電流超過負載或安全開關跳脫",
+    "solution": "檢查馬達 M53.0 電流，確認後復位 QF46.1",
+    "keywords": [
+      "成型",
+      "過載"
+    ]
+  },
+  {
+    "code": "0086",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Sealing Panel Overheat/Overload Devices 封膜加熱站保險過熱/跳脫",
+    "cause": "馬達過載或安全開關跳脫",
+    "solution": "檢查馬達 M170.0 電流，確認後復位 QF140.1 等",
+    "keywords": [
+      "封膜",
+      "過載"
+    ]
+  },
+  {
+    "code": "0088",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Forming Panel Unit 1 Inverter Alarm 成型站點位1安全繼電器異常",
+    "cause": "變頻器故障或安全繼電器異常",
+    "solution": "檢查安全繼電器 F08.1/A47.1 運作情況",
+    "keywords": [
+      "成型",
+      "變頻器"
+    ]
+  },
+  {
+    "code": "0089",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Sealing Panel Unit 1 Inverter Alarm 封膜加熱站點位1安全繼電器異常",
+    "cause": "變頻器故障或安全繼電器異常",
+    "solution": "檢查安全繼電器 F108.1/A163.1 運作情況",
+    "keywords": [
+      "封膜",
+      "變頻器"
+    ]
+  },
+  {
+    "code": "0090",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Forming Panel Unit 2 Inverter Alarm 成型站點位2安全繼電器異常",
+    "cause": "變頻器故障或安全繼電器異常",
+    "solution": "檢查安全繼電器 F95.1/A95.1/F96.1/A96.1",
+    "keywords": [
+      "成型",
+      "繼電器"
+    ]
+  },
+  {
+    "code": "0095",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "End Forming Material Prealarm 泡製捲將用盡",
+    "cause": "成型材料捲即將用完",
+    "solution": "準備加載新捲料",
+    "keywords": [
+      "泡殼捲",
+      "預警"
+    ]
+  },
+  {
+    "code": "0096",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Forming Material Jam/End 泡殼捲堵塞/用盡(B48.1偵測)",
+    "cause": "材料捲堵塞或已用盡",
+    "solution": "更換空捲料或排除鐵桶堵塞",
+    "keywords": [
+      "泡殼捲",
+      "堵塞"
+    ]
+  },
+  {
+    "code": "0097",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "End of Forming Material Roll 泡殼捲用盡(B48.2偵測)",
+    "cause": "成型材料已用完",
+    "solution": "更換空捲料",
+    "keywords": [
+      "泡殼捲",
+      "用盡"
+    ]
+  },
+  {
+    "code": "0098",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Forming Material Splice Check",
+    "cause": "偵測到薄膜拼接處",
+    "solution": "確認拼接位置",
+    "keywords": [
+      "拼接",
+      "成型"
+    ]
+  },
+  {
+    "code": "0100",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Forming Material Splice Check Consecutive Errors 連續偵測到泡殼拼接處",
+    "cause": "連續多次偵測到拼接，或 Sensor 髒污",
+    "solution": "檢查 B48.4/B48.5 髒污及材料堵塞情況",
+    "keywords": [
+      "拼接",
+      "髒污"
+    ]
+  },
+  {
+    "code": "0101",
+    "device_model": "TFM001",
+    "severity": "資訊",
+    "description": "Pre-Heat Plates Manual Cycle on",
+    "cause": "預熱板手動循環已開啟",
+    "solution": "透過選擇開關停用該功能",
+    "keywords": [
+      "手動",
+      "預熱"
+    ]
+  },
+  {
+    "code": "0105",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Preheating Plates Jammed 泡殼成型加熱板堵塞",
+    "cause": "馬達 M50.0 堵塞或運行不順",
+    "solution": "檢查加熱板運行是否順暢",
+    "keywords": [
+      "成型",
+      "加熱板"
+    ]
+  },
+  {
+    "code": "0106",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Preheater Temperature Out of Range 加熱板溫度未達範圍值",
+    "cause": "溫度調節器偵測到異常溫度",
+    "solution": "等待溫度至設定值 ±5℃ 內即可啟動",
+    "keywords": [
+      "溫度",
+      "範圍"
+    ]
+  },
+  {
+    "code": "0108",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Preheating Platens Translation Jam 加熱板運行堵塞",
+    "cause": "平移運動發生卡住或氣缸異常",
+    "solution": "檢查路徑是否有異物或閉合循環錯誤",
+    "keywords": [
+      "加熱板",
+      "堵塞"
+    ]
+  },
+  {
+    "code": "0113",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Forming Jammed 成型加熱站馬達堵塞",
+    "cause": "馬達 M53.0 堵塞",
+    "solution": "檢查機械單元運行順暢度",
+    "keywords": [
+      "成型",
+      "馬達"
+    ]
+  },
+  {
+    "code": "0116",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Material Indexing Jammed 易撕膜給料馬達堵塞",
+    "cause": "馬達 M176.0 堵塞",
+    "solution": "檢查給料桿運行是否順暢",
+    "keywords": [
+      "易撕膜",
+      "給料"
+    ]
+  },
+  {
+    "code": "0121",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "End Covering Material Prealarm 易撕膜將用盡",
+    "cause": "覆蓋材料即將用完",
+    "solution": "加載新捲料",
+    "keywords": [
+      "易撕膜",
+      "預警"
+    ]
+  },
+  {
+    "code": "0122",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Covering Material End/Jam 易撕膜堵塞/用盡",
+    "cause": "易撕膜缺料或異物堵塞",
+    "solution": "更換空捲或排除異物",
+    "keywords": [
+      "易撕膜",
+      "用盡"
+    ]
+  },
+  {
+    "code": "0124",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Lidding Material Splice Check",
+    "cause": "偵測到薄膜拼接處",
+    "solution": "確認拼接位置",
+    "keywords": [
+      "拼接",
+      "覆蓋膜"
+    ]
+  },
+  {
+    "code": "0125",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Lidding Material Splice Check Consecutive Errors 連續偵測到易撕膜拼接處",
+    "cause": "連續偵測到拼接或 Sensor B164.2/164.7 髒污",
+    "solution": "檢查拼接處及清潔感應器",
+    "keywords": [
+      "拼接",
+      "髒污"
+    ]
+  },
+  {
+    "code": "0129",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Sealing Jammed 封膜站堵塞",
+    "cause": "馬達 M170.0 堵塞",
+    "solution": "檢查封膜站機械運作順暢度",
+    "keywords": [
+      "封膜",
+      "堵塞"
+    ]
+  },
+  {
+    "code": "0131",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Sealing Temperature Out of Range 封膜站溫度未達範圍值",
+    "cause": "封膜區域溫度異常",
+    "solution": "等待至設定溫度 ±5℃ 內",
+    "keywords": [
+      "封膜",
+      "溫度"
+    ]
+  },
+  {
+    "code": "0132",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Sealing Pressure Alarm 封膜站氣壓異常(B171.1/B171.2偵測)",
+    "cause": "封膜站壓力不足",
+    "solution": "檢查封膜站氣壓狀態",
+    "keywords": [
+      "封膜",
+      "氣壓"
+    ]
+  },
+  {
+    "code": "0135",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Precutting After Sealing Jammed 預裁站馬達堵塞",
+    "cause": "馬達 M172.0 堵塞",
+    "solution": "檢查預裁站機械運作",
+    "keywords": [
+      "預裁",
+      "堵塞"
+    ]
+  },
+  {
+    "code": "0137",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Unshielded Product Under Sealing 產品在封膜站加熱超過60秒",
+    "cause": "產品在封膜站停留時間過長",
+    "solution": "排除停留過久之產品",
+    "keywords": [
+      "封膜",
+      "超時"
+    ]
+  },
+  {
+    "code": "0138",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Sealing and Chilling Unit Not in Phase 冷卻板位置錯誤",
+    "cause": "冷卻板未在正確位置",
+    "solution": "確認冷卻板位置是否復位",
+    "keywords": [
+      "冷卻板",
+      "定位"
+    ]
+  },
+  {
+    "code": "0139",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Upper Cooling Plate Translation Jam 冷卻板堵塞",
+    "cause": "平移運動卡住",
+    "solution": "檢查氣缸運行順暢度",
+    "keywords": [
+      "冷卻板",
+      "平移"
+    ]
+  },
+  {
+    "code": "0149",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Cutting Station Jammed 裁切站堵塞",
+    "cause": "馬達 M183.1 堵塞",
+    "solution": "檢查機械運行順暢度",
+    "keywords": [
+      "裁切",
+      "堵塞"
+    ]
+  },
+  {
+    "code": "0150",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Cutting Station Motor Retiming Timeout 裁切站Rephase逾時(B181.8偵測)",
+    "cause": "對時程序未在規定時間內完成",
+    "solution": "重新執行對時程序",
+    "keywords": [
+      "裁切",
+      "逾時"
+    ]
+  },
+  {
+    "code": "0162",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Waste Bag Full Prealarm 垃圾桶將滿",
+    "cause": "廢料桶即將額滿",
+    "solution": "準備清理廢料桶",
+    "keywords": [
+      "廢料",
+      "預警"
+    ]
+  },
+  {
+    "code": "0163",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Waste Bag Full 垃圾桶已滿",
+    "cause": "廢料桶已滿",
+    "solution": "清空廢料吸塵器",
+    "keywords": [
+      "廢料",
+      "清理"
+    ]
+  },
+  {
+    "code": "0166",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Under Cutter Flighted Conveyor Jammed 裁切站下方輸送帶阻塞",
+    "cause": "馬達 M186.0 堵塞",
+    "solution": "檢查輸送帶運行",
+    "keywords": [
+      "輸送帶",
+      "堵塞"
+    ]
+  },
+  {
+    "code": "0167",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Under Cutter Flighted Conveyor: Motor Retiming Timeout 裁切站下方輸送帶Rephase逾時",
+    "cause": "對時程序未按時完成",
+    "solution": "檢查輸送帶位置",
+    "keywords": [
+      "輸送帶",
+      "逾時"
+    ]
+  },
+  {
+    "code": "0171",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Film Insertion in Cutter Rollers Jammed 裁切站滾輪堵塞",
+    "cause": "馬達 M180.0 堵塞",
+    "solution": "檢查滾輪運行",
+    "keywords": [
+      "滾輪",
+      "堵塞"
+    ]
+  },
+  {
+    "code": "0174",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Cutter Loop Incorrect 裁切站循環錯誤",
+    "cause": "重啟時循環長度不正確",
+    "solution": "檢查泡殼分組數量(10個1組)及 Sensor B182.0 狀態",
+    "keywords": [
+      "裁切",
+      "循環"
+    ]
+  },
+  {
+    "code": "0175",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Blister in Cutter Position Error 裁切站中的泡殼位置錯誤(B182.8偵測)",
+    "cause": "泡殼偏移、封膜不良或反光片髒污",
+    "solution": "清潔 B182.8 反光片(數值>3500)並檢查泡殼密封",
+    "keywords": [
+      "裁切",
+      "對位"
+    ]
+  },
+  {
+    "code": "0179",
+    "device_model": "TFM001",
+    "severity": "資訊",
+    "description": "Cutter Loop Initialisation in Progress 裁切站循環數據正在初始化",
+    "cause": "正在執行對位程序",
+    "solution": "等待初始化完成",
+    "keywords": [
+      "初始化"
+    ]
+  },
+  {
+    "code": "0180",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Cutter Infeed Guide Alarm 裁切站進料異常(B182.7偵測)",
+    "cause": "進料帶反饋異常或卡住",
+    "solution": "按重置鍵並檢查進料處是否堵塞",
+    "keywords": [
+      "裁切",
+      "進料"
+    ]
+  },
+  {
+    "code": "0181",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Blister Not in Position in Cutter 裁切站中泡殼產品位置錯誤(B182.2偵測)",
+    "cause": "產品未正確對位",
+    "solution": "檢查定位及裁刀站是否堵塞",
+    "keywords": [
+      "裁切",
+      "位置"
+    ]
+  },
+  {
+    "code": "0182",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Blister Out of Tolerance in Cutter",
+    "cause": "泡殼尺寸超過公差限制",
+    "solution": "檢查泡殼實際尺寸",
+    "keywords": [
+      "裁切",
+      "公差"
+    ]
+  },
+  {
+    "code": "0183",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Blister in Cutter Correction Error 裁刀站中產品位置連續3次修正錯誤(B182.2偵測)",
+    "cause": "連續三次位置修正失敗",
+    "solution": "按黑色按鈕開啟滾輪重新定位",
+    "keywords": [
+      "裁切",
+      "修正"
+    ]
+  },
+  {
+    "code": "0186",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "No Cooling Liquid 冷卻機未開啟",
+    "cause": "流量開關偵測到壓力不足",
+    "solution": "檢查冷卻液流動狀態",
+    "keywords": [
+      "冷卻液",
+      "壓力"
+    ]
+  },
+  {
+    "code": "0187",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Flowmetre Fault 冷卻液計量錶異常",
+    "cause": "流量計偵測到流量不足",
+    "solution": "檢查感測器運作",
+    "keywords": [
+      "流量計"
+    ]
+  },
+  {
+    "code": "0188",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Thermoformer Chiller Unit Fault 成型站冷卻單元異常",
+    "cause": "冷卻控制單元故障",
+    "solution": "檢查冷卻單元功能",
+    "keywords": [
+      "冷卻",
+      "單元"
+    ]
+  },
+  {
+    "code": "0191",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Alarm %1 Control Presence Product Check 針劑檢查程式(BVH)未連線",
+    "cause": "產品存在控制功能故障",
+    "solution": "檢查 BVH 是否處於 Automatic 模式(金色畫面)",
+    "keywords": [
+      "針劑",
+      "BVH"
+    ]
+  },
+  {
+    "code": "0192",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Product Presence Check Consecutive Errors 針劑檢查程式(BVH)連續檢出異常產品",
+    "cause": "連續偵測到不良泡殼",
+    "solution": "檢查手臂吸針及星盤入料順暢度",
+    "keywords": [
+      "針劑",
+      "檢出"
+    ]
+  },
+  {
+    "code": "0199",
+    "device_model": "TFM001",
+    "severity": "資訊",
+    "description": "Product Emptying in Progress 排空中",
+    "cause": "正在執行排空程序",
+    "solution": "等待排空結束",
+    "keywords": [
+      "排空"
+    ]
+  },
+  {
+    "code": "0225",
+    "device_model": "TFM001",
+    "severity": "資訊",
+    "description": "Remove Anything From Under Cutter Belt 移除所有裁切站後產品",
+    "cause": "Rephase 前的清理提示",
+    "solution": "移除裁切站下輸送帶的所有產品",
+    "keywords": [
+      "清理"
+    ]
+  },
+  {
+    "code": "0226",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Loose Product on Under Cutter Belt 遺失裁切站下產品",
+    "cause": "產品位置偏移",
+    "solution": "將產品放回原位",
+    "keywords": [
+      "產品遺失"
+    ]
+  },
+  {
+    "code": "0232",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Empty Reject Bin Out of Position 空泡殼產品剔除箱(左剔除箱)位置錯誤(B188.6偵測)",
+    "cause": "容器不在工作位",
+    "solution": "將左剔除桶歸位",
+    "keywords": [
+      "剔除箱",
+      "左"
+    ]
+  },
+  {
+    "code": "0233",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Partial Reject Bin Out of Position 未滿針泡殼產品剔除箱(右剔除箱)位置錯誤(B190.6偵測)",
+    "cause": "容器不在工作位",
+    "solution": "將右剔除桶歸位",
+    "keywords": [
+      "剔除箱",
+      "右"
+    ]
+  },
+  {
+    "code": "0236",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Outfeed Conveyor Partial Reject Error 未滿針泡殼產品剔除箱(右剔除箱)剔除錯誤(B190.1偵測)",
+    "cause": "剔除控制錯誤",
+    "solution": "移除軌道上產品並檢查成型狀態",
+    "keywords": [
+      "剔除錯誤",
+      "右"
+    ]
+  },
+  {
+    "code": "0237",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Outfeed Conveyor Empty Reject Error 空泡殼產品剔除箱(左剔除箱)剔除錯誤(B188.4偵測)",
+    "cause": "剔除控制錯誤",
+    "solution": "移除軌道上產品並檢查成型狀態",
+    "keywords": [
+      "剔除錯誤",
+      "左"
+    ]
+  },
+  {
+    "code": "0238",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "No Blister Good on Under Cutter Conveyor 良品在裁刀站下輸送帶遺失(B88.5偵測)",
+    "cause": "應傳送的產品不在位",
+    "solution": "檢查裁切狀況及輸送帶，將偏移產品放回",
+    "keywords": [
+      "良品遺失"
+    ]
+  },
+  {
+    "code": "0258",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Conveyor Chain Jammed 輸送軌道堵塞",
+    "cause": "馬達 M183.0 堵塞",
+    "solution": "檢查機械單元運行順暢度",
+    "keywords": [
+      "軌道",
+      "堵塞"
+    ]
+  },
+  {
+    "code": "0259",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Conveyor Chain Rephasing Timeout 輸送軌道Rephase逾時(B75.8偵測)",
+    "cause": "對時程序超時",
+    "solution": "檢查軌道狀態",
+    "keywords": [
+      "軌道",
+      "逾時"
+    ]
+  },
+  {
+    "code": "0265",
+    "device_model": "TFM001",
+    "severity": "資訊",
+    "description": "Robot 1 Waiting Product",
+    "cause": "手臂等待產品中",
+    "solution": "檢查產品供應",
+    "keywords": [
+      "手臂",
+      "等待"
+    ]
+  },
+  {
+    "code": "0266",
+    "device_model": "TFM001",
+    "severity": "資訊",
+    "description": "Robot 1 Waiting Deposit",
+    "cause": "手臂等待放置位置",
+    "solution": "檢查接料斗供應",
+    "keywords": [
+      "手臂",
+      "放置"
+    ]
+  },
+  {
+    "code": "0269",
+    "device_model": "TFM001",
+    "severity": "資訊",
+    "description": "Remove Product from Robot 1 移除機械手臂上的產品",
+    "cause": "提示清理手臂上殘留產品",
+    "solution": "手動移除產品",
+    "keywords": [
+      "手臂",
+      "清理"
+    ]
+  },
+  {
+    "code": "0274",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Robot 1 Vertical Arm Jammed 機械手臂堵塞",
+    "cause": "垂直軸馬達 M80.0 堵塞",
+    "solution": "檢查運行順暢度",
+    "keywords": [
+      "手臂",
+      "垂直軸"
+    ]
+  },
+  {
+    "code": "0275",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Robot 1 Vertical Arm Rephasing Timeout 機械手臂Rephase逾時",
+    "cause": "對時程序超時",
+    "solution": "執行對時",
+    "keywords": [
+      "手臂",
+      "逾時"
+    ]
+  },
+  {
+    "code": "0282",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Robot 1 Upper Horizontal Arm Jammed 機械手臂上方水平軸堵塞",
+    "cause": "馬達 M81.0 堵塞",
+    "solution": "檢查運行順暢度",
+    "keywords": [
+      "手臂",
+      "水平軸"
+    ]
+  },
+  {
+    "code": "0283",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Robot 1 Upper Horizontal Arm Rephasing Timeout 機械手臂上方水平軸Rephase逾時",
+    "cause": "對時程序超時",
+    "solution": "檢查水平軸",
+    "keywords": [
+      "手臂",
+      "水平軸"
+    ]
+  },
+  {
+    "code": "0290",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Robot 1 Lower Horizontal Arm Jammed 機械手臂下方水平軸堵塞",
+    "cause": "馬達 M82.0 堵塞",
+    "solution": "檢查運行順暢度",
+    "keywords": [
+      "手臂",
+      "水平軸"
+    ]
+  },
+  {
+    "code": "0291",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Robot 1 Lower Horizontal Arm Rephasing Timeout 機械手臂下方水平軸Rephase逾時",
+    "cause": "對時程序超時",
+    "solution": "檢查水平軸",
+    "keywords": [
+      "手臂",
+      "水平軸"
+    ]
+  },
+  {
+    "code": "0298",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Robot 1 Wrist Rotation Jammed 機械手臂旋轉軸堵塞",
+    "cause": "馬達 M83.0 堵塞",
+    "solution": "檢查旋轉軸運行",
+    "keywords": [
+      "手臂",
+      "旋轉軸"
+    ]
+  },
+  {
+    "code": "0299",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Robot  Wrist Rotation Retiming Timeout 機械手臂旋轉軸Rephase逾時(B83.9偵測)",
+    "cause": "對時程序超時",
+    "solution": "檢查旋轉軸",
+    "keywords": [
+      "手臂",
+      "旋轉軸"
+    ]
+  },
+  {
+    "code": "0306",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Buffer Chain Jammed 軌道與Buffer阻塞",
+    "cause": "馬達 M73.0/M75.0 堵塞",
+    "solution": "檢查運行順暢度",
+    "keywords": [
+      "Buffer",
+      "阻塞"
+    ]
+  },
+  {
+    "code": "0307",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Buffer Chain Rephasing Timeout 軌道與Buffer Rephase逾時(B73.8偵測)",
+    "cause": "對時超時",
+    "solution": "檢查 Buffer",
+    "keywords": [
+      "Buffer",
+      "逾時"
+    ]
+  },
+  {
+    "code": "0309",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Buffer Emptying Due to Overly Long Stay",
+    "cause": "產品停留時間過長觸發排空",
+    "solution": "自動程序",
+    "keywords": [
+      "Buffer",
+      "排空"
+    ]
+  },
+  {
+    "code": "0311",
+    "device_model": "TFM001",
+    "severity": "資訊",
+    "description": "Buffer Filling in Progress 補Buffer中",
+    "cause": "正在執行填充程序",
+    "solution": "等待程序結束",
+    "keywords": [
+      "Buffer",
+      "填充"
+    ]
+  },
+  {
+    "code": "0312",
+    "device_model": "TFM001",
+    "severity": "資訊",
+    "description": "Buffer Emptying in Progress 排空Buffer",
+    "cause": "正在執行排空程序",
+    "solution": "等待排空結束",
+    "keywords": [
+      "Buffer",
+      "排空"
+    ]
+  },
+  {
+    "code": "0313",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Loose Product on Buffer Check 1 產品被偵測於Buffer Check 1",
+    "cause": "針劑翹起或反光片受損",
+    "solution": "清理區域並復位產品，檢查 B74.5",
+    "keywords": [
+      "Buffer",
+      "翹起"
+    ]
+  },
+  {
+    "code": "0314",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Loose Product On Buffer Check 2 產品被偵測於Buffer Check 2.",
+    "cause": "針劑翹起或反光片受損",
+    "solution": "清理區域並檢查 B74.6",
+    "keywords": [
+      "Buffer",
+      "翹起"
+    ]
+  },
+  {
+    "code": "0319",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Syringes in Downstroke Zone Jam 針劑產品在星盤入料軌道處堵塞",
+    "cause": "下衝區域發生卡卡",
+    "solution": "排除入料軌道堵塞",
+    "keywords": [
+      "星盤",
+      "入料"
+    ]
+  },
+  {
+    "code": "0322",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Syringes Starwheel Jammed 星盤堵塞",
+    "cause": "馬達 M97.0 堵塞",
+    "solution": "檢查運行順暢度",
+    "keywords": [
+      "星盤",
+      "堵塞"
+    ]
+  },
+  {
+    "code": "0323",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Syringe Starwheel Rephasing Timeout 星盤Rephase逾時(B97.8偵測)",
+    "cause": "對時程序超時",
+    "solution": "執行對時",
+    "keywords": [
+      "星盤",
+      "逾時"
+    ]
+  },
+  {
+    "code": "0324",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Syringe Starwheel Infeed Safety 星盤入料處卡針",
+    "cause": "入料處產品堵塞",
+    "solution": "拉出安全裝置移除卡針後歸位",
+    "keywords": [
+      "星盤",
+      "卡針"
+    ]
+  },
+  {
+    "code": "0325",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Syringe Starwheel Outfeed Safety 星盤出料處卡針",
+    "cause": "出料處產品堵塞",
+    "solution": "排除出料處堵塞",
+    "keywords": [
+      "星盤",
+      "卡針"
+    ]
+  },
+  {
+    "code": "0326",
+    "device_model": "TFM001",
+    "severity": "資訊",
+    "description": "Syringe Starwheel Analogue Acquisition in Progress 針劑星盤角度讀取中",
+    "cause": "自學習循環執行中",
+    "solution": "等待角度讀取完成",
+    "keywords": [
+      "星盤",
+      "學習"
+    ]
+  },
+  {
+    "code": "0328",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Stray Product on Syringe Starwheel 星盤出料區域針劑翹起",
+    "cause": "產品偏移",
+    "solution": "將翹起針劑復位",
+    "keywords": [
+      "星盤",
+      "翹起"
+    ]
+  },
+  {
+    "code": "0330",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Stop Due To No Product on Syringe Starwheel 星盤上無針劑產品",
+    "cause": "星盤上缺料",
+    "solution": "檢查入料軌道，無堵塞則按 Reset Start",
+    "keywords": [
+      "星盤",
+      "缺料"
+    ]
+  },
+  {
+    "code": "0331",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Syringe Starwheel Minimum Load 星盤入料處針劑低於最低入料量",
+    "cause": "站點內無產品",
+    "solution": "重新加載產品",
+    "keywords": [
+      "星盤",
+      "低料位"
+    ]
+  },
+  {
+    "code": "0333",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Seat Position on Syringe Starwheel Check Error 星盤位置錯誤",
+    "cause": "位置識別出錯",
+    "solution": "確認星盤安裝並重新讀取角度",
+    "keywords": [
+      "星盤",
+      "位置"
+    ]
+  },
+  {
+    "code": "0335",
+    "device_model": "TFM001",
+    "severity": "資訊",
+    "description": "Wait Gate Opening Infeed Safety for Seal-Learning 等待星盤安全裝置開啟以讀取星盤角度",
+    "cause": "HMI 切換模組觸發自學習",
+    "solution": "拉開安全裝置讓其讀取角度後再歸位",
+    "keywords": [
+      "星盤",
+      "自學習"
+    ]
+  },
+  {
+    "code": "0354",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Downstream Machine Stop 下游停機",
+    "cause": "下游機台停止",
+    "solution": "確認下游機台狀態",
+    "keywords": [
+      "下游",
+      "停機"
+    ]
+  },
+  {
+    "code": "0358",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Downstream Machine Anomaly 下游異常且連線異常",
+    "cause": "下游機台發生嚴重停機",
+    "solution": "確認裝盒機連線是否開啟",
+    "keywords": [
+      "下游",
+      "異常"
+    ]
+  },
+  {
+    "code": "0361",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Downstream Ethernet Network Connection Fault 與下游連線異常",
+    "cause": "網絡連線故障",
+    "solution": "檢查網線並確認裝盒機上游連接",
+    "keywords": [
+      "下游",
+      "連線"
+    ]
+  },
+  {
+    "code": "0363",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Check Downstream Machine Connection State",
+    "cause": "需確認下游機台連線狀態",
+    "solution": "手動檢查連線",
+    "keywords": [
+      "下游",
+      "確認"
+    ]
+  },
+  {
+    "code": "0381",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Products I Recovery Magazine Minimum Load 彈匣針劑產品低於最低入料量",
+    "cause": "彈匣料位過低",
+    "solution": "填充彈匣",
+    "keywords": [
+      "彈匣",
+      "低料位"
+    ]
+  },
+  {
+    "code": "0399",
+    "device_model": "TFM001",
+    "severity": "資訊",
+    "description": "Material Top-Up From Magazine Enabled",
+    "cause": "已啟動手動加載程序",
+    "solution": "正常操作",
+    "keywords": [
+      "手動加載"
+    ]
+  },
+  {
+    "code": "0496",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Cartoner Guard Open 裝盒機區域安全門開啟",
+    "cause": "裝盒機安全門未關",
+    "solution": "關閉安全門並在裝盒機 HMI 消除警報",
+    "keywords": [
+      "裝盒機",
+      "安全門"
+    ]
+  },
+  {
+    "code": "0627",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Retentive Data Saving Error Buffer區資料保存錯誤",
+    "cause": "Buffer 狀態寫入失敗，可能影響重啟",
+    "solution": "重啟電源，若未消除需聯絡原廠(期間不可關電)",
+    "keywords": [
+      "Buffer",
+      "資料"
+    ]
+  },
+  {
+    "code": "0714",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Connections Disabled 未與下游連結",
+    "cause": "上下游連線關閉",
+    "solution": "啟用連線",
+    "keywords": [
+      "連線",
+      "停用"
+    ]
+  },
+  {
+    "code": "0720",
+    "device_model": "TFM001",
+    "severity": "資訊",
+    "description": "Local Operating Mode Local模式",
+    "cause": "本地操作模式已開啟",
+    "solution": "切換至自動模式",
+    "keywords": [
+      "Local"
+    ]
+  },
+  {
+    "code": "1060",
+    "device_model": "TFM001",
+    "severity": "警告",
+    "description": "Warning Code 11 Reported form Motor 15 馬達過熱警告",
+    "cause": "馬達 15 溫度過高",
+    "solution": "暫停冷卻",
+    "keywords": [
+      "馬達",
+      "過熱"
+    ]
+  },
+  {
+    "code": "1137",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Error 160 in Axis Control System 1",
+    "cause": "軸控制系統錯誤",
+    "solution": "切換 HMI 模組再切回原模組消除",
+    "keywords": [
+      "軸控制",
+      "HMI"
+    ]
+  },
+  {
+    "code": "1138",
+    "device_model": "TFM001",
+    "severity": "嚴重",
+    "description": "Error 35 In Axis Control System 2",
+    "cause": "軸控制系統錯誤",
+    "solution": "切換 HMI 模組再切回原模組消除",
+    "keywords": [
+      "軸控制",
+      "HMI"
+    ]
+  }
+]
