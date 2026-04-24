@@ -78,14 +78,14 @@ def create_app() -> Flask:
         pw = (request.form.get("password") or "").strip()
         if pw == os.environ.get("LOGIN_PASSWORD", ""):
             session["auth"] = True
-            next_url = request.form.get("next") or request.args.get("next", "/")
-            return redirect(next_url if next_url.startswith("/") else "/")
+            next_url = request.form.get("next") or request.args.get("next", "/app")
+            return redirect(next_url if next_url.startswith("/") else "/app")
         return redirect(url_for("login_page", error=1))
 
     @app.get("/logout")
     def logout():
         session.clear()
-        return redirect("/login")
+        return redirect("/")
 
     # ── Admin login / logout ────────────────────────────────────────
 
@@ -224,11 +224,11 @@ def create_app() -> Flask:
 
     # ── Pages ───────────────────────────────────────────────────────
 
-    @app.get("/portal")
+    @app.get("/")
     def portal():
         return send_from_directory(FRONTEND, "portal.html")
 
-    @app.get("/")
+    @app.get("/app")
     @login_required
     def index():
         return send_from_directory(FRONTEND, "index.html")
