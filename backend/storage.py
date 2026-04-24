@@ -3,6 +3,7 @@ import os
 import urllib.parse
 import urllib.request
 import urllib.error
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 from typing import Optional
@@ -92,9 +93,97 @@ def _use_supabase() -> bool:
     return bool(os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_KEY"))
 
 
+class AuditLogger:
+    _MAX = 500
+
+    def __init__(self):
+        self._lock = Lock()
+
+    def log(self, operation: str, new_data: dict = None, old_data: dict = None) -> None:
+        entry = {
+            "operation": operation,
+            "code": (new_data or old_data or {}).get("code", ""),
+            "old_data": old_data,
+            "new_data": new_data if operation != "DELETE" else None,
+            "changed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if _use_supabase():
+            self._log_supabase(entry)
+        else:
+            self._log_json(entry)
+
+    def load(self, limit: int = 100) -> list:
+        if _use_supabase():
+            return self._load_supabase(limit)
+        return self._load_json(limit)
+
+    # ── JSON backend ────────────────────────────────────────────────
+
+    def _log_json(self, entry: dict) -> None:
+        with self._lock:
+            path = _data_dir() / "audit_log.json"
+            logs = []
+            if path.exists():
+                with path.open("r", encoding="utf-8") as f:
+                    logs = json.load(f)
+            logs.append(entry)
+            logs = logs[-self._MAX:]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            with tmp.open("w", encoding="utf-8") as f:
+                json.dump(logs, f, ensure_ascii=False, indent=2)
+            tmp.replace(path)
+
+    def _load_json(self, limit: int) -> list:
+        path = _data_dir() / "audit_log.json"
+        if not path.exists():
+            return []
+        with path.open("r", encoding="utf-8") as f:
+            logs = json.load(f)
+        return list(reversed(logs[-limit:]))
+
+    # ── Supabase backend ────────────────────────────────────────────
+
+    def _log_supabase(self, entry: dict) -> None:
+        try:
+            base = os.environ.get("SUPABASE_URL", "").rstrip("/")
+            key = os.environ.get("SUPABASE_KEY", "")
+            data = json.dumps(entry).encode()
+            req = urllib.request.Request(
+                f"{base}/rest/v1/alarm_history",
+                data=data,
+                headers={
+                    "apikey": key,
+                    "Authorization": f"Bearer {key}",
+                    "Content-Type": "application/json",
+                    "Prefer": "return=minimal",
+                },
+                method="POST",
+            )
+            urllib.request.urlopen(req)
+        except Exception:
+            pass  # log failure must never crash the main operation
+
+    def _load_supabase(self, limit: int) -> list:
+        try:
+            base = os.environ.get("SUPABASE_URL", "").rstrip("/")
+            key = os.environ.get("SUPABASE_KEY", "")
+            req = urllib.request.Request(
+                f"{base}/rest/v1/alarm_history?select=*&order=changed_at.desc&limit={limit}",
+                headers={"apikey": key, "Authorization": f"Bearer {key}"},
+                method="GET",
+            )
+            with urllib.request.urlopen(req) as r:
+                return json.loads(r.read().decode())
+        except Exception:
+            return []
+
+
 if _use_supabase():
     alarms_store = SupabaseStore("alarms", pk="code")
     devices_store = SupabaseStore("devices", pk="id")
 else:
     alarms_store = JsonStore("alarms.json")
     devices_store = JsonStore("devices.json")
+
+audit_logger = AuditLogger()

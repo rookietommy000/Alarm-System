@@ -9,7 +9,7 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 from flask import Flask, abort, jsonify, redirect, request, send_from_directory, session, url_for
 from flask_cors import CORS
 
-from storage import alarms_store, devices_store
+from storage import alarms_store, audit_logger, devices_store
 
 BASE = Path(__file__).resolve().parent.parent
 FRONTEND = BASE / "frontend"
@@ -186,6 +186,7 @@ def create_app() -> Flask:
             abort(409, "代碼已存在")
         items.append(body)
         alarms_store.save(items)
+        audit_logger.log("CREATE", new_data=body)
         return jsonify(body), 201
 
     @app.put("/api/alarms/<code>")
@@ -196,8 +197,10 @@ def create_app() -> Flask:
         items = alarms_store.load()
         for i, a in enumerate(items):
             if a["code"] == code:
+                old = a
                 items[i] = body
                 alarms_store.save(items)
+                audit_logger.log("UPDATE", new_data=body, old_data=old)
                 return jsonify(body)
         abort(404, "找不到此警報代碼")
 
@@ -205,11 +208,19 @@ def create_app() -> Flask:
     @admin_required
     def delete_alarm(code: str):
         items = alarms_store.load()
+        old = next((a for a in items if a["code"] == code), None)
         new = [a for a in items if a["code"] != code]
         if len(new) == len(items):
             abort(404, "找不到此警報代碼")
         alarms_store.save(new)
+        audit_logger.log("DELETE", old_data=old)
         return "", 204
+
+    @app.get("/api/audit")
+    @admin_required
+    def list_audit():
+        limit = min(int(request.args.get("limit", 100)), 500)
+        return jsonify(audit_logger.load(limit))
 
     # ── Pages ───────────────────────────────────────────────────────
 

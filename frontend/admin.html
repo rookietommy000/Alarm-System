@@ -56,6 +56,17 @@
       outline: none;
     }
     .empty-pane { color: #8a7d74; }
+    .history-pane h2 { font-size: 16px; font-weight: 600; margin-bottom: 16px; color: #2c2118; }
+    .history-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+    .history-item { display: flex; align-items: baseline; gap: 10px; padding: 10px 12px; background: #e8e1db; border-radius: 8px; font-size: 13px; }
+    .hist-badge { font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 4px; flex-shrink: 0; }
+    .hist-CREATE { background: #d1fae5; color: #065f46; }
+    .hist-UPDATE { background: #dbeafe; color: #1e40af; }
+    .hist-DELETE { background: #fee2e2; color: #991b1b; }
+    .hist-code { font-weight: 600; color: #2c2118; flex-shrink: 0; }
+    .hist-desc { color: #6b5e55; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .hist-time { color: #a89e97; font-size: 11px; flex-shrink: 0; }
+    .empty-history { color: #8a7d74; font-size: 14px; margin-top: 24px; }
   </style>
 </head>
 <body>
@@ -75,6 +86,7 @@
     <section class="admin-grid">
       <aside class="list-pane">
         <button class="primary" @click="newRecord">＋ 新增代碼</button>
+        <button @click="openHistory" style="margin-top:8px;width:100%">📋 歷史紀錄</button>
         <ul class="codelist">
           <li v-for="a in items" :key="a.code"
               :class="{ active: editing && editing.code === a.code && !isNew }"
@@ -85,7 +97,21 @@
         </ul>
       </aside>
 
-      <main class="form-pane" v-if="editing">
+      <main class="form-pane history-pane" v-if="showHistory">
+        <button class="back-to-list" @click="showHistory = false" aria-label="返回">← 返回</button>
+        <h2>操作歷史紀錄</h2>
+        <p class="empty-history" v-if="!history.length">尚無紀錄</p>
+        <ul class="history-list" v-else>
+          <li class="history-item" v-for="h in history" :key="h.changed_at + h.code">
+            <span class="hist-badge" :class="'hist-' + h.operation">{{ {CREATE:'新增',UPDATE:'編輯',DELETE:'刪除'}[h.operation] }}</span>
+            <span class="hist-code">{{ h.code }}</span>
+            <span class="hist-desc">{{ (h.new_data || h.old_data || {}).description }}</span>
+            <span class="hist-time">{{ fmtTime(h.changed_at) }}</span>
+          </li>
+        </ul>
+      </main>
+
+      <main class="form-pane" v-else-if="editing">
         <button class="back-to-list" @click="editing = null" aria-label="返回列表">← 返回列表</button>
         <h2>{{ isNew ? '新增警報代碼' : '編輯 ' + editing.code }}</h2>
         <label>代碼
@@ -123,7 +149,7 @@
         </div>
       </main>
 
-      <main class="form-pane empty-pane" v-else>
+      <main class="form-pane empty-pane" v-else-if="!showHistory">
         <p>選擇一筆代碼以編輯，或點擊「新增代碼」。</p>
       </main>
     </section>
@@ -136,7 +162,8 @@
         return {
           items: [], devices: [],
           editing: null, isNew: false, error: '',
-          keywordsText: ''
+          keywordsText: '',
+          showHistory: false, history: []
         };
       },
       mounted() {
@@ -157,12 +184,24 @@
         },
         newRecord() {
           this.isNew = true;
+          this.showHistory = false;
           this.editing = { code: '', device_model: '', severity: '', description: '', cause: '', solution: '', keywords: [] };
           this.keywordsText = '';
           this.error = '';
         },
+        async openHistory() {
+          this.editing = null;
+          this.showHistory = true;
+          const r = await fetch('/api/audit');
+          if (r.ok) this.history = await r.json();
+        },
+        fmtTime(iso) {
+          const d = new Date(iso);
+          return `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+        },
         edit(a) {
           this.isNew = false;
+          this.showHistory = false;
           this.editing = JSON.parse(JSON.stringify(a));
           this.keywordsText = (a.keywords || []).join(', ');
           this.error = '';
