@@ -58,7 +58,8 @@
     .empty-pane { color: #8a7d74; }
     .history-pane h2 { font-size: 16px; font-weight: 600; margin-bottom: 16px; color: #2c2118; }
     .history-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
-    .history-item { display: flex; align-items: baseline; gap: 10px; padding: 10px 12px; background: #e8e1db; border-radius: 8px; font-size: 13px; }
+    .history-item { padding: 10px 12px; background: #e8e1db; border-radius: 8px; font-size: 13px; }
+    .hist-main { display: flex; align-items: baseline; gap: 10px; }
     .hist-badge { font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 4px; flex-shrink: 0; }
     .hist-CREATE { background: #d1fae5; color: #065f46; }
     .hist-UPDATE { background: #dbeafe; color: #1e40af; }
@@ -66,6 +67,12 @@
     .hist-code { font-weight: 600; color: #2c2118; flex-shrink: 0; }
     .hist-desc { color: #6b5e55; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .hist-time { color: #a89e97; font-size: 11px; flex-shrink: 0; }
+    .hist-diff { list-style: none; padding: 0; margin: 8px 0 0 0; display: flex; flex-direction: column; gap: 4px; }
+    .hist-diff li { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+    .hist-field { color: #8a7d74; flex-shrink: 0; min-width: 48px; }
+    .hist-old { color: #991b1b; background: #fee2e2; padding: 1px 6px; border-radius: 3px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .hist-arrow { color: #a89e97; }
+    .hist-new { color: #065f46; background: #d1fae5; padding: 1px 6px; border-radius: 3px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .empty-history { color: #8a7d74; font-size: 14px; margin-top: 24px; }
   </style>
 </head>
@@ -103,10 +110,20 @@
         <p class="empty-history" v-if="!history.length">尚無紀錄</p>
         <ul class="history-list" v-else>
           <li class="history-item" v-for="h in history" :key="h.changed_at + h.code">
-            <span class="hist-badge" :class="'hist-' + h.operation">{{ {CREATE:'新增',UPDATE:'編輯',DELETE:'刪除'}[h.operation] }}</span>
-            <span class="hist-code">{{ h.code }}</span>
-            <span class="hist-desc">{{ (h.new_data || h.old_data || {}).description }}</span>
-            <span class="hist-time">{{ fmtTime(h.changed_at) }}</span>
+            <div class="hist-main">
+              <span class="hist-badge" :class="'hist-' + h.operation">{{ {CREATE:'新增',UPDATE:'編輯',DELETE:'刪除'}[h.operation] }}</span>
+              <span class="hist-code">{{ h.code }}</span>
+              <span class="hist-desc">{{ (h.new_data || h.old_data || {}).description }}</span>
+              <span class="hist-time">{{ fmtTime(h.changed_at) }}</span>
+            </div>
+            <ul class="hist-diff" v-if="h.operation === 'UPDATE' && diffFields(h).length">
+              <li v-for="f in diffFields(h)" :key="f.label">
+                <span class="hist-field">{{ f.label }}</span>
+                <span class="hist-old">{{ f.old }}</span>
+                <span class="hist-arrow">→</span>
+                <span class="hist-new">{{ f.new }}</span>
+              </li>
+            </ul>
           </li>
         </ul>
       </main>
@@ -198,6 +215,14 @@
         fmtTime(iso) {
           const d = new Date(iso);
           return `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+        },
+        diffFields(h) {
+          if (!h.old_data || !h.new_data) return [];
+          const labels = { device_model:'機種', severity:'嚴重度', description:'描述', cause:'原因', solution:'解決方案', keywords:'關鍵字' };
+          const fmt = v => Array.isArray(v) ? v.join('、') : (v || '');
+          return Object.entries(labels)
+            .filter(([k]) => fmt(h.old_data[k]) !== fmt(h.new_data[k]))
+            .map(([k, label]) => ({ label, old: fmt(h.old_data[k]) || '—', new: fmt(h.new_data[k]) || '—' }));
         },
         edit(a) {
           this.isNew = false;
