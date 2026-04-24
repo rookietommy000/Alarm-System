@@ -70,12 +70,19 @@ class SupabaseStore:
         return self._req("GET", f"{self.table}?select=*&order={self.pk}")
 
     def save(self, items: list) -> None:
-        # Delete all existing rows, then re-insert
-        self._req("DELETE",
-                  f"{self.table}?{self.pk}=not.is.null",
-                  extra_headers={"Prefer": "return=minimal"})
+        # Step 1: upsert all items in the new list — never deletes, so safe if network drops
         if items:
             self._req("POST", self.table, items,
+                      extra_headers={"Prefer": "resolution=merge-duplicates,return=minimal"})
+
+        # Step 2: delete only rows whose PK is no longer in the list
+        new_pks = {str(item[self.pk]) for item in items}
+        existing = self._req("GET", f"{self.table}?select={self.pk}")
+        to_delete = [row[self.pk] for row in existing if str(row[self.pk]) not in new_pks]
+        if to_delete:
+            encoded = ",".join(urllib.parse.quote(str(pk), safe="") for pk in to_delete)
+            self._req("DELETE",
+                      f"{self.table}?{self.pk}=in.({encoded})",
                       extra_headers={"Prefer": "return=minimal"})
 
 
