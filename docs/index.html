@@ -79,24 +79,24 @@
     }
 
     .card {
-      background: #ffffff;
-      border: 1px solid #e2e8f0;
+      background: #223050;
+      border: 1px solid #2a3a55;
       border-radius: 12px;
       padding: 28px 28px 24px;
       width: 260px;
       display: flex;
       flex-direction: column;
       gap: 12px;
-      transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
+      transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s;
       text-decoration: none;
       color: inherit;
       position: relative;
       overflow: hidden;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.12);
     }
     .card.active:hover {
-      border-color: #4a90d9;
-      box-shadow: 0 4px 16px rgba(74,144,217,0.15);
+      border-color: #58a6ff;
+      box-shadow: 0 4px 16px rgba(88,166,255,0.2);
       transform: translateY(-2px);
     }
     .card.inactive {
@@ -111,11 +111,11 @@
     .card-name {
       font-size: 18px;
       font-weight: 600;
-      color: #2d3748;
+      color: #e6edf3;
     }
     .card-desc {
       font-size: 13px;
-      color: #718096;
+      color: #8b98a8;
       line-height: 1.5;
       flex: 1;
     }
@@ -135,10 +135,10 @@
       height: 6px;
       border-radius: 50%;
     }
-    .status-on  { background: #f0fff4; color: #276749; border: 1px solid #c6f6d5; }
-    .status-on  .status-dot { background: #38a169; animation: pulse 2s infinite; }
-    .status-off { background: #f7fafc; color: #a0aec0; border: 1px solid #e2e8f0; }
-    .status-off .status-dot { background: #cbd5e0; }
+    .status-on  { background: rgba(35,134,54,0.2); color: #3fb950; }
+    .status-on  .status-dot { background: #3fb950; animation: pulse 2s infinite; }
+    .status-off { background: rgba(125,133,144,0.15); color: #7d8590; }
+    .status-off .status-dot { background: #7d8590; }
 
     @keyframes pulse {
       0%, 100% { opacity: 1; }
