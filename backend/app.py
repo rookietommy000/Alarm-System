@@ -224,6 +224,10 @@ def create_app() -> Flask:
 
     # ── Pages ───────────────────────────────────────────────────────
 
+    @app.get("/portal")
+    def portal():
+        return send_from_directory(FRONTEND, "portal.html")
+
     @app.get("/")
     @login_required
     def index():

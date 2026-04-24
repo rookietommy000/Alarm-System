@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>製造四部 — 警報查詢系統</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #f0f4f8;
+      color: #1a202c;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Header ── */
+    header {
+      background: #ffffff;
+      border-bottom: 1px solid #e2e8f0;
+      padding: 20px 32px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .header-badge {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #718096;
+      border: 1px solid #cbd5e0;
+      border-radius: 4px;
+      padding: 2px 8px;
+    }
+    header h1 {
+      font-size: 15px;
+      font-weight: 600;
+      color: #2d3748;
+    }
+
+    /* ── Hero ── */
+    .hero {
+      padding: 72px 32px 48px;
+      text-align: center;
+    }
+    .hero-label {
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: #718096;
+      margin-bottom: 16px;
+    }
+    .hero h2 {
+      font-size: 36px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      color: #1a202c;
+      margin-bottom: 12px;
+    }
+    .hero p {
+      font-size: 15px;
+      color: #718096;
+      max-width: 480px;
+      margin: 0 auto;
+      line-height: 1.6;
+    }
+
+    /* ── Cards ── */
+    .cards {
+      display: flex;
+      justify-content: center;
+      gap: 20px;
+      padding: 0 32px 80px;
+      flex-wrap: wrap;
+    }
+
+    .card {
+      background: #223050;
+      border: 1px solid #2a3a55;
+      border-radius: 12px;
+      padding: 28px 28px 24px;
+      width: 260px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s;
+      text-decoration: none;
+      color: inherit;
+      position: relative;
+      overflow: hidden;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+    }
+    .card.active:hover {
+      border-color: #58a6ff;
+      box-shadow: 0 4px 16px rgba(88,166,255,0.2);
+      transform: translateY(-2px);
+    }
+    .card.inactive {
+      opacity: 0.5;
+      cursor: default;
+      pointer-events: none;
+    }
+    .card-icon {
+      font-size: 28px;
+      line-height: 1;
+    }
+    .card-name {
+      font-size: 18px;
+      font-weight: 600;
+      color: #e6edf3;
+    }
+    .card-desc {
+      font-size: 13px;
+      color: #8b98a8;
+      line-height: 1.5;
+      flex: 1;
+    }
+    .card-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      padding: 4px 10px;
+      border-radius: 20px;
+      align-self: flex-start;
+      margin-top: 4px;
+    }
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+    }
+    .status-on  { background: rgba(35,134,54,0.2); color: #3fb950; }
+    .status-on  .status-dot { background: #3fb950; animation: pulse 2s infinite; }
+    .status-off { background: rgba(125,133,144,0.15); color: #7d8590; }
+    .status-off .status-dot { background: #7d8590; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    /* ── Footer ── */
+    footer {
+      margin-top: auto;
+      border-top: 1px solid #e2e8f0;
+      padding: 20px 32px;
+      text-align: center;
+      font-size: 12px;
+      color: #a0aec0;
+      background: #ffffff;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <span class="header-badge">內部系統</span>
+    <h1>製造四部 警報查詢平台</h1>
+  </header>
+
+  <div class="hero">
+    <p class="hero-label">Manufacturing Dept. 4</p>
+    <h2>設備警報代碼查詢</h2>
+    <p>選擇所屬組別進入系統，查詢設備警報代碼、原因分析與解決方案。</p>
+  </div>
+
+  <div class="cards">
+
+    <a class="card inactive" href="#">
+      <div class="card-icon">⚗️</div>
+      <div class="card-name">調劑組</div>
+      <div class="card-desc">調劑設備警報代碼查詢與知識庫管理</div>
+      <span class="card-status status-off">
+        <span class="status-dot"></span>即將上線
+      </span>
+    </a>
+
+    <a class="card inactive" href="#">
+      <div class="card-icon">💊</div>
+      <div class="card-name">充填組</div>
+      <div class="card-desc">充填設備警報代碼查詢與知識庫管理</div>
+      <span class="card-status status-off">
+        <span class="status-dot"></span>即將上線
+      </span>
+    </a>
+
+    <a class="card active" href="https://alarm-system-j9dl.onrender.com">
+      <div class="card-icon">📦</div>
+      <div class="card-name">包裝組</div>
+      <div class="card-desc">包裝設備警報代碼查詢與知識庫管理</div>
+      <span class="card-status status-on">
+        <span class="status-dot"></span>系統運行中
+      </span>
+    </a>
+
+  </div>
+
+  <footer>
+    製造四部 內部使用系統 · 如有問題請聯繫系統管理員
+  </footer>
+
+</body>
+</html>
