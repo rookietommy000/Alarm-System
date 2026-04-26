@@ -16,61 +16,283 @@
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
   <link rel="stylesheet" href="style.css" />
   <style>
-    :root {
-      --bg: #e8e1db;
-      --surface: #f2ede8;
-      --text: #2c2118;
-      --muted: #8a7d74;
-      --border: #d4cdc6;
-      --border-strong: #bfb8b0;
-      --nav: #987d84;
-      --nav-link: #f2ede8;
-      --primary: #2c2118;
-      --primary-ink: #f2ede8;
+    /* 自訂機種下拉 */
+    .custom-select { position: relative; flex: 1; min-width: 0; }
+    .custom-select-btn {
+      width: 100%;
+      padding: 10px 14px;
+      font-size: 14px;
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-md);
+      background: var(--surface);
+      color: var(--text);
+      min-height: var(--tap-min);
+      cursor: pointer;
+      text-align: left;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      font-family: inherit;
+      white-space: nowrap;
+      overflow: hidden;
     }
-    .topbar { border-bottom: 1px solid #7d6870; }
-    .topbar h1 { font-weight: 500; letter-spacing: -0.2px; color: #f2ede8; }
-    .topbar a { color: #f0e8ea; font-size: 13px; }
-    .topbar a:hover { background: rgba(255,255,255,.12); color: #fff; }
-    .filters { background: #e8e1db; border-bottom: 1px solid #d4cdc6; }
-    .filters input, .filters select {
-      background: #f2ede8;
-      border: 1px solid #d4cdc6;
-      color: #2c2118;
-      border-radius: 8px;
+    .custom-select-btn:focus { outline: 2px solid var(--primary); outline-offset: 2px; }
+    .custom-select-btn span { overflow: hidden; text-overflow: ellipsis; }
+    .custom-select-arrow { flex-shrink: 0; font-size: 11px; color: var(--muted); }
+    .custom-select-dropdown {
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0;
+      min-width: 100%;
+      background: var(--surface);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-md);
+      box-shadow: var(--shadow-md);
+      z-index: 50;
+      overflow: hidden;
+      max-height: 320px;
+      overflow-y: auto;
     }
-    .filters input::placeholder { color: #a89e97; }
-    .filters input:focus, .filters select:focus { border-color: #a89e97; outline: none; box-shadow: 0 0 0 2px rgba(44,33,24,0.08); }
-    table { border-collapse: collapse; }
+    .custom-select-group-label {
+      background: var(--primary);
+      color: #fff;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      padding: 6px 14px;
+    }
+    .custom-select-option {
+      padding: 9px 14px 9px 20px;
+      font-size: 14px;
+      cursor: pointer;
+      color: var(--text);
+      transition: background 0.1s;
+    }
+    .custom-select-option:hover { background: var(--surface-hover); }
+    .custom-select-option.selected { background: #ede9fe; color: var(--primary); font-weight: 600; }
+    .custom-select-option.all-opt { padding-left: 14px; border-bottom: 1px solid var(--border); }
+
+    .search-btn {
+      padding: 10px 20px;
+      background: var(--primary);
+      color: #fff;
+      border: none;
+      border-radius: var(--radius-md);
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+      min-height: var(--tap-min);
+      transition: var(--transition);
+      font-family: inherit;
+    }
+    .search-btn:hover { filter: brightness(1.1); }
+
+    /* 搜尋欄 */
+    .filters {
+      padding: 10px 16px;
+      gap: 8px;
+      flex-wrap: nowrap;
+    }
+    .filters input.q {
+      flex: 2;
+      min-width: 0;
+      font-size: 15px;
+      padding: 10px 14px;
+    }
+    .filters select {
+      flex: 1;
+      min-width: 0;
+      font-size: 14px;
+      padding: 10px 10px;
+    }
+    @media (max-width: 767px) {
+      .filters { flex-wrap: wrap; }
+      .filters input.q { flex: 1 1 100%; }
+      .filters select { flex: 1 1 calc(50% - 8px); min-width: 100px; font-size: 13px; }
+    }
+
+    /* 卡片導覽區 */
+    .card-view {
+      padding: 32px 24px;
+      min-height: calc(100vh - 110px);
+      display: flex;
+      flex-direction: column;
+    }
+    .card-view-title {
+      font-size: 13px;
+      color: var(--muted);
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .card-back {
+      background: none;
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-sm);
+      color: var(--muted);
+      font-size: 13px;
+      padding: 4px 12px;
+      cursor: pointer;
+      transition: var(--transition);
+      font-family: inherit;
+    }
+    .card-back:hover { background: var(--surface-hover); color: var(--text); }
+
+    /* 產線卡 */
+    .line-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      flex: 1;
+    }
+    .line-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 20px 16px;
+      cursor: pointer;
+      transition: var(--transition);
+      box-shadow: var(--shadow-sm);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-height: 160px;
+    }
+    .line-card:hover {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(79,70,229,0.1), var(--shadow-md);
+      transform: translateY(-2px);
+    }
+    .line-card-num {
+      font-size: 40px;
+      font-weight: 800;
+      color: var(--primary);
+      letter-spacing: -1px;
+      line-height: 1;
+    }
+    .line-card-label {
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .line-card-count {
+      font-size: 14px;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+
+    /* 設備卡 */
+    .device-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 14px;
+      flex: 1;
+      align-content: start;
+    }
+    .device-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 20px 18px;
+      cursor: pointer;
+      transition: var(--transition);
+      box-shadow: var(--shadow-sm);
+      min-height: 90px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+    .device-card:hover {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(79,70,229,0.1);
+      transform: translateY(-1px);
+    }
+    .device-card-model {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--text);
+      font-family: "SF Mono", Menlo, ui-monospace, monospace;
+      margin-bottom: 6px;
+    }
+    .device-card-cat {
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    /* RWD 桌面 */
+    @media (min-width: 768px) {
+      .card-view { padding: 48px 40px; }
+      .line-grid { gap: 28px; }
+      .line-card { padding: 48px 40px; gap: 12px; min-height: 260px; }
+      .line-card-num { font-size: 64px; }
+      .line-card-label { font-size: 22px; }
+      .line-card-count { font-size: 15px; }
+      .device-grid {
+        grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+        gap: 16px;
+      }
+      .device-card { padding: 24px 22px; min-height: 110px; }
+      .device-card-model { font-size: 18px; }
+      .device-card-cat { font-size: 14px; }
+    }
+
+    /* 結果區 */
+    .result-meta {
+      padding: 8px 16px 0;
+      font-size: 12px;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .result-crumb {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .result-crumb button {
+      background: none;
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-sm);
+      color: var(--muted);
+      font-size: 12px;
+      padding: 2px 10px;
+      cursor: pointer;
+      transition: var(--transition);
+      font-family: inherit;
+    }
+    .result-crumb button:hover { background: var(--surface-hover); color: var(--text); }
+
+    /* 表格 */
     thead th {
-      background: #e8e1db;
-      color: #8a7d74;
-      font-weight: 500;
-      font-size: 12px;
-      letter-spacing: 0.04em;
+      font-size: 11px;
+      letter-spacing: 0.06em;
       text-transform: uppercase;
-      border-bottom: 1px solid #d4cdc6;
+      padding: 10px 16px;
+      background: #1c2333;
+      color: #d1d5db;
     }
-    tbody tr { border-bottom: 1px solid #ddd6cf; }
-    tbody tr:hover { background: #ede7e1; }
-    tbody td { color: #3d3028; }
-    .code { color: #2c2118 !important; font-weight: 600; }
-    tbody td button {
-      background: #e0d9d2;
-      color: #6b5e55;
-      border: 1px solid #cdc6be;
-      border-radius: 6px;
+    thead tr {
+      box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+    }
+    .code { font-weight: 700; font-size: 14px; display: block; }
+    .code-device {
+      display: block;
       font-size: 12px;
-      padding: 5px 12px;
+      color: var(--muted);
+      font-family: "SF Mono", Menlo, ui-monospace, monospace;
+      margin-top: 2px;
     }
-    tbody td button:hover { background: #d4cdc6; color: #2c2118; }
-    .modal { background: rgba(44,33,24,0.4); }
-    .modal-body { background: #f2ede8; border-top: 1px solid #d4cdc6; }
-    .modal-body h2 { color: #2c2118; }
-    .modal-body dt { color: #8a7d74; }
-    .modal-body dd { color: #3d3028; }
-    .modal-body > button { background: #e0d9d2; color: #6b5e55; border: 1px solid #cdc6be; }
-    .modal-body > button:hover { background: #d4cdc6; color: #2c2118; }
+    tbody td button { font-size: 12px; padding: 5px 12px; }
+
+    /* Modal */
+    .modal-body h2 { font-size: 16px; line-height: 1.4; }
+    .modal-body dd { white-space: pre-wrap; line-height: 1.6; }
   </style>
 </head>
 <body>
@@ -78,49 +300,94 @@
     <header class="topbar">
       <h1>設備警報代碼查詢</h1>
       <nav>
-        <a href="/">← 入口</a>
         <a href="/admin">後台管理</a>
         <a href="/logout">登出</a>
       </nav>
     </header>
 
+    <!-- 搜尋欄（永遠顯示） -->
     <section class="filters">
-      <input v-model="q" @input="search" placeholder="輸入代碼 / 關鍵字 / 描述" class="q" inputmode="search" autocomplete="off" />
-      <select v-model="line" @change="onLineChange">
-        <option value="">全部產線</option>
-        <option value="2.1">2.1 線</option>
-        <option value="2.2">2.2 線</option>
-      </select>
-      <select v-model="device" @change="search">
-        <option value="">全部機種</option>
-        <option v-for="d in filteredDevices" :key="d.id" :value="d.model">{{ d.model }}（{{ d.category }}）</option>
-      </select>
-      <select v-model="severity" @change="search">
+      <input v-model="q" @input="onSearch" @keyup.enter="fetchAlarms" placeholder="輸入代碼 / 關鍵字 / 描述" class="q" inputmode="search" autocomplete="off" />
+      <div class="custom-select" v-click-outside="() => dropdownOpen = false">
+        <button type="button" class="custom-select-btn" @click="dropdownOpen = !dropdownOpen">
+          <span>{{ filterDevice || '全部機種' }}</span>
+          <span class="custom-select-arrow">▼</span>
+        </button>
+        <div class="custom-select-dropdown" v-if="dropdownOpen">
+          <div class="custom-select-option all-opt" :class="{ selected: !filterDevice }" @click="setDevice('')">全部機種</div>
+          <template v-for="l in lines" :key="l.id">
+            <div class="custom-select-group-label">{{ l.id }} 線</div>
+            <div class="custom-select-option" v-for="d in l.devices" :key="d.model"
+                 :class="{ selected: filterDevice === d.model }"
+                 @click="setDevice(d.model)">
+              {{ d.model }}（{{ d.category }}）
+            </div>
+          </template>
+        </div>
+      </div>
+      <select v-model="severity" @change="onFilterChange">
         <option value="">全部嚴重度</option>
         <option>嚴重</option><option>警告</option><option>資訊</option>
       </select>
+      <button class="search-btn" @click="fetchAlarms">搜尋</button>
     </section>
 
-    <section class="results">
-      <p v-if="loading">載入中…</p>
-      <p v-else-if="!items.length" class="empty">無符合資料</p>
-      <table v-else>
-        <thead>
-          <tr>
-            <th>代碼</th><th>機種</th><th>嚴重度</th><th>描述</th><th></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="a in items" :key="a.code">
-            <td data-label="代碼" class="code">{{ a.code }}</td>
-            <td data-label="機種">{{ a.device_model || '—' }}</td>
-            <td data-label="嚴重度"><span class="tag" :class="sevClass(a.severity)">{{ a.severity || '—' }}</span></td>
-            <td data-label="描述">{{ a.description }}</td>
-            <td class="actions-cell"><button @click="selected = a" aria-label="查看詳情">詳情</button></td>
-          </tr>
-        </tbody>
-      </table>
-    </section>
+    <!-- 產線卡 -->
+    <div class="card-view" v-if="view === 'lines'">
+      <div class="card-view-title">選擇產線</div>
+      <div class="line-grid">
+        <div class="line-card" v-for="l in lines" :key="l.id" @click="selectLine(l)">
+          <div class="line-card-num">{{ l.id }}</div>
+          <div class="line-card-label">{{ l.id }} 線</div>
+          <div class="line-card-count">{{ l.devices.length }} 台設備</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 設備卡 -->
+    <div class="card-view" v-else-if="view === 'devices'">
+      <div class="card-view-title">
+        <button class="card-back" @click="selectedLine = null">← 返回產線</button>
+        {{ selectedLine.id }} 線 · {{ selectedLine.devices.length }} 台設備
+      </div>
+      <div class="device-grid">
+        <div class="device-card" v-for="d in selectedLine.devices" :key="d.model" @click="selectDevice(d)">
+          <div class="device-card-model">{{ d.model }}</div>
+          <div class="device-card-cat">{{ d.category }}</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 結果 -->
+    <template v-else>
+      <div class="result-meta">
+        <div class="result-crumb">
+          <button @click="goBack">← 返回</button>
+          <span v-if="selectedDevice">{{ selectedLine && selectedLine.id }} 線 · {{ selectedDevice.model }}</span>
+          <span v-else>搜尋結果</span>
+        </div>
+        <span v-if="!loading && items.length">共 {{ items.length }} 筆</span>
+      </div>
+
+      <section class="results">
+        <div v-if="loading" class="loading-overlay"><div class="spinner"></div></div>
+        <p v-else-if="!items.length" class="empty">無符合資料</p>
+        <table v-else>
+          <thead>
+            <tr><th>代碼</th><th>機種</th><th>嚴重度</th><th>描述</th><th></th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="a in items" :key="a.device_model + a.code">
+              <td data-label="代碼"><span class="code">{{ a.code }}</span></td>
+              <td data-label="機種">{{ a.device_model || '—' }}</td>
+              <td data-label="嚴重度"><span class="tag" :class="sevClass(a.severity)">{{ a.severity || '—' }}</span></td>
+              <td data-label="描述">{{ a.description }}</td>
+              <td class="actions-cell"><button @click="selected = a" aria-label="查看詳情">詳情</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+    </template>
 
     <div v-if="selected" class="modal" @click.self="selected = null" role="dialog" aria-modal="true">
       <div class="modal-body">
@@ -141,46 +408,82 @@
     const { createApp } = Vue;
     createApp({
       data() {
-        return { q: '', line: '', device: '', severity: '', items: [], devices: [], selected: null, loading: false, timer: null };
+        return {
+          q: '', severity: '', filterDevice: '', dropdownOpen: false,
+          devices: [],
+          selectedLine: null,
+          selectedDevice: null,
+          items: [], selected: null,
+          loading: false, timer: null,
+        };
       },
       computed: {
-        filteredDevices() {
-          if (!this.line) return this.devices;
-          return this.devices.filter(d => d.line === this.line);
-        }
+        lines() {
+          const map = {};
+          for (const d of this.devices) {
+            const lid = d.line || '其他';
+            if (!map[lid]) map[lid] = { id: lid, devices: [] };
+            map[lid].devices.push(d);
+          }
+          return Object.values(map).sort((a, b) => a.id.localeCompare(b.id));
+        },
+        view() {
+          if (this.q || this.severity || this.filterDevice || this.selectedDevice) return 'results';
+          if (this.selectedLine) return 'devices';
+          return 'lines';
+        },
       },
       mounted() {
-        fetch('/api/devices').then(r => r.json()).then(d => { this.devices = d; this.fetchAlarms(); });
+        fetch('/api/devices').then(r => r.json()).then(d => { this.devices = d; });
       },
       methods: {
-        search() {
-          clearTimeout(this.timer);
-          this.timer = setTimeout(() => this.fetchAlarms(), 200);
+        selectLine(l) {
+          this.selectedLine = l;
+          this.selectedDevice = null;
         },
-        onLineChange() {
-          if (this.device && !this.filteredDevices.find(d => d.model === this.device)) {
-            this.device = '';
-          }
+        selectDevice(d) {
+          this.items = [];
+          this.loading = true;
+          this.selectedDevice = d;
           this.fetchAlarms();
+        },
+        onSearch() {
+          this.selectedDevice = null;
+          clearTimeout(this.timer);
+          this.timer = setTimeout(() => this.fetchAlarms(), 400);
+        },
+        onFilterChange() {},
+        setDevice(model) {
+          this.filterDevice = model;
+          this.dropdownOpen = false;
+          this.fetchAlarms();
+        },
+        goBack() {
+          this.q = ''; this.severity = ''; this.filterDevice = '';
+          this.selectedDevice = null;
+          this.items = [];
         },
         async fetchAlarms() {
           this.loading = true;
           const p = new URLSearchParams();
           if (this.q) p.set('q', this.q);
-          if (this.device) p.set('device', this.device);
+          const dev = this.filterDevice || (this.selectedDevice && this.selectedDevice.model);
+          if (dev) p.set('device', dev);
           if (this.severity) p.set('severity', this.severity);
           const r = await fetch('/api/alarms?' + p.toString());
           if (r.status === 401) { location.href = '/login'; return; }
           let data = await r.json();
-          if (this.line && !this.device) {
-            const lineModels = new Set(this.filteredDevices.map(d => d.model));
-            data = data.filter(a => lineModels.has(a.device_model));
-          }
           this.items = data;
           this.loading = false;
         },
         sevClass(s) { return { '嚴重': 'sev-high', '警告': 'sev-mid', '資訊': 'sev-low' }[s] || ''; }
       }
+    }).directive('click-outside', {
+      mounted(el, binding) {
+        el._clickOutside = e => { if (!el.contains(e.target)) binding.value(e); };
+        document.addEventListener('click', el._clickOutside);
+      },
+      unmounted(el) { document.removeEventListener('click', el._clickOutside); }
     }).mount('#app');
 
     if ('serviceWorker' in navigator) {

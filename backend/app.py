@@ -106,9 +106,8 @@ def create_app() -> Flask:
 
     @app.get("/admin/logout")
     def admin_logout():
-        session.clear()
-        session["auth"] = True
-        return redirect("/")
+        session.pop("admin", None)
+        return redirect("/app")
 
     # ── Data normalize ──────────────────────────────────────────────
 
@@ -152,11 +151,11 @@ def create_app() -> Flask:
 
         return jsonify([a for a in items if match(a)])
 
-    @app.get("/api/alarms/<code>")
+    @app.get("/api/alarms/<device_model>/<code>")
     @login_required
-    def get_alarm(code: str):
+    def get_alarm(device_model: str, code: str):
         for a in alarms_store.load():
-            if a["code"] == code:
+            if a["code"] == code and a.get("device_model") == device_model:
                 return jsonify(a)
         abort(404, "找不到此警報代碼")
 
@@ -182,21 +181,22 @@ def create_app() -> Flask:
     def create_alarm():
         body = normalize(request.get_json(silent=True) or {})
         items = alarms_store.load()
-        if any(a["code"] == body["code"] for a in items):
+        if any(a["code"] == body["code"] and a.get("device_model") == body.get("device_model") for a in items):
             abort(409, "代碼已存在")
         items.append(body)
         alarms_store.save(items)
         audit_logger.log("CREATE", new_data=body)
         return jsonify(body), 201
 
-    @app.put("/api/alarms/<code>")
+    @app.put("/api/alarms/<device_model>/<code>")
     @admin_required
-    def update_alarm(code: str):
+    def update_alarm(device_model: str, code: str):
         body = normalize(request.get_json(silent=True) or {}, require_code=False)
         body["code"] = code
+        body["device_model"] = device_model
         items = alarms_store.load()
         for i, a in enumerate(items):
-            if a["code"] == code:
+            if a["code"] == code and a.get("device_model") == device_model:
                 old = a
                 items[i] = body
                 alarms_store.save(items)
@@ -204,12 +204,12 @@ def create_app() -> Flask:
                 return jsonify(body)
         abort(404, "找不到此警報代碼")
 
-    @app.delete("/api/alarms/<code>")
+    @app.delete("/api/alarms/<device_model>/<code>")
     @admin_required
-    def delete_alarm(code: str):
+    def delete_alarm(device_model: str, code: str):
         items = alarms_store.load()
-        old = next((a for a in items if a["code"] == code), None)
-        new = [a for a in items if a["code"] != code]
+        old = next((a for a in items if a["code"] == code and a.get("device_model") == device_model), None)
+        new = [a for a in items if not (a["code"] == code and a.get("device_model") == device_model)]
         if len(new) == len(items):
             abort(404, "找不到此警報代碼")
         alarms_store.save(new)

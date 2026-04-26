@@ -5,32 +5,46 @@
 *, *::before, *::after { box-sizing: border-box; }
 
 :root {
-  --bg: #f5f6f8;
+  --bg: #f8fafc;
   --surface: #ffffff;
-  --text: #222;
-  --muted: #6b7280;
-  --border: #e5e7eb;
-  --border-strong: #d1d5db;
-  --primary: #2563eb;
+  --surface-hover: #f1f5f9;
+  --text: #0f172a;
+  --text-secondary: #334155;
+  --muted: #64748b;
+  --border: #e2e8f0;
+  --border-strong: #cbd5e1;
+  --primary: #4f46e5;
+  --primary-hover: #4338ca;
   --primary-ink: #ffffff;
-  --nav: #1f2937;
-  --nav-link: #93c5fd;
-  --danger: #b91c1c;
+  --nav: #0f172a;
+  --nav-link: #a5b4fc;
+  --danger: #e11d48;
   --danger-soft-bg: #fee2e2;
+  --warn: #d97706;
   --warn-bg: #fef3c7;
-  --warn-ink: #92400e;
-  --info-bg: #dbeafe;
-  --info-ink: #1e40af;
+  --warn-ink: #d97706;
+  --success: #10b981;
+  --info: #0ea5e9;
+  --info-bg: #e0f2fe;
+  --info-ink: #0369a1;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
   --radius: 8px;
+  --shadow-sm: 0 1px 3px rgba(15,23,42,0.05);
+  --shadow-md: 0 4px 12px rgba(15,23,42,0.08);
+  --transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   --tap-min: 44px;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #0f172a;
-    --surface: #1e293b;
-    --text: #e5e7eb;
-    --muted: #9ca3af;
+    --surface: #1e2937;
+    --surface-hover: #334155;
+    --text: #f8fafc;
+    --text-secondary: #e2e8f0;
+    --muted: #94a3b8;
     --border: #334155;
     --border-strong: #475569;
   }
@@ -57,7 +71,7 @@ html, body {
   gap: 12px;
   position: sticky;
   top: 0;
-  z-index: 10;
+  z-index: 20;
   padding-top: max(12px, env(safe-area-inset-top));
   padding-left: max(16px, env(safe-area-inset-left));
   padding-right: max(16px, env(safe-area-inset-right));
@@ -69,10 +83,11 @@ html, body {
   text-decoration: none;
   font-size: 14px;
   padding: 8px 10px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   min-height: var(--tap-min);
   display: inline-flex;
   align-items: center;
+  transition: var(--transition);
 }
 .topbar a:hover, .topbar a:focus-visible {
   background: rgba(255,255,255,.08);
@@ -84,10 +99,11 @@ html, body {
   color: var(--nav-link);
   font-size: 14px;
   padding: 8px 10px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   min-height: var(--tap-min);
   cursor: pointer;
   font-family: inherit;
+  transition: var(--transition);
 }
 .topbar .nav-btn:hover, .topbar .nav-btn:focus-visible {
   background: rgba(255,255,255,.08);
@@ -105,7 +121,7 @@ html, body {
   height: auto;
   background: #fff;
   padding: 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--border);
 }
 .qr-modal .qr-url {
@@ -123,26 +139,30 @@ html, body {
 
 /* ---------- Filters (front page) ---------- */
 .filters {
+  position: sticky;
+  top: 56px;
+  z-index: 10;
   padding: 12px 16px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 .filters input, .filters select {
-  width: 100%;
-  padding: 12px 12px;
-  font-size: 16px; /* prevents iOS zoom on focus */
+  flex: 1;
+  min-width: 180px;
+  padding: 12px 14px;
+  font-size: 16px;
   border: 1px solid var(--border-strong);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--surface);
   color: var(--text);
   min-height: var(--tap-min);
 }
 .filters input:focus, .filters select:focus {
   outline: 2px solid var(--primary);
-  outline-offset: 1px;
+  outline-offset: 2px;
 }
 
 /* ---------- Results ---------- */
@@ -152,7 +172,7 @@ html, body {
   text-align: center;
   padding: 32px;
   background: var(--surface);
-  border-radius: var(--radius);
+  border-radius: var(--radius-md);
 }
 
 /* Mobile = card list; table structure kept in DOM */
@@ -162,16 +182,21 @@ html, body {
   background: transparent;
 }
 .results thead { display: none; }
-.results tbody { display: grid; gap: 8px; }
+.results tbody { display: grid; gap: 10px; }
 .results tr {
   display: grid;
   grid-template-columns: auto 1fr auto;
   gap: 8px 12px;
   background: var(--surface);
-  border-radius: var(--radius);
-  padding: 12px;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  box-shadow: var(--shadow-sm);
   align-items: center;
+  transition: var(--transition);
+}
+.results tr:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
 }
 .results td {
   padding: 0;
@@ -209,24 +234,25 @@ html, body {
   border: 1px solid var(--border-strong);
   background: var(--surface);
   color: var(--text);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   min-height: var(--tap-min);
+  transition: var(--transition);
 }
-.results button:hover, .results button:focus-visible { background: var(--bg); }
+.results button:hover, .results button:focus-visible { background: var(--surface-hover); }
 
 /* ---------- Severity tag ---------- */
 .tag {
   display: inline-block;
-  padding: 3px 10px;
-  border-radius: 10px;
+  padding: 4px 10px;
+  border-radius: 9999px;
   font-size: 12px;
   font-weight: 600;
   white-space: nowrap;
 }
-.sev-high { background: var(--danger-soft-bg); color: var(--danger); }
-.sev-mid  { background: var(--warn-bg); color: var(--warn-ink); }
-.sev-low  { background: var(--info-bg); color: var(--info-ink); }
+.sev-high { background: #fee2e2; color: var(--danger);  border: 1px solid #fecdd3; }
+.sev-mid  { background: #fef3c7; color: var(--warn);    border: 1px solid #fde68a; }
+.sev-low  { background: #d1fae5; color: var(--success); border: 1px solid #a7f3d0; }
 
 /* ---------- Modal ---------- */
 .modal {
@@ -261,7 +287,7 @@ html, body {
   background: var(--nav);
   color: #fff;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   font-size: 15px;
   width: 100%;
@@ -302,7 +328,7 @@ html, body {
 }
 .list-pane {
   background: var(--surface);
-  border-radius: var(--radius);
+  border-radius: var(--radius-md);
   padding: 12px;
   display: flex;
   flex-direction: column;
@@ -319,15 +345,21 @@ html, body {
 }
 .codelist li {
   padding: 12px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
   cursor: pointer;
   display: flex;
   flex-direction: column;
   gap: 4px;
   min-height: var(--tap-min);
+  transition: var(--transition);
 }
-.codelist li:hover { background: var(--bg); }
-.codelist li.active { background: #e0e7ff; }
+.codelist li:hover { background: var(--surface-hover); }
+.codelist li.active {
+  background: var(--primary);
+  color: #fff;
+}
+.codelist li.active .desc { color: rgba(255,255,255,0.75); }
 .codelist .code {
   font-family: "SF Mono", Menlo, ui-monospace, monospace;
   font-weight: 700;
@@ -337,7 +369,7 @@ html, body {
 
 .form-pane {
   background: var(--surface);
-  border-radius: var(--radius);
+  border-radius: var(--radius-md);
   padding: 16px;
 }
 .form-pane h2 { margin-top: 0; font-size: 17px; }
@@ -352,13 +384,18 @@ html, body {
   width: 100%;
   padding: 12px;
   margin-top: 6px;
-  font-size: 16px; /* anti-zoom on iOS */
+  font-size: 16px;
   border: 1px solid var(--border-strong);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   font-family: inherit;
   background: var(--surface);
   color: var(--text);
   min-height: var(--tap-min);
+  transition: border-color 0.15s;
+}
+.form-pane input:focus, .form-pane select:focus, .form-pane textarea:focus {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
 }
 .form-pane textarea { min-height: 80px; resize: vertical; }
 .form-pane .actions {
@@ -372,17 +409,20 @@ html, body {
   border: 1px solid var(--border-strong);
   background: var(--surface);
   color: var(--text);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   font-size: 15px;
   min-height: var(--tap-min);
+  transition: var(--transition);
 }
+.form-pane button:hover { background: var(--surface-hover); }
 .form-pane button.primary {
   background: var(--primary);
   color: var(--primary-ink);
   border-color: var(--primary);
   grid-column: 1 / -1;
 }
+.form-pane button.primary:hover { filter: brightness(1.08); background: var(--primary); }
 .form-pane button.danger {
   background: var(--surface);
   color: var(--danger);
@@ -413,23 +453,66 @@ html, body {
   gap: 4px;
 }
 
-/* ---------- Primary button (admin) ---------- */
+/* ---------- Loading overlay ---------- */
+.loading-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 999;
+}
+.spinner {
+  width: 44px;
+  height: 44px;
+  border: 4px solid rgba(255,255,255,0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.75s linear infinite;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ---------- List search ---------- */
+.list-search {
+  display: block;
+  width: 100%;
+  padding: 10px 12px;
+  font-size: 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  min-height: var(--tap-min);
+  transition: var(--transition);
+}
+.list-search:focus {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
+/* ---------- Primary button (admin list pane) ---------- */
 .list-pane button.primary {
   background: var(--primary);
   color: var(--primary-ink);
   border: 1px solid var(--primary);
   padding: 12px 16px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   font-size: 15px;
   min-height: var(--tap-min);
   width: 100%;
+  transition: var(--transition);
 }
+.list-pane button.primary:hover { filter: brightness(1.08); }
 
 /* ---------- QR section (admin) ---------- */
 .qr-section {
   background: var(--surface);
-  border-radius: var(--radius);
+  border-radius: var(--radius-md);
   padding: 16px;
   display: grid;
   gap: 12px;
@@ -450,11 +533,13 @@ html, body {
   border: 1px solid var(--border-strong);
   background: var(--surface);
   color: var(--text);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   font-size: 14px;
   min-height: var(--tap-min);
+  transition: var(--transition);
 }
+.qr-section .qr-toggle:hover { background: var(--surface-hover); }
 .qr-panel {
   display: grid;
   gap: 12px;
@@ -466,7 +551,7 @@ html, body {
   height: auto;
   background: #fff;
   padding: 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--border);
 }
 .qr-panel .qr-url {
@@ -488,7 +573,7 @@ html, body {
   margin-top: 6px;
   font-size: 16px;
   border: 1px solid var(--border-strong);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--text);
   min-height: var(--tap-min);
@@ -498,15 +583,17 @@ html, body {
   background: var(--primary);
   color: var(--primary-ink);
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   font-size: 15px;
   min-height: var(--tap-min);
   width: 100%;
+  transition: var(--transition);
 }
+.qr-panel .download:hover { filter: brightness(1.08); }
 
 /* ============================================================
- * Login page — mobile-first
+ * Login page
  * ============================================================ */
 
 .login-icon {
@@ -519,7 +606,6 @@ html, body {
   border-radius: 16px;
 }
 
-/* Full-height layout */
 .login-page {
   min-height: 100vh;
   display: flex;
@@ -532,23 +618,22 @@ html, body {
   padding: max(24px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
 }
 
-/* Card */
 .login-card {
   width: 100%;
-  max-width: 400px;
+  max-width: 420px;
   background: var(--surface);
-  border-radius: 14px;
-  padding: 28px 20px;
-  box-shadow: 0 2px 16px rgba(0,0,0,0.08);
+  border-radius: var(--radius-lg);
+  padding: 36px 28px;
+  box-shadow: var(--shadow-md);
   display: flex;
   flex-direction: column;
   align-items: center;
+  text-align: center;
 }
 .login-card h1 {
-  margin: 0 0 20px;
-  font-size: 20px;
+  margin: 0 0 8px;
+  font-size: 22px;
   font-weight: 700;
-  text-align: center;
 }
 .login-body {
   width: 100%;
@@ -557,9 +642,7 @@ html, body {
   align-items: center;
   gap: 20px;
 }
-.login-body .login-form {
-  flex: 1;
-}
+.login-body .login-form { flex: 1; }
 .login-body .login-qr {
   flex-shrink: 0;
   margin-top: 0;
@@ -567,15 +650,14 @@ html, body {
   border-top: none;
 }
 .login-sub {
-  margin: 0 0 20px;
+  margin: 0 0 24px;
   font-size: 14px;
   color: var(--muted);
 }
 
-/* Form */
 .login-form {
   display: grid;
-  gap: 12px;
+  gap: 14px;
 }
 .login-form label {
   font-size: 13px;
@@ -589,11 +671,12 @@ html, body {
   margin-top: 6px;
   font-size: 16px;
   border: 1px solid var(--border-strong);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--surface);
   color: var(--text);
   min-height: var(--tap-min);
   font-family: inherit;
+  transition: border-color 0.15s;
 }
 .login-form input[type=password]:focus {
   outline: 2px solid var(--primary);
@@ -605,12 +688,13 @@ html, body {
   background: var(--primary);
   color: var(--primary-ink);
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   font-size: 15px;
   font-weight: 600;
   cursor: pointer;
   min-height: var(--tap-min);
   font-family: inherit;
+  transition: var(--transition);
 }
 .login-form button[type=submit]:hover,
 .login-form button[type=submit]:focus-visible {
@@ -621,7 +705,7 @@ html, body {
   padding: 10px 12px;
   background: var(--danger-soft-bg);
   color: var(--danger);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   font-size: 13px;
   text-align: center;
 }
@@ -649,29 +733,26 @@ html, body {
   color: var(--muted);
   margin: 0;
 }
-.login-qr canvas {
-  border-radius: 8px;
-}
+.login-qr canvas { border-radius: var(--radius-md); }
 
 /* ============================================================
  * Tablet / desktop breakpoint
  * ============================================================ */
 @media (min-width: 768px) {
-  .topbar { padding: 14px 24px; }
+  .topbar { padding: 14px 28px; }
   .topbar h1 { font-size: 18px; }
 
   .filters {
-    padding: 16px 24px;
-    grid-template-columns: minmax(200px, 1fr) 140px 180px 160px;
+    top: 58px;
+    padding: 14px 28px;
   }
-  .filters input, .filters select { font-size: 14px; }
 
-  .results { padding: 16px 24px; }
+  .results { padding: 16px 28px; }
   .results table {
     background: var(--surface);
-    border-radius: var(--radius);
+    border-radius: var(--radius-md);
     overflow: hidden;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+    box-shadow: var(--shadow-sm);
   }
   .results thead { display: table-header-group; }
   .results tbody { display: table-row-group; gap: 0; }
@@ -681,11 +762,13 @@ html, body {
     border-radius: 0;
     padding: 0;
     box-shadow: none;
+    transform: none !important;
   }
+  .results tr:hover { background: var(--surface-hover); transform: none !important; box-shadow: none; }
   .results td, .results th {
     display: table-cell;
-    padding: 10px 12px;
-    border-bottom: 1px solid #f1f3f5;
+    padding: 11px 16px;
+    border-bottom: 1px solid var(--border);
     font-size: 14px;
     vertical-align: middle;
   }
@@ -708,16 +791,16 @@ html, body {
 
   .modal { align-items: center; padding: 24px; }
   .modal-body {
-    border-radius: 10px;
+    border-radius: var(--radius-lg);
     width: min(560px, 90vw);
     max-height: 85vh;
   }
   .modal-body > button { width: auto; }
 
   .admin-grid {
-    grid-template-columns: 320px 1fr;
+    grid-template-columns: 340px 1fr;
     gap: 16px;
-    padding: 16px 24px;
+    padding: 20px 28px;
     min-height: calc(100vh - 56px);
   }
   .list-pane { max-height: calc(100vh - 88px); }
@@ -732,15 +815,12 @@ html, body {
 
   .qr-section { grid-column: 1 / -1; }
 
-  /* Login — desktop */
-  .login-card { padding: 40px 36px; box-shadow: 0 4px 32px rgba(0,0,0,0.10); }
-  .login-card h1 { font-size: 22px; }
+  .login-card { padding: 48px 40px; box-shadow: 0 4px 32px rgba(0,0,0,0.10); }
   .login-icon img { width: 72px; height: 72px; }
 }
 
 /* ============================================================
  * Mobile admin — when a record is being edited, hide the list.
- * Requires :has() support (Chrome 105+, Safari 15.4+, Firefox 121+).
  * ============================================================ */
 @media (max-width: 767px) {
   .admin-grid:has(.form-pane:not(.empty-pane)) .list-pane { display: none; }

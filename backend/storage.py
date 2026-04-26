@@ -68,7 +68,16 @@ class SupabaseStore:
             return json.loads(raw) if raw.strip() else []
 
     def load(self) -> list:
-        return self._req("GET", f"{self.table}?select=*&order={self.pk}")
+        page_size = 1000
+        result = []
+        offset = 0
+        while True:
+            batch = self._req("GET", f"{self.table}?select=*&order={self.pk}&limit={page_size}&offset={offset}")
+            result.extend(batch)
+            if len(batch) < page_size:
+                break
+            offset += page_size
+        return result
 
     def save(self, items: list) -> None:
         # Step 1: upsert all items in the new list — never deletes, so safe if network drops

@@ -17,75 +17,93 @@
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <link rel="stylesheet" href="style.css" />
   <style>
-    :root {
-      --bg: #e8e1db;
-      --surface: #f2ede8;
-      --text: #2c2118;
-      --muted: #8a7d74;
-      --border: #d4cdc6;
-      --border-strong: #bfb8b0;
-      --nav: #987d84;
-      --nav-link: #f0e8ea;
-      --primary: #2c2118;
-      --primary-ink: #f2ede8;
+    .admin-toolbar {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+      padding: 10px 20px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      position: sticky; top: 56px; z-index: 10;
     }
-    .topbar { border-bottom: 1px solid #7d6870; }
-    .topbar h1 { font-weight: 500; color: #f2ede8; }
-    .topbar a { color: #f0e8ea; font-size: 13px; }
-    .topbar a:hover { background: rgba(255,255,255,.12); color: #fff; }
-    .admin-banner {
-      background: #947f7a;
-      color: #f2ede8;
-      font-weight: 700;
-      font-size: 14px;
-      letter-spacing: 0.03em;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.18);
+    .admin-table-wrap { padding: 20px; overflow-x: auto; }
+    .admin-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 14px; }
+    .admin-table thead th {
+      background: #1c2333; color: #d1d5db;
+      font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+      padding: 10px 14px;
     }
-    .admin-banner-dot { background: #f2ede8; }
-    .list-pane { background: #f2ede8; }
-    .codelist li { color: #2c2118; }
-    .codelist li:hover { background: #e8e1db; }
-    .codelist li.active { background: #ddd4cc; }
-    .form-pane { background: #f2ede8; }
-    .form-pane label { color: #8a7d74; }
-    .form-pane input, .form-pane select, .form-pane textarea {
-      background: #e8e1db;
-      border: 1px solid #d4cdc6;
-      color: #2c2118;
+    .admin-table thead th:first-child { border-radius: 8px 0 0 0; }
+    .admin-table thead th:last-child  { border-radius: 0 8px 0 0; }
+    .admin-table tbody tr { border-bottom: 1px solid var(--border); transition: background 0.12s; cursor: pointer; }
+    .admin-table tbody tr:hover { background: var(--surface-hover); }
+    .admin-table td { padding: 10px 14px; vertical-align: middle; }
+    .td-code { font-family: "SF Mono", Menlo, ui-monospace, monospace; font-weight: 700; white-space: nowrap; }
+    .td-model { color: var(--muted); font-size: 13px; white-space: nowrap; }
+    .td-desc { max-width: 360px; }
+    .td-act { white-space: nowrap; text-align: right; }
+    .empty-admin { text-align: center; color: var(--muted); padding: 60px 0; font-size: 15px; }
+    /* Modal overlay — Vue controlled, Bootstrap styled */
+    .vue-modal-backdrop {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.5);
+      z-index: 1050;
+      display: flex; align-items: center; justify-content: center;
+      padding: 16px;
     }
-    .form-pane input:focus, .form-pane select:focus, .form-pane textarea:focus {
-      border-color: #a89e97;
-      outline: none;
+    .vue-modal {
+      background: #fff;
+      border-radius: 12px;
+      width: 100%; max-width: 500px;
+      max-height: 90vh;
+      display: flex; flex-direction: column;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+      overflow: hidden;
     }
-    .empty-pane { color: #8a7d74; }
-    .history-pane h2 { font-size: 16px; font-weight: 600; margin-top: 16px; margin-bottom: 16px; color: #2c2118; }
+    .vue-modal-header {
+      background: #1c2333; color: #fff;
+      padding: 14px 20px;
+      display: flex; align-items: center; justify-content: space-between;
+      flex-shrink: 0;
+    }
+    .vue-modal-header h5 { margin: 0; font-size: 15px; font-weight: 600; }
+    .vue-modal-header .btn-close { filter: invert(1); opacity: 0.8; }
+    .vue-modal-header .btn-close:hover { opacity: 1; }
+    .vue-modal-body { padding: 20px; overflow-y: auto; flex: 1; }
+    .vue-modal-footer {
+      padding: 12px 20px;
+      border-top: 1px solid #dee2e6;
+      display: flex; justify-content: space-between; align-items: center;
+      flex-shrink: 0;
+    }
+    /* History */
+    .history-section { padding: 20px; }
+    .history-section h2 { font-size: 16px; font-weight: 600; margin-bottom: 16px; }
     .history-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
-    .history-item { padding: 10px 12px; background: #e8e1db; border-radius: 8px; font-size: 13px; }
-    .hist-main { display: flex; align-items: baseline; gap: 10px; }
+    .history-item { padding: 10px 12px; background: var(--surface-hover); border-radius: var(--radius-md); font-size: 13px; }
+    .hist-main { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
     .hist-badge { font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 4px; flex-shrink: 0; }
     .hist-CREATE { background: #d1fae5; color: #065f46; }
     .hist-UPDATE { background: #dbeafe; color: #1e40af; }
     .hist-DELETE { background: #fee2e2; color: #991b1b; }
-    .hist-code { font-weight: 600; color: #2c2118; flex-shrink: 0; }
-    .hist-desc { color: #6b5e55; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .hist-time { color: #a89e97; font-size: 11px; flex-shrink: 0; }
-    .hist-diff { list-style: none; padding: 0; margin: 8px 0 0 0; display: flex; flex-direction: column; gap: 4px; }
+    .hist-code { font-weight: 700; }
+    .hist-desc { color: var(--muted); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+    .hist-time { color: var(--muted); font-size: 11px; flex-shrink: 0; margin-left: auto; }
+    .hist-diff { list-style: none; padding: 0; margin: 6px 0 0 0; display: flex; flex-direction: column; gap: 3px; }
     .hist-diff li { display: flex; align-items: center; gap: 6px; font-size: 12px; }
-    .hist-field { color: #8a7d74; flex-shrink: 0; min-width: 48px; }
-    .hist-old { color: #991b1b; background: #fee2e2; padding: 1px 6px; border-radius: 3px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .hist-arrow { color: #a89e97; }
-    .hist-new { color: #065f46; background: #d1fae5; padding: 1px 6px; border-radius: 3px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .empty-history { color: #8a7d74; font-size: 14px; margin-top: 24px; }
+    .hist-field { color: var(--muted); flex-shrink: 0; min-width: 48px; }
+    .hist-old { color: #991b1b; background: #fee2e2; padding: 1px 6px; border-radius: 3px; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .hist-new { color: #065f46; background: #d1fae5; padding: 1px 6px; border-radius: 3px; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .hist-arrow { color: var(--muted); }
   </style>
 </head>
 <body>
   <div id="app">
+    <div v-if="loading" class="loading-overlay" aria-label="載入中">
+      <div class="spinner"></div>
+    </div>
+
     <header class="topbar">
       <h1>警報代碼 · 後台管理</h1>
-      <nav>
-        <a href="/">← 入口</a>
-        <a href="/admin/logout">登出後台</a>
-      </nav>
+      <nav><a href="/admin/logout">登出後台</a></nav>
     </header>
 
     <div class="admin-banner">
@@ -93,86 +111,121 @@
       管理員模式 — 可新增、編輯、刪除警報代碼
     </div>
 
-    <section class="admin-grid">
-      <aside class="list-pane">
-        <button class="primary" @click="newRecord">＋ 新增代碼</button>
-        <button @click="openHistory" style="margin-top:8px;width:100%">📋 歷史紀錄</button>
-        <ul class="codelist">
-          <li v-for="a in items" :key="a.code"
-              :class="{ active: editing && editing.code === a.code && !isNew }"
-              @click="edit(a)">
-            <span class="code">{{ a.code }}</span>
-            <span class="desc">{{ a.description }}</span>
-          </li>
-        </ul>
-      </aside>
+    <!-- Toolbar -->
+    <div class="admin-toolbar">
+      <button class="btn btn-dark btn-sm" @click="newRecord">＋ 新增代碼</button>
+      <button class="btn btn-outline-secondary btn-sm" @click="toggleHistory">
+        {{ showHistory ? '← 返回列表' : '📋 歷史紀錄' }}
+      </button>
+      <template v-if="!showHistory">
+        <select class="form-select form-select-sm" style="width:160px" v-model="listDevice">
+          <option value="">全部機種</option>
+          <option v-for="d in devices" :key="d.id" :value="d.model">{{ d.model }}</option>
+        </select>
+        <input class="form-control form-control-sm" style="width:200px" v-model="listSearch" placeholder="搜尋代碼或描述…" autocomplete="off" />
+        <span class="ms-auto" style="font-size:13px;color:var(--muted);">共 {{ filteredItems.length }} 筆</span>
+      </template>
+    </div>
 
-      <main class="form-pane history-pane" v-if="showHistory">
-        <button class="back-to-list" @click="showHistory = false" aria-label="返回">← 返回</button>
-        <h2>操作歷史紀錄</h2>
-        <p class="empty-history" v-if="!history.length">尚無紀錄</p>
-        <ul class="history-list" v-else>
-          <li class="history-item" v-for="h in history" :key="h.changed_at + h.code">
-            <div class="hist-main">
-              <span class="hist-badge" :class="'hist-' + h.operation">{{ {CREATE:'新增',UPDATE:'編輯',DELETE:'刪除'}[h.operation] }}</span>
-              <span class="hist-code">{{ h.code }}</span>
-              <span class="hist-desc">{{ (h.new_data || h.old_data || {}).description }}</span>
-              <span class="hist-time">{{ fmtTime(h.changed_at) }}</span>
-            </div>
-            <ul class="hist-diff" v-if="h.operation === 'UPDATE' && diffFields(h).length">
-              <li v-for="f in diffFields(h)" :key="f.label">
-                <span class="hist-field">{{ f.label }}</span>
-                <span class="hist-old">{{ f.old }}</span>
-                <span class="hist-arrow">→</span>
-                <span class="hist-new">{{ f.new }}</span>
-              </li>
-            </ul>
-          </li>
-        </ul>
-      </main>
+    <!-- Table -->
+    <div class="admin-table-wrap" v-if="!showHistory">
+      <p class="empty-admin" v-if="!loading && !filteredItems.length">無符合資料</p>
+      <table class="admin-table" v-else>
+        <thead>
+          <tr><th>代碼</th><th>機種</th><th>嚴重度</th><th>描述</th><th></th></tr>
+        </thead>
+        <tbody>
+          <tr v-for="a in filteredItems" :key="a.device_model + a.code" @click="edit(a)">
+            <td class="td-code">{{ a.code }}</td>
+            <td class="td-model">{{ a.device_model || '—' }}</td>
+            <td><span class="tag" :class="sevClass(a.severity)">{{ a.severity || '—' }}</span></td>
+            <td class="td-desc">{{ a.description }}</td>
+            <td class="td-act" @click.stop>
+              <button class="btn btn-outline-secondary btn-sm" @click="edit(a)">編輯</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
 
-      <main class="form-pane" v-else-if="editing">
-        <button class="back-to-list" @click="editing = null" aria-label="返回列表">← 返回列表</button>
-        <h2>{{ isNew ? '新增警報代碼' : '編輯 ' + editing.code }}</h2>
-        <label>代碼
-          <input v-model="editing.code" :disabled="!isNew" />
-        </label>
-        <label>機種
-          <select v-model="editing.device_model">
-            <option value="">（未指定）</option>
-            <option v-for="d in devices" :key="d.id" :value="d.model">{{ d.model }}（{{ d.line ? d.line + '線 · ' : '' }}{{ d.category }}）</option>
-          </select>
-        </label>
-        <label>嚴重度
-          <select v-model="editing.severity">
-            <option value="">（未指定）</option>
-            <option>嚴重</option><option>警告</option><option>資訊</option>
-          </select>
-        </label>
-        <label>描述
-          <input v-model="editing.description" />
-        </label>
-        <label>原因
-          <textarea v-model="editing.cause" rows="2"></textarea>
-        </label>
-        <label>解決方案
-          <textarea v-model="editing.solution" rows="3"></textarea>
-        </label>
-        <label>關鍵字（以逗號分隔）
-          <input v-model="keywordsText" />
-        </label>
-        <p v-if="error" class="error">{{ error }}</p>
-        <div class="actions">
-          <button class="primary" @click="save">儲存</button>
-          <button v-if="!isNew" class="danger" @click="remove">刪除</button>
-          <button @click="editing = null">取消</button>
+    <!-- History inline -->
+    <div class="history-section" v-if="showHistory">
+      <h2>操作歷史紀錄</h2>
+      <p style="color:var(--muted);font-size:14px;" v-if="!history.length">尚無紀錄</p>
+      <ul class="history-list" v-else>
+        <li class="history-item" v-for="h in history" :key="h.changed_at + h.code">
+          <div class="hist-main">
+            <span class="hist-badge" :class="'hist-' + h.operation">{{ {CREATE:'新增',UPDATE:'編輯',DELETE:'刪除'}[h.operation] }}</span>
+            <span class="hist-code">{{ h.code }}</span>
+            <span class="hist-desc">{{ (h.new_data || h.old_data || {}).description }}</span>
+            <span class="hist-time">{{ fmtTime(h.changed_at) }}</span>
+          </div>
+          <ul class="hist-diff" v-if="h.operation === 'UPDATE' && diffFields(h).length">
+            <li v-for="f in diffFields(h)" :key="f.label">
+              <span class="hist-field">{{ f.label }}</span>
+              <span class="hist-old">{{ f.old }}</span>
+              <span class="hist-arrow">→</span>
+              <span class="hist-new">{{ f.new }}</span>
+            </li>
+          </ul>
+        </li>
+      </ul>
+    </div>
+
+    <!-- Edit Modal — Vue v-if, Bootstrap CSS styling -->
+    <div class="vue-modal-backdrop" v-if="editing" @click.self="editing = null">
+      <div class="vue-modal">
+        <div class="vue-modal-header">
+          <h5>{{ isNew ? '新增警報代碼' : '編輯 ' + editing.code }}</h5>
+          <button type="button" class="btn-close" @click="editing = null"></button>
         </div>
-      </main>
-
-      <main class="form-pane empty-pane" v-else-if="!showHistory">
-        <p>選擇一筆代碼以編輯，或點擊「新增代碼」。</p>
-      </main>
-    </section>
+        <div class="vue-modal-body">
+          <div class="mb-3">
+            <label class="form-label fw-semibold">代碼</label>
+            <input class="form-control" v-model="editing.code" :disabled="!isNew" />
+          </div>
+          <div class="mb-3">
+            <label class="form-label fw-semibold">機種</label>
+            <select class="form-select" v-model="editing.device_model">
+              <option value="">（未指定）</option>
+              <option v-for="d in devices" :key="d.id" :value="d.model">{{ d.model }}（{{ d.line ? d.line + '線 · ' : '' }}{{ d.category }}）</option>
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label fw-semibold">嚴重度</label>
+            <select class="form-select" v-model="editing.severity">
+              <option value="">（未指定）</option>
+              <option>嚴重</option><option>警告</option><option>資訊</option>
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label fw-semibold">描述</label>
+            <input class="form-control" v-model="editing.description" />
+          </div>
+          <div class="mb-3">
+            <label class="form-label fw-semibold">原因</label>
+            <textarea class="form-control" v-model="editing.cause" rows="2"></textarea>
+          </div>
+          <div class="mb-3">
+            <label class="form-label fw-semibold">解決方案</label>
+            <textarea class="form-control" v-model="editing.solution" rows="3"></textarea>
+          </div>
+          <div class="mb-3">
+            <label class="form-label fw-semibold">關鍵字（以逗號分隔）</label>
+            <input class="form-control" v-model="keywordsText" />
+          </div>
+          <p v-if="error" class="text-danger small mb-0">{{ error }}</p>
+        </div>
+        <div class="vue-modal-footer">
+          <button v-if="!isNew" class="btn btn-danger btn-sm" @click="remove">刪除</button>
+          <div v-else></div>
+          <div class="d-flex gap-2">
+            <button class="btn btn-outline-secondary btn-sm" @click="editing = null">取消</button>
+            <button class="btn btn-dark btn-sm" @click="save">儲存</button>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div class="toast-container position-fixed top-0 end-0 p-3" style="z-index:9999">
@@ -192,37 +245,61 @@
           items: [], devices: [],
           editing: null, isNew: false, error: '',
           keywordsText: '',
-          showHistory: false, history: []
+          showHistory: false, history: [],
+          loading: false, listSearch: '', listDevice: ''
         };
       },
-      mounted() {
-        this.load();
+      computed: {
+        filteredItems() {
+          const q = this.listSearch.trim().toLowerCase();
+          return this.items.filter(a => {
+            if (this.listDevice && a.device_model !== this.listDevice) return false;
+            if (!q) return true;
+            return a.code.includes(q) ||
+              (a.description || '').toLowerCase().includes(q) ||
+              (a.device_model || '').toLowerCase().includes(q);
+          });
+        }
       },
+      mounted() { this.load(); },
       watch: {
         'editing.keywords'() {
           if (this.editing) this.keywordsText = (this.editing.keywords || []).join(', ');
         }
       },
       methods: {
+        sevClass(s) {
+          return { '嚴重': 'sev-high', '警告': 'sev-med', '資訊': 'sev-low' }[s] || '';
+        },
         async load() {
-          const [ra, rd] = await Promise.all([fetch('/api/alarms'), fetch('/api/devices')]);
-          if (ra.status === 401 || rd.status === 401) { location.href = '/login'; return; }
-          if (ra.status === 403 || rd.status === 403) { location.href = '/admin/login'; return; }
-          this.items = await ra.json();
-          this.devices = await rd.json();
+          this.loading = true;
+          try {
+            const [ra, rd] = await Promise.all([fetch('/api/alarms'), fetch('/api/devices')]);
+            if (ra.status === 401 || rd.status === 401) { location.href = '/login'; return; }
+            if (ra.status === 403 || rd.status === 403) { location.href = '/admin/login'; return; }
+            this.items = await ra.json();
+            this.devices = await rd.json();
+          } finally {
+            this.loading = false;
+          }
         },
         newRecord() {
           this.isNew = true;
-          this.showHistory = false;
           this.editing = { code: '', device_model: '', severity: '', description: '', cause: '', solution: '', keywords: [] };
           this.keywordsText = '';
           this.error = '';
         },
-        async openHistory() {
-          this.editing = null;
-          this.showHistory = true;
+        edit(a) {
+          this.isNew = false;
+          this.editing = JSON.parse(JSON.stringify(a));
+          this.keywordsText = (a.keywords || []).join(', ');
+          this.error = '';
+        },
+        async toggleHistory() {
+          if (this.showHistory) { this.showHistory = false; return; }
           const r = await fetch('/api/audit');
           if (r.ok) this.history = await r.json();
+          this.showHistory = true;
         },
         fmtTime(iso) {
           const d = new Date(iso);
@@ -236,13 +313,6 @@
             .filter(([k]) => fmt(h.old_data[k]) !== fmt(h.new_data[k]))
             .map(([k, label]) => ({ label, old: fmt(h.old_data[k]) || '—', new: fmt(h.new_data[k]) || '—' }));
         },
-        edit(a) {
-          this.isNew = false;
-          this.showHistory = false;
-          this.editing = JSON.parse(JSON.stringify(a));
-          this.keywordsText = (a.keywords || []).join(', ');
-          this.error = '';
-        },
         showToast(msg, type = 'success') {
           const el = document.getElementById('appToast');
           const colors = { success: '#3d6b50', danger: '#8b2e2e' };
@@ -253,25 +323,35 @@
         },
         async save() {
           this.error = '';
-          const payload = { ...this.editing, keywords: this.keywordsText.split(',').map(s => s.trim()).filter(Boolean) };
-          const url = this.isNew ? '/api/alarms' : `/api/alarms/${encodeURIComponent(this.editing.code)}`;
-          const method = this.isNew ? 'POST' : 'PUT';
-          const r = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-          if (r.status === 403) { location.href = '/admin/login'; return; }
-          if (!r.ok) { this.error = (await r.json()).error || '儲存失敗'; return; }
-          const msg = this.isNew ? `已新增 ${payload.code}` : `${payload.code} 儲存成功`;
-          await this.load();
-          this.editing = null;
-          this.showToast(msg);
+          this.loading = true;
+          try {
+            const payload = { ...this.editing, keywords: this.keywordsText.split(',').map(s => s.trim()).filter(Boolean) };
+            const url = this.isNew ? '/api/alarms' : `/api/alarms/${encodeURIComponent(this.editing.device_model)}/${encodeURIComponent(this.editing.code)}`;
+            const method = this.isNew ? 'POST' : 'PUT';
+            const r = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+            if (r.status === 403) { location.href = '/admin/login'; return; }
+            if (!r.ok) { this.error = (await r.json()).error || '儲存失敗'; return; }
+            const msg = this.isNew ? `已新增 ${payload.code}` : `${payload.code} 儲存成功`;
+            await this.load();
+            this.editing = null;
+            this.showToast(msg);
+          } finally {
+            this.loading = false;
+          }
         },
         async remove() {
           if (!confirm(`確定刪除 ${this.editing.code}？`)) return;
+          this.loading = true;
           const code = this.editing.code;
-          const r = await fetch(`/api/alarms/${encodeURIComponent(code)}`, { method: 'DELETE' });
-          if (!r.ok) { this.error = '刪除失敗'; return; }
-          await this.load();
-          this.editing = null;
-          this.showToast(`已刪除 ${code}`, 'danger');
+          try {
+            const r = await fetch(`/api/alarms/${encodeURIComponent(this.editing.device_model)}/${encodeURIComponent(code)}`, { method: 'DELETE' });
+            if (!r.ok) { this.error = '刪除失敗'; return; }
+            await this.load();
+            this.editing = null;
+            this.showToast(`已刪除 ${code}`, 'danger');
+          } finally {
+            this.loading = false;
+          }
         },
       }
     }).mount('#app');

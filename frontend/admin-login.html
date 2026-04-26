@@ -10,13 +10,13 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" />
   <style>
     body {
-      background: #1f2937;
+      background: #0f172a;
       min-height: 100vh;
     }
     .modal-header {
-      background: #1f2937;
+      background: #0f172a;
       color: #fff;
-      border-bottom: 1px solid #374151;
+      border-bottom: 1px solid #1e2937;
     }
     .modal-header .btn-close {
       filter: invert(1);
@@ -41,6 +41,17 @@
       width: 36px;
       height: 36px;
     }
+    .back-btn {
+      font-size: 13px;
+      color: #9ca3af;
+      text-decoration: none;
+      border: 1px solid #374151;
+      border-radius: 8px;
+      padding: 6px 16px;
+      display: inline-block;
+      transition: background 0.15s, color 0.15s;
+    }
+    .back-btn:hover { background: #374151; color: #fff; }
     .admin-badge {
       display: inline-block;
       background: #92400e;
@@ -103,8 +114,9 @@
           </form>
         </div>
 
-        <div class="modal-footer justify-content-center border-top pt-2 pb-3">
-          <a href="/" class="text-muted small text-decoration-none">← 返回查詢介面</a>
+        <div class="modal-footer justify-content-between border-top pt-2 pb-3">
+          <a href="/app" class="back-btn">← 返回查詢介面</a>
+          <span class="text-muted small">製造四部 · 內部使用系統</span>
         </div>
 
       </div>
@@ -116,7 +128,11 @@
     const p = new URLSearchParams(window.location.search);
     if (p.get('error')) document.getElementById('errMsg').hidden = false;
 
-    const modal = new bootstrap.Modal(document.getElementById('adminLoginModal'));
+    const modalEl = document.getElementById('adminLoginModal');
+    const modal = new bootstrap.Modal(modalEl);
+    modalEl.addEventListener('shown.bs.modal', () => {
+      document.getElementById('pw').focus();
+    });
     modal.show();
   </script>
 </body>
