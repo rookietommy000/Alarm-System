@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>回饋儀表板 · 後台</title>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" />
+  <link rel="stylesheet" href="style.css" />
+  <style>
+    body { background: var(--bg, #0f1923); color: var(--text, #e2e8f0); }
+    .dash-header {
+      background: #0a1118; color: #e2e8f0;
+      padding: 14px 24px;
+      display: flex; align-items: center; justify-content: space-between;
+      border-bottom: 1px solid rgba(255,255,255,0.07);
+    }
+    .dash-header h1 { font-size: 17px; font-weight: 700; margin: 0; }
+    .dash-header nav { display: flex; gap: 12px; }
+    .dash-header a { color: #64748b; font-size: 13px; text-decoration: none; transition: color 0.15s; }
+    .dash-header a:hover { color: #e2e8f0; }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 16px;
+      padding: 24px;
+    }
+    .summary-card {
+      background: #192330;
+      border-radius: 10px;
+      padding: 20px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.35);
+      border: 1px solid rgba(255,255,255,0.07);
+    }
+    .summary-card .label { font-size: 12px; color: #64748b; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+    .summary-card .value { font-size: 32px; font-weight: 800; margin-top: 6px; line-height: 1; }
+    .summary-card .sub { font-size: 13px; color: #64748b; margin-top: 4px; }
+    .val-total { color: #e2e8f0; }
+    .val-good  { color: #34d399; }
+    .val-mid   { color: #fbbf24; }
+    .val-bad   { color: #f87171; }
+    .val-none  { color: #64748b; }
+
+    .section { padding: 0 24px 24px; }
+    .section-title {
+      font-size: 13px; font-weight: 700;
+      letter-spacing: .06em; text-transform: uppercase;
+      color: #64748b; margin-bottom: 12px;
+    }
+
+    .alarm-card {
+      background: #192330;
+      border-radius: 10px;
+      padding: 14px 18px;
+      margin-bottom: 10px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.35);
+      border: 1px solid rgba(255,255,255,0.07);
+      display: flex; align-items: center; gap: 16px;
+    }
+    .alarm-card-info { flex: 1; min-width: 0; }
+    .alarm-card-code { font-weight: 700; font-family: "SF Mono", Menlo, monospace; font-size: 14px; color: #e2e8f0; }
+    .alarm-card-model { font-size: 12px; color: #64748b; }
+    .alarm-card-desc { font-size: 13px; color: #94a3b8; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .alarm-card-stat { flex-shrink: 0; text-align: right; }
+    .stat-pct { font-size: 22px; font-weight: 800; line-height: 1; }
+    .stat-count { font-size: 11px; color: #64748b; margin-top: 2px; }
+
+    .bar-wrap { width: 100px; flex-shrink: 0; }
+    .bar-bg { background: rgba(255,255,255,0.1); border-radius: 4px; height: 8px; overflow: hidden; }
+    .bar-fill { height: 100%; border-radius: 4px; transition: width .4s; }
+
+    .filter-bar {
+      padding: 0 24px 16px;
+      display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    }
+    .filter-bar label { font-size: 13px; color: #94a3b8; font-weight: 600; }
+    .filter-bar select {
+      font-size: 13px; padding: 5px 10px; border-radius: 6px;
+      border: 1px solid rgba(255,255,255,0.14);
+      background: #192330; color: #e2e8f0;
+    }
+
+    .empty-dash { text-align: center; color: #64748b; padding: 60px 0; font-size: 15px; }
+    .hot-rank { display: flex; align-items: center; gap: 14px; background: #192330; border-radius: 10px; padding: 12px 18px; margin-bottom: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.07); }
+    .hot-rank-num { font-size: 18px; font-weight: 800; color: #ff9a3c; min-width: 28px; }
+    .hot-rank-info { flex: 1; min-width: 0; }
+    .hot-rank-code { font-weight: 700; font-family: "SF Mono", Menlo, monospace; font-size: 14px; color: #e2e8f0; }
+    .hot-rank-model { font-size: 12px; color: #64748b; }
+    .hot-rank-desc { font-size: 13px; color: #94a3b8; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .hot-rank-count { font-size: 20px; font-weight: 800; color: #ff9a3c; flex-shrink: 0; }
+  </style>
+</head>
+<body>
+<div id="app">
+  <div class="dash-header">
+    <h1>📊 回饋儀表板</h1>
+    <nav>
+      <a href="/admin">← 警報管理</a>
+      <a href="/admin/logout">登出</a>
+    </nav>
+  </div>
+
+  <div v-if="loading" class="loading-overlay"><div class="spinner"></div></div>
+
+  <template v-else>
+    <!-- 統計卡 -->
+    <div class="summary-grid">
+      <div class="summary-card">
+        <div class="label">有回饋筆數</div>
+        <div class="value val-total">{{ rows.length }}</div>
+        <div class="sub">共 {{ totalVotes }} 次回饋</div>
+      </div>
+      <div class="summary-card">
+        <div class="label">良好（≥70%）</div>
+        <div class="value val-good">{{ countByLevel('good') }}</div>
+        <div class="sub">有效方案</div>
+      </div>
+      <div class="summary-card">
+        <div class="label">中等（40–69%）</div>
+        <div class="value val-mid">{{ countByLevel('mid') }}</div>
+        <div class="sub">尚可接受</div>
+      </div>
+      <div class="summary-card">
+        <div class="label">需改善（&lt;40%）</div>
+        <div class="value val-bad">{{ countByLevel('bad') }}</div>
+        <div class="sub">建議修訂</div>
+      </div>
+    </div>
+
+    <!-- 最常查詢 -->
+    <div class="section" v-if="topViews.length">
+      <div class="section-title">🔥 最常查詢 Top 10</div>
+      <div class="hot-rank" v-for="(r, i) in topViews" :key="r.device_model + r.code">
+        <div class="hot-rank-num">#{{ i + 1 }}</div>
+        <div class="hot-rank-info">
+          <div class="hot-rank-code">{{ r.code }} <span class="hot-rank-model">{{ r.device_model }}</span></div>
+          <div class="hot-rank-desc">{{ r.description || '—' }}</div>
+        </div>
+        <div class="hot-rank-count">{{ r.count }} 次</div>
+      </div>
+    </div>
+
+    <!-- 篩選 -->
+    <div class="filter-bar">
+      <label>顯示：</label>
+      <select v-model="filter">
+        <option value="all">全部</option>
+        <option value="bad">需改善（&lt;40%）</option>
+        <option value="mid">中等（40–69%）</option>
+        <option value="good">良好（≥70%）</option>
+      </select>
+      <label style="margin-left:12px;">排序：</label>
+      <select v-model="sort">
+        <option value="pct_asc">成功率 低→高</option>
+        <option value="pct_desc">成功率 高→低</option>
+        <option value="votes_desc">回饋數 多→少</option>
+      </select>
+      <span style="margin-left:auto;font-size:13px;color:#6b7280;">{{ filteredRows.length }} 筆</span>
+    </div>
+
+    <!-- 警報列表 -->
+    <div class="section">
+      <p class="empty-dash" v-if="!filteredRows.length">尚無符合資料</p>
+      <template v-else>
+        <!-- 需改善 -->
+        <template v-if="filter === 'all' || filter === 'bad'">
+          <div class="section-title" v-if="filter === 'all' && badRows.length">需改善</div>
+          <div class="alarm-card" v-for="r in (filter === 'all' ? badRows : filteredRows)" :key="r.device_model + r.code">
+            <div class="alarm-card-info">
+              <div class="alarm-card-code">{{ r.code }} <span class="alarm-card-model">{{ r.device_model }}</span></div>
+              <div class="alarm-card-desc">{{ r.description || '—' }}</div>
+            </div>
+            <div class="bar-wrap">
+              <div class="bar-bg"><div class="bar-fill" :style="{ width: r.pct + '%', background: barColor(r.pct) }"></div></div>
+            </div>
+            <div class="alarm-card-stat">
+              <div class="stat-pct" :style="{ color: barColor(r.pct) }">{{ r.pct }}%</div>
+              <div class="stat-count">{{ r.effective }}/{{ r.total }} 次</div>
+            </div>
+          </div>
+        </template>
+        <!-- 中等 -->
+        <template v-if="filter === 'all'">
+          <div class="section-title" style="margin-top:8px" v-if="midRows.length">中等</div>
+          <div class="alarm-card" v-for="r in midRows" :key="r.device_model + r.code">
+            <div class="alarm-card-info">
+              <div class="alarm-card-code">{{ r.code }} <span class="alarm-card-model">{{ r.device_model }}</span></div>
+              <div class="alarm-card-desc">{{ r.description || '—' }}</div>
+            </div>
+            <div class="bar-wrap">
+              <div class="bar-bg"><div class="bar-fill" :style="{ width: r.pct + '%', background: barColor(r.pct) }"></div></div>
+            </div>
+            <div class="alarm-card-stat">
+              <div class="stat-pct" :style="{ color: barColor(r.pct) }">{{ r.pct }}%</div>
+              <div class="stat-count">{{ r.effective }}/{{ r.total }} 次</div>
+            </div>
+          </div>
+        </template>
+        <!-- 良好 -->
+        <template v-if="filter === 'all'">
+          <div class="section-title" style="margin-top:8px" v-if="goodRows.length">良好</div>
+          <div class="alarm-card" v-for="r in goodRows" :key="r.device_model + r.code">
+            <div class="alarm-card-info">
+              <div class="alarm-card-code">{{ r.code }} <span class="alarm-card-model">{{ r.device_model }}</span></div>
+              <div class="alarm-card-desc">{{ r.description || '—' }}</div>
+            </div>
+            <div class="bar-wrap">
+              <div class="bar-bg"><div class="bar-fill" :style="{ width: r.pct + '%', background: barColor(r.pct) }"></div></div>
+            </div>
+            <div class="alarm-card-stat">
+              <div class="stat-pct" :style="{ color: barColor(r.pct) }">{{ r.pct }}%</div>
+              <div class="stat-count">{{ r.effective }}/{{ r.total }} 次</div>
+            </div>
+          </div>
+        </template>
+      </template>
+    </div>
+  </template>
+</div>
+
+<script>
+const { createApp } = Vue;
+createApp({
+  data() {
+    return { rows: [], viewRows: [], loading: true, filter: 'all', sort: 'pct_asc' };
+  },
+  computed: {
+    totalVotes() { return this.rows.reduce((s, r) => s + r.total, 0); },
+    topViews() { return this.viewRows.slice(0, 10); },
+    sorted() {
+      return [...this.rows].sort((a, b) => {
+        if (this.sort === 'pct_asc')    return a.pct - b.pct;
+        if (this.sort === 'pct_desc')   return b.pct - a.pct;
+        if (this.sort === 'votes_desc') return b.total - a.total;
+        return 0;
+      });
+    },
+    badRows()  { return this.sorted.filter(r => r.pct < 40); },
+    midRows()  { return this.sorted.filter(r => r.pct >= 40 && r.pct < 70); },
+    goodRows() { return this.sorted.filter(r => r.pct >= 70); },
+    filteredRows() {
+      if (this.filter === 'bad')  return this.badRows;
+      if (this.filter === 'mid')  return this.midRows;
+      if (this.filter === 'good') return this.goodRows;
+      return this.sorted;
+    },
+  },
+  methods: {
+    countByLevel(level) {
+      if (level === 'good') return this.goodRows.length;
+      if (level === 'mid')  return this.midRows.length;
+      if (level === 'bad')  return this.badRows.length;
+      return 0;
+    },
+    barColor(pct) {
+      return pct >= 70 ? '#34d399' : pct >= 40 ? '#fbbf24' : '#f87171';
+    },
+    async load() {
+      const [rs, ra, rv] = await Promise.all([
+        fetch('/api/feedback/stats'), fetch('/api/alarms'), fetch('/api/view/stats')
+      ]);
+      if (rs.status === 403 || ra.status === 403) { location.href = '/admin/login'; return; }
+      if (rs.status === 401 || ra.status === 401) { location.href = '/login'; return; }
+      const stats  = rs.ok ? await rs.json() : [];
+      const alarms = ra.ok ? await ra.json() : [];
+      const views  = rv.ok ? await rv.json() : [];
+      const alarmMap = Object.fromEntries(alarms.map(a => [a.device_model + '|' + a.code, a]));
+      this.rows = stats.map(s => {
+        const pct = Math.round(s.effective / s.total * 100);
+        const alarm = alarmMap[s.device_model + '|' + s.code] || {};
+        return { ...s, pct, description: alarm.description || '' };
+      });
+      this.viewRows = views.map(v => {
+        const alarm = alarmMap[v.device_model + '|' + v.code] || {};
+        return { ...v, description: alarm.description || '' };
+      });
+      this.loading = false;
+    },
+  },
+  mounted() { this.load(); },
+}).mount('#app');
+</script>
+</body>
+</html>

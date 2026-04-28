@@ -55,8 +55,8 @@
       overflow-y: auto;
     }
     .custom-select-group-label {
-      background: var(--primary);
-      color: #fff;
+      background: rgba(77,219,196,0.12);
+      color: var(--primary);
       font-size: 11px;
       font-weight: 700;
       letter-spacing: 0.06em;
@@ -70,7 +70,7 @@
       transition: background 0.1s;
     }
     .custom-select-option:hover { background: var(--surface-hover); }
-    .custom-select-option.selected { background: #ede9fe; color: var(--primary); font-weight: 600; }
+    .custom-select-option.selected { background: rgba(77,219,196,0.15); color: var(--primary); font-weight: 600; }
     .custom-select-option.all-opt { padding-left: 14px; border-bottom: 1px solid var(--border); }
 
     .search-btn {
@@ -163,7 +163,7 @@
     }
     .line-card:hover {
       border-color: var(--primary);
-      box-shadow: 0 0 0 3px rgba(79,70,229,0.1), var(--shadow-md);
+      box-shadow: 0 0 0 3px rgba(77,219,196,0.15), var(--shadow-md);
       transform: translateY(-2px);
     }
     .line-card-num {
@@ -207,7 +207,7 @@
     }
     .device-card:hover {
       border-color: var(--primary);
-      box-shadow: 0 0 0 3px rgba(79,70,229,0.1);
+      box-shadow: 0 0 0 3px rgba(77,219,196,0.15);
       transform: translateY(-1px);
     }
     .device-card-model {
@@ -274,11 +274,11 @@
       letter-spacing: 0.06em;
       text-transform: uppercase;
       padding: 10px 16px;
-      background: #1c2333;
-      color: #d1d5db;
+      background: #0a1118;
+      color: var(--muted);
     }
     thead tr {
-      box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+      box-shadow: 0 2px 6px rgba(0,0,0,0.4);
     }
     .code { font-weight: 700; font-size: 14px; display: block; }
     .code-device {
@@ -293,6 +293,24 @@
     /* Modal */
     .modal-body h2 { font-size: 16px; line-height: 1.4; }
     .modal-body dd { white-space: pre-wrap; line-height: 1.6; }
+    .feedback-row { display: flex; align-items: center; gap: 8px; margin: 16px 0 8px; padding-top: 14px; border-top: 1px solid var(--border); }
+    .feedback-label { font-size: 13px; color: var(--muted); flex-shrink: 0; }
+    .feedback-btn { font-size: 13px; padding: 5px 14px; border-radius: 8px; border: 1.5px solid var(--border); background: var(--surface); cursor: pointer; transition: background 0.12s; }
+    .feedback-btn.effective:hover { background: rgba(52,211,153,0.15); border-color: rgba(52,211,153,0.4); }
+    .feedback-btn.ineffective:hover { background: rgba(248,113,113,0.15); border-color: rgba(248,113,113,0.4); }
+    .feedback-thanks { font-size: 13px; color: var(--success); font-weight: 600; }
+    .feedback-stat { font-size: 12px; font-weight: 600; margin-left: auto; }
+    .fb-front-high { color: var(--success); }
+    .fb-front-mid  { color: var(--warn); }
+    .fb-front-low  { color: var(--danger); }
+    .fb-cell { white-space: nowrap; }
+    .fb-none { color: var(--muted); font-size: 12px; }
+    .hot-row { border-left: 3px solid var(--accent-orange); }
+    .hot-row td:first-child { padding-left: 13px; }
+    .sol-steps-list { margin: 6px 0 0 0; padding-left: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; font-size: 14px; line-height: 1.6; }
+    .old-sol-toggle { background: none; border: none; color: var(--muted); font-size: 12px; cursor: pointer; padding: 4px 0; font-family: inherit; }
+    .old-sol-toggle:hover { color: var(--text); }
+    .old-sol-body { margin-top: 6px; font-size: 13px; color: var(--muted); white-space: pre-wrap; line-height: 1.6; padding: 10px 12px; background: var(--surface-hover); border-radius: var(--radius-sm); }
   </style>
 </head>
 <body>
@@ -374,15 +392,23 @@
         <p v-else-if="!items.length" class="empty">無符合資料</p>
         <table v-else>
           <thead>
-            <tr><th>代碼</th><th>機種</th><th>嚴重度</th><th>描述</th><th></th></tr>
+            <tr><th>代碼</th><th>機種</th><th>嚴重度</th><th>描述</th><th>成功率</th><th></th></tr>
           </thead>
           <tbody>
-            <tr v-for="a in items" :key="a.device_model + a.code">
+            <tr v-for="a in items" :key="a.device_model + a.code" :class="{ 'hot-row': isHot(a) }">
               <td data-label="代碼"><span class="code">{{ a.code }}</span></td>
               <td data-label="機種">{{ a.device_model || '—' }}</td>
               <td data-label="嚴重度"><span class="tag" :class="sevClass(a.severity)">{{ a.severity || '—' }}</span></td>
               <td data-label="描述">{{ a.description }}</td>
-              <td class="actions-cell"><button @click="selected = a" aria-label="查看詳情">詳情</button></td>
+              <td data-label="成功率" class="fb-cell">
+                <span v-if="feedbackStats[a.device_model + '|' + a.code]"
+                      class="feedback-stat"
+                      :class="feedbackStatClass(feedbackStats[a.device_model + '|' + a.code])">
+                  {{ feedbackStatShort(feedbackStats[a.device_model + '|' + a.code]) }}
+                </span>
+                <span v-else class="fb-none">—</span>
+              </td>
+              <td class="actions-cell"><button @click="openDetail(a)" aria-label="查看詳情">詳情</button></td>
             </tr>
           </tbody>
         </table>
@@ -396,9 +422,42 @@
           <dt>機種</dt><dd>{{ selected.device_model || '—' }}</dd>
           <dt>嚴重度</dt><dd>{{ selected.severity || '—' }}</dd>
           <dt>原因</dt><dd>{{ selected.cause || '—' }}</dd>
-          <dt>解決方案</dt><dd>{{ selected.solution || '—' }}</dd>
+          <template v-if="hasSolSteps(selected)">
+            <dt>處理步驟</dt>
+            <dd>
+              <ul class="sol-steps-list">
+                <li v-if="selected.sol_steps.check"><strong>① 檢查：</strong>{{ selected.sol_steps.check }}</li>
+                <li v-if="selected.sol_steps.parts"><strong>② 零件：</strong>{{ selected.sol_steps.parts }}</li>
+                <li v-if="selected.sol_steps.reset"><strong>③ 復歸：</strong>{{ selected.sol_steps.reset }}</li>
+                <li v-if="selected.sol_steps.safety"><strong>④ 安全：</strong>{{ selected.sol_steps.safety }}</li>
+              </ul>
+            </dd>
+            <template v-if="selected.solution">
+              <dt></dt>
+              <dd>
+                <button class="old-sol-toggle" @click="showOldSolution = !showOldSolution">
+                  {{ showOldSolution ? '▲ 收起解決辦法' : '▼ 查看解決辦法' }}
+                </button>
+                <div v-if="showOldSolution" class="old-sol-body">{{ selected.solution }}</div>
+              </dd>
+            </template>
+          </template>
+          <template v-else>
+            <dt>解決方案</dt><dd>{{ selected.solution || '—' }}</dd>
+          </template>
           <dt>關鍵字</dt><dd>{{ (selected.keywords || []).join('、') || '—' }}</dd>
         </dl>
+        <div class="feedback-row">
+          <span class="feedback-label">此方案有效嗎？</span>
+          <template v-if="!feedbackSent">
+            <button class="feedback-btn effective" @click="submitFeedback('effective')">✅ 有效</button>
+            <button class="feedback-btn ineffective" @click="submitFeedback('ineffective')">❌ 無效</button>
+          </template>
+          <span v-else class="feedback-thanks">已收到回饋，謝謝！</span>
+          <span v-if="feedbackStats[selected.device_model + '|' + selected.code]" class="feedback-stat" :class="feedbackStatClass(feedbackStats[selected.device_model + '|' + selected.code])">
+            {{ feedbackStatText(feedbackStats[selected.device_model + '|' + selected.code]) }}
+          </span>
+        </div>
         <button @click="selected = null">關閉</button>
       </div>
     </div>
@@ -415,6 +474,10 @@
           selectedDevice: null,
           items: [], selected: null,
           loading: false, timer: null,
+          feedbackSent: false,
+          feedbackStats: {},
+          viewStats: {},
+          showOldSolution: false,
         };
       },
       computed: {
@@ -435,8 +498,64 @@
       },
       mounted() {
         fetch('/api/devices').then(r => r.json()).then(d => { this.devices = d; });
+        fetch('/api/feedback/stats').then(r => r.json()).then(stats => {
+          this.feedbackStats = Object.fromEntries(stats.map(s => [s.device_model + '|' + s.code, s]));
+        }).catch(() => {});
+        this.refreshViewStats();
       },
       methods: {
+        async refreshViewStats() {
+          try {
+            const r = await fetch('/api/view/stats');
+            if (!r.ok) return;
+            const stats = await r.json();
+            const top = stats.slice(0, 10);
+            this.viewStats = Object.fromEntries(top.map(s => [s.device_model + '|' + s.code, s.count]));
+          } catch {}
+        },
+        async openDetail(a) {
+          this.selected = a;
+          this.feedbackSent = false;
+          this.showOldSolution = false;
+          try {
+            await fetch('/api/view', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ code: a.code, device_model: a.device_model }),
+            });
+            this.refreshViewStats();
+          } catch {}
+        },
+        isHot(a) {
+          return !!this.viewStats[a.device_model + '|' + a.code];
+        },
+        hasSolSteps(a) {
+          const s = a.sol_steps;
+          return s && (s.check || s.parts || s.reset || s.safety);
+        },
+        feedbackStatText(s) {
+          const pct = Math.round(s.effective / s.total * 100);
+          const label = pct >= 70 ? '良好' : pct >= 40 ? '中等' : '需改善';
+          return `● ${label}（${pct}%，${s.total} 筆）`;
+        },
+        feedbackStatShort(s) {
+          const pct = Math.round(s.effective / s.total * 100);
+          const label = pct >= 70 ? '良好' : pct >= 40 ? '中等' : '需改善';
+          return `● ${label} ${pct}%`;
+        },
+        feedbackStatClass(s) {
+          const pct = s.effective / s.total;
+          return pct >= 0.7 ? 'fb-front-high' : pct >= 0.4 ? 'fb-front-mid' : 'fb-front-low';
+        },
+        async submitFeedback(result) {
+          await fetch('/api/feedback', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code: this.selected.code, device_model: this.selected.device_model, result }),
+          });
+          this.feedbackSent = true;
+          setTimeout(() => { this.feedbackSent = false; }, 2000);
+        },
         selectLine(l) {
           this.selectedLine = l;
           this.selectedDevice = null;

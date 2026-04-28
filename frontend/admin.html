@@ -27,7 +27,7 @@
     .admin-table-wrap { padding: 20px; overflow-x: auto; }
     .admin-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 14px; }
     .admin-table thead th {
-      background: #1c2333; color: #d1d5db;
+      background: #0a1118; color: var(--muted);
       font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
       padding: 10px 14px;
     }
@@ -41,6 +41,10 @@
     .td-desc { max-width: 360px; }
     .td-act { white-space: nowrap; text-align: right; }
     .empty-admin { text-align: center; color: var(--muted); padding: 60px 0; font-size: 15px; }
+    .td-feedback { white-space: nowrap; font-size: 12px; font-weight: 600; }
+    .fb-high { color: #34d399; }
+    .fb-mid  { color: #fbbf24; }
+    .fb-low  { color: #f87171; }
     /* Modal overlay — Vue controlled, Bootstrap styled */
     .vue-modal-backdrop {
       position: fixed; inset: 0;
@@ -50,27 +54,27 @@
       padding: 16px;
     }
     .vue-modal {
-      background: #fff;
+      background: var(--surface);
       border-radius: 12px;
       width: 100%; max-width: 500px;
       max-height: 90vh;
       display: flex; flex-direction: column;
-      box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+      box-shadow: 0 20px 60px rgba(0,0,0,0.6);
       overflow: hidden;
     }
     .vue-modal-header {
-      background: #1c2333; color: #fff;
+      background: #0a1118; color: #e2e8f0;
       padding: 14px 20px;
       display: flex; align-items: center; justify-content: space-between;
       flex-shrink: 0;
     }
     .vue-modal-header h5 { margin: 0; font-size: 15px; font-weight: 600; }
-    .vue-modal-header .btn-close { filter: invert(1); opacity: 0.8; }
+    .vue-modal-header .btn-close { filter: invert(1); opacity: 0.7; }
     .vue-modal-header .btn-close:hover { opacity: 1; }
     .vue-modal-body { padding: 20px; overflow-y: auto; flex: 1; }
     .vue-modal-footer {
       padding: 12px 20px;
-      border-top: 1px solid #dee2e6;
+      border-top: 1px solid var(--border);
       display: flex; justify-content: space-between; align-items: center;
       flex-shrink: 0;
     }
@@ -81,18 +85,46 @@
     .history-item { padding: 10px 12px; background: var(--surface-hover); border-radius: var(--radius-md); font-size: 13px; }
     .hist-main { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
     .hist-badge { font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 4px; flex-shrink: 0; }
-    .hist-CREATE { background: #d1fae5; color: #065f46; }
-    .hist-UPDATE { background: #dbeafe; color: #1e40af; }
-    .hist-DELETE { background: #fee2e2; color: #991b1b; }
+    .hist-CREATE { background: rgba(52,211,153,0.18); color: #34d399; }
+    .hist-UPDATE { background: rgba(96,165,250,0.18); color: #60a5fa; }
+    .hist-DELETE { background: rgba(248,113,113,0.18); color: #f87171; }
     .hist-code { font-weight: 700; }
     .hist-desc { color: var(--muted); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
     .hist-time { color: var(--muted); font-size: 11px; flex-shrink: 0; margin-left: auto; }
-    .hist-diff { list-style: none; padding: 0; margin: 6px 0 0 0; display: flex; flex-direction: column; gap: 3px; }
-    .hist-diff li { display: flex; align-items: center; gap: 6px; font-size: 12px; }
-    .hist-field { color: var(--muted); flex-shrink: 0; min-width: 48px; }
-    .hist-old { color: #991b1b; background: #fee2e2; padding: 1px 6px; border-radius: 3px; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .hist-new { color: #065f46; background: #d1fae5; padding: 1px 6px; border-radius: 3px; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .hist-arrow { color: var(--muted); }
+    .history-item { cursor: pointer; user-select: none; }
+    .history-item:hover { background: var(--surface-hover); }
+    .hist-expand-toggle { font-size: 11px; color: var(--muted); flex-shrink: 0; margin-left: 4px; }
+    .hist-change-count { font-size: 11px; color: var(--muted); background: rgba(255,255,255,0.08); padding: 1px 7px; border-radius: 10px; flex-shrink: 0; }
+    .hist-diff-expanded { margin-top: 10px; display: flex; flex-direction: column; gap: 10px; }
+    .hist-field-label { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin-bottom: 5px; }
+    .hist-diff-vals { display: grid; grid-template-columns: 1fr 20px 1fr; gap: 6px; align-items: start; }
+    .hist-val-old { color: #f87171; background: rgba(248,113,113,0.12); padding: 7px 10px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; word-break: break-word; border-left: 2px solid rgba(248,113,113,0.4); }
+    .hist-val-new { color: #34d399; background: rgba(52,211,153,0.12); padding: 7px 10px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; word-break: break-word; border-left: 2px solid rgba(52,211,153,0.4); }
+    .hist-arrow-lg { color: var(--muted); font-size: 13px; text-align: center; padding-top: 7px; }
+
+    /* Bootstrap dark overrides */
+    body { background: var(--bg); color: var(--text); }
+    .btn-dark { background: var(--primary); border-color: var(--primary); color: var(--primary-ink); font-weight: 600; }
+    .btn-dark:hover { background: var(--primary-hover); border-color: var(--primary-hover); color: var(--primary-ink); }
+    .btn-outline-secondary { border-color: var(--border-strong); color: var(--text-secondary); }
+    .btn-outline-secondary:hover { background: var(--surface-hover); border-color: var(--border-strong); color: var(--text); }
+    .btn-outline-danger { border-color: rgba(248,113,113,0.4); color: #f87171; }
+    .btn-outline-danger:hover { background: rgba(248,113,113,0.12); color: #f87171; }
+    .form-control, .form-select {
+      background: var(--bg);
+      border-color: var(--border-strong);
+      color: var(--text);
+    }
+    .form-control:focus, .form-select:focus {
+      background: var(--bg);
+      border-color: var(--primary);
+      color: var(--text);
+      box-shadow: 0 0 0 3px rgba(77,219,196,0.2);
+    }
+    .form-control::placeholder { color: var(--muted); }
+    .form-label { color: var(--text-secondary); }
+    .form-text { color: var(--muted); }
+    .input-group-text { background: var(--surface-hover); border-color: var(--border-strong); color: var(--muted); }
   </style>
 </head>
 <body>
@@ -106,6 +138,7 @@
       <nav><a href="/admin/logout">登出後台</a></nav>
     </header>
 
+    <div class="admin-stripe"></div>
     <div class="admin-banner">
       <span class="admin-banner-dot"></span>
       管理員模式 — 可新增、編輯、刪除警報代碼
@@ -117,6 +150,7 @@
       <button class="btn btn-outline-secondary btn-sm" @click="toggleHistory">
         {{ showHistory ? '← 返回列表' : '📋 歷史紀錄' }}
       </button>
+      <a class="btn btn-outline-secondary btn-sm" href="/admin/dashboard">📊 回饋儀表板</a>
       <template v-if="!showHistory">
         <select class="form-select form-select-sm" style="width:160px" v-model="listDevice">
           <option value="">全部機種</option>
@@ -132,7 +166,7 @@
       <p class="empty-admin" v-if="!loading && !filteredItems.length">無符合資料</p>
       <table class="admin-table" v-else>
         <thead>
-          <tr><th>代碼</th><th>機種</th><th>嚴重度</th><th>描述</th><th></th></tr>
+          <tr><th>代碼</th><th>機種</th><th>嚴重度</th><th>描述</th><th>回饋</th><th></th></tr>
         </thead>
         <tbody>
           <tr v-for="a in filteredItems" :key="a.device_model + a.code" @click="edit(a)">
@@ -140,6 +174,12 @@
             <td class="td-model">{{ a.device_model || '—' }}</td>
             <td><span class="tag" :class="sevClass(a.severity)">{{ a.severity || '—' }}</span></td>
             <td class="td-desc">{{ a.description }}</td>
+            <td class="td-feedback" @click.stop>
+              <span v-if="feedbackStats[a.device_model + '|' + a.code]" :class="feedbackClass(feedbackStats[a.device_model + '|' + a.code])">
+                {{ feedbackPct(feedbackStats[a.device_model + '|' + a.code]) }}
+              </span>
+              <span v-else style="color:var(--muted);font-size:12px;">—</span>
+            </td>
             <td class="td-act" @click.stop>
               <button class="btn btn-outline-secondary btn-sm" @click="edit(a)">編輯</button>
             </td>
@@ -153,21 +193,28 @@
       <h2>操作歷史紀錄</h2>
       <p style="color:var(--muted);font-size:14px;" v-if="!history.length">尚無紀錄</p>
       <ul class="history-list" v-else>
-        <li class="history-item" v-for="h in history" :key="h.changed_at + h.code">
+        <li class="history-item" v-for="(h, idx) in history" :key="h.changed_at + h.code"
+            @click="toggleHistItem(idx)">
           <div class="hist-main">
             <span class="hist-badge" :class="'hist-' + h.operation">{{ {CREATE:'新增',UPDATE:'編輯',DELETE:'刪除'}[h.operation] }}</span>
             <span class="hist-code">{{ h.code }}</span>
             <span class="hist-desc">{{ (h.new_data || h.old_data || {}).description }}</span>
             <span class="hist-time">{{ fmtTime(h.changed_at) }}</span>
+            <template v-if="h.operation === 'UPDATE' && diffFields(h).length">
+              <span class="hist-change-count">{{ diffFields(h).length }} 項變更</span>
+              <span class="hist-expand-toggle">{{ expandedHist[idx] ? '▲' : '▼' }}</span>
+            </template>
           </div>
-          <ul class="hist-diff" v-if="h.operation === 'UPDATE' && diffFields(h).length">
-            <li v-for="f in diffFields(h)" :key="f.label">
-              <span class="hist-field">{{ f.label }}</span>
-              <span class="hist-old">{{ f.old }}</span>
-              <span class="hist-arrow">→</span>
-              <span class="hist-new">{{ f.new }}</span>
-            </li>
-          </ul>
+          <div class="hist-diff-expanded" v-if="expandedHist[idx] && h.operation === 'UPDATE'" @click.stop>
+            <div v-for="f in diffFields(h)" :key="f.label">
+              <div class="hist-field-label">{{ f.label }}</div>
+              <div class="hist-diff-vals">
+                <div class="hist-val-old">{{ f.old }}</div>
+                <div class="hist-arrow-lg">→</div>
+                <div class="hist-val-new">{{ f.new }}</div>
+              </div>
+            </div>
+          </div>
         </li>
       </ul>
     </div>
@@ -207,8 +254,25 @@
             <textarea class="form-control" v-model="editing.cause" rows="2"></textarea>
           </div>
           <div class="mb-3">
-            <label class="form-label fw-semibold">解決方案</label>
+            <label class="form-label fw-semibold">解決方案（舊）</label>
             <textarea class="form-control" v-model="editing.solution" rows="3"></textarea>
+          </div>
+          <div class="mb-1 mt-3" style="font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#6b7280;">四段式解決方案</div>
+          <div class="mb-2">
+            <label class="form-label form-label-sm mb-1">① 檢查步驟</label>
+            <textarea class="form-control form-control-sm" v-model="editing.sol_steps.check" rows="2" placeholder="先確認…、量測…"></textarea>
+          </div>
+          <div class="mb-2">
+            <label class="form-label form-label-sm mb-1">② 更換零件</label>
+            <textarea class="form-control form-control-sm" v-model="editing.sol_steps.parts" rows="2" placeholder="需更換…"></textarea>
+          </div>
+          <div class="mb-2">
+            <label class="form-label form-label-sm mb-1">③ 復歸動作</label>
+            <textarea class="form-control form-control-sm" v-model="editing.sol_steps.reset" rows="2" placeholder="完成後執行…"></textarea>
+          </div>
+          <div class="mb-3">
+            <label class="form-label form-label-sm mb-1">④ 安全注意</label>
+            <textarea class="form-control form-control-sm" v-model="editing.sol_steps.safety" rows="2" placeholder="操作前務必…"></textarea>
           </div>
           <div class="mb-3">
             <label class="form-label fw-semibold">關鍵字（以逗號分隔）</label>
@@ -242,10 +306,10 @@
     createApp({
       data() {
         return {
-          items: [], devices: [],
+          items: [], devices: [], feedbackStats: {},
           editing: null, isNew: false, error: '',
           keywordsText: '',
-          showHistory: false, history: [],
+          showHistory: false, history: [], expandedHist: {},
           loading: false, listSearch: '', listDevice: ''
         };
       },
@@ -271,27 +335,39 @@
         sevClass(s) {
           return { '嚴重': 'sev-high', '警告': 'sev-med', '資訊': 'sev-low' }[s] || '';
         },
+        feedbackPct(s) {
+          const pct = Math.round(s.effective / s.total * 100);
+          const label = pct >= 70 ? '良好' : pct >= 40 ? '中等' : '需改善';
+          return `● ${label}（${pct}%）`;
+        },
+        feedbackClass(s) {
+          const pct = s.effective / s.total;
+          return pct >= 0.7 ? 'fb-high' : pct >= 0.4 ? 'fb-mid' : 'fb-low';
+        },
         async load() {
           this.loading = true;
           try {
-            const [ra, rd] = await Promise.all([fetch('/api/alarms'), fetch('/api/devices')]);
+            const [ra, rd, rf] = await Promise.all([fetch('/api/alarms'), fetch('/api/devices'), fetch('/api/feedback/stats')]);
             if (ra.status === 401 || rd.status === 401) { location.href = '/login'; return; }
             if (ra.status === 403 || rd.status === 403) { location.href = '/admin/login'; return; }
             this.items = await ra.json();
             this.devices = await rd.json();
+            const stats = rf.ok ? await rf.json() : [];
+            this.feedbackStats = Object.fromEntries(stats.map(s => [s.device_model + '|' + s.code, s]));
           } finally {
             this.loading = false;
           }
         },
         newRecord() {
           this.isNew = true;
-          this.editing = { code: '', device_model: '', severity: '', description: '', cause: '', solution: '', keywords: [] };
+          this.editing = { code: '', device_model: '', severity: '', description: '', cause: '', solution: '', keywords: [], sol_steps: { check: '', parts: '', reset: '', safety: '' } };
           this.keywordsText = '';
           this.error = '';
         },
         edit(a) {
           this.isNew = false;
           this.editing = JSON.parse(JSON.stringify(a));
+          this.editing.sol_steps = Object.assign({ check: '', parts: '', reset: '', safety: '' }, a.sol_steps || {});
           this.keywordsText = (a.keywords || []).join(', ');
           this.error = '';
         },
@@ -299,7 +375,11 @@
           if (this.showHistory) { this.showHistory = false; return; }
           const r = await fetch('/api/audit');
           if (r.ok) this.history = await r.json();
+          this.expandedHist = {};
           this.showHistory = true;
+        },
+        toggleHistItem(idx) {
+          this.expandedHist = { ...this.expandedHist, [idx]: !this.expandedHist[idx] };
         },
         fmtTime(iso) {
           const d = new Date(iso);
@@ -307,8 +387,19 @@
         },
         diffFields(h) {
           if (!h.old_data || !h.new_data) return [];
-          const labels = { device_model:'機種', severity:'嚴重度', description:'描述', cause:'原因', solution:'解決方案', keywords:'關鍵字' };
-          const fmt = v => Array.isArray(v) ? v.join('、') : (v || '');
+          const labels = { device_model:'機種', severity:'嚴重度', description:'描述', cause:'原因', solution:'解決方案', keywords:'關鍵字', sol_steps:'四段式方案' };
+          const fmt = v => {
+            if (Array.isArray(v)) return v.join('、');
+            if (v && typeof v === 'object') {
+              const parts = [];
+              if (v.check)  parts.push(`① 檢查：${v.check}`);
+              if (v.parts)  parts.push(`② 零件：${v.parts}`);
+              if (v.reset)  parts.push(`③ 復歸：${v.reset}`);
+              if (v.safety) parts.push(`④ 安全：${v.safety}`);
+              return parts.join('\n') || '（空白）';
+            }
+            return v || '';
+          };
           return Object.entries(labels)
             .filter(([k]) => fmt(h.old_data[k]) !== fmt(h.new_data[k]))
             .map(([k, label]) => ({ label, old: fmt(h.old_data[k]) || '—', new: fmt(h.new_data[k]) || '—' }));

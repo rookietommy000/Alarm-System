@@ -1,5 +1,6 @@
 import os
 import socket
+from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
 
@@ -9,7 +10,7 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 from flask import Flask, abort, jsonify, redirect, request, send_from_directory, session, url_for
 from flask_cors import CORS
 
-from storage import alarms_store, audit_logger, devices_store
+from storage import alarms_store, audit_logger, devices_store, feedback_store, view_store
 
 BASE = Path(__file__).resolve().parent.parent
 FRONTEND = BASE / "frontend"
@@ -17,6 +18,7 @@ FRONTEND = BASE / "frontend"
 ALARM_FIELDS = [
     "code", "device_model", "severity",
     "description", "cause", "solution", "keywords",
+    "sol_steps",
 ]
 SEVERITIES = {"嚴重", "警告", "資訊"}
 
@@ -118,9 +120,12 @@ def create_app() -> Flask:
             abort(400, f"severity 必須為 {sorted(SEVERITIES)} 之一")
         result = {}
         for k in ALARM_FIELDS:
-            v = payload.get(k, [] if k == "keywords" else "")
+            default = [] if k == "keywords" else ({} if k == "sol_steps" else "")
+            v = payload.get(k, default)
             if k == "keywords" and isinstance(v, str):
                 v = [s.strip() for s in v.split(",") if s.strip()]
+            if k == "sol_steps" and not isinstance(v, dict):
+                v = {}
             result[k] = v
         return result
 
@@ -216,6 +221,65 @@ def create_app() -> Flask:
         audit_logger.log("DELETE", old_data=old)
         return "", 204
 
+    @app.post("/api/feedback")
+    @login_required
+    def submit_feedback():
+        body = request.get_json(silent=True) or {}
+        code = body.get("code", "").strip()
+        device_model = body.get("device_model", "").strip()
+        result = body.get("result", "").strip()
+        if not code or result not in ("effective", "ineffective"):
+            abort(400, "code 與 result（effective/ineffective）為必填")
+        entry = {
+            "code": code,
+            "device_model": device_model,
+            "result": result,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        feedback_store.append(entry)
+        return jsonify({"ok": True}), 201
+
+    @app.get("/api/feedback/stats")
+    @login_required
+    def feedback_stats():
+        records = feedback_store.load()
+        stats: dict[tuple, dict] = {}
+        for r in records:
+            key = (r.get("code", ""), r.get("device_model", ""))
+            if key not in stats:
+                stats[key] = {"code": key[0], "device_model": key[1], "effective": 0, "total": 0}
+            stats[key]["total"] += 1
+            if r.get("result") == "effective":
+                stats[key]["effective"] += 1
+        return jsonify(list(stats.values()))
+
+    @app.post("/api/view")
+    @login_required
+    def record_view():
+        body = request.get_json(silent=True) or {}
+        code = body.get("code", "").strip()
+        device_model = body.get("device_model", "").strip()
+        if not code:
+            abort(400, "code 為必填")
+        view_store.append({
+            "code": code,
+            "device_model": device_model,
+            "viewed_at": datetime.now(timezone.utc).isoformat(),
+        })
+        return jsonify({"ok": True}), 201
+
+    @app.get("/api/view/stats")
+    @login_required
+    def view_stats():
+        records = view_store.load()
+        counts: dict[tuple, int] = {}
+        for r in records:
+            key = (r.get("code", ""), r.get("device_model", ""))
+            counts[key] = counts.get(key, 0) + 1
+        result = [{"code": k[0], "device_model": k[1], "count": v}
+                  for k, v in sorted(counts.items(), key=lambda x: -x[1])]
+        return jsonify(result)
+
     @app.get("/api/audit")
     @admin_required
     def list_audit():
@@ -224,19 +288,28 @@ def create_app() -> Flask:
 
     # ── Pages ───────────────────────────────────────────────────────
 
+    def _no_cache(resp):
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
+
     @app.get("/")
     def portal():
-        return send_from_directory(FRONTEND, "portal.html")
+        return _no_cache(send_from_directory(FRONTEND, "portal.html"))
 
     @app.get("/app")
     @login_required
     def index():
-        return send_from_directory(FRONTEND, "index.html")
+        return _no_cache(send_from_directory(FRONTEND, "index.html"))
 
     @app.get("/admin")
     @admin_required
     def admin():
-        return send_from_directory(FRONTEND, "admin.html")
+        return _no_cache(send_from_directory(FRONTEND, "admin.html"))
+
+    @app.get("/admin/dashboard")
+    @admin_required
+    def admin_dashboard():
+        return _no_cache(send_from_directory(FRONTEND, "dashboard.html"))
 
     # ── Error handlers ──────────────────────────────────────────────
 
