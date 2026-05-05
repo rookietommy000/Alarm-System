@@ -16,7 +16,13 @@
 | ⚙️ 後台管理 | https://alarm-system-j9dl.onrender.com/admin |
 | 📊 回饋儀表板 | https://alarm-system-j9dl.onrender.com/admin/dashboard |
 
-> 首次開啟可能需要等待約 30 秒（Render 免費方案閒置後會休眠）。
+## 資料庫
+
+| 服務 | 連結 |
+|---|---|
+| 🗄️ Supabase 專案 | https://supabase.com/dashboard/project/yphzobfsvlvenfrnyelg |
+| 📋 資料表編輯器 | https://supabase.com/dashboard/project/yphzobfsvlvenfrnyelg/editor |
+| 🔑 API 設定 | https://supabase.com/dashboard/project/yphzobfsvlvenfrnyelg/settings/api |
 
 ---
 
