@@ -292,6 +292,10 @@ def create_app() -> Flask:
         resp.headers["Cache-Control"] = "no-store"
         return resp
 
+    @app.get("/ping")
+    def ping():
+        return "pong", 200
+
     @app.get("/")
     def portal():
         return _no_cache(send_from_directory(FRONTEND, "portal.html"))

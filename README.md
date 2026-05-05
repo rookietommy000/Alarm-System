@@ -16,6 +16,8 @@
 | ⚙️ 後台管理 | https://alarm-system-j9dl.onrender.com/admin |
 | 📊 回饋儀表板 | https://alarm-system-j9dl.onrender.com/admin/dashboard |
 
+> 使用 [cron-job.org](https://cron-job.org) 每 5 分鐘自動 ping `https://alarm-system-j9dl.onrender.com/ping`，防止 Render 免費方案休眠。
+
 ## 資料庫
 
 | 服務 | 連結 |
