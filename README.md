@@ -7,6 +7,17 @@
 [![Vue 3](https://img.shields.io/badge/Vue-3.x-4FC08D?logo=vue.js&logoColor=white)](https://vuejs.org)
 [![Supabase](https://img.shields.io/badge/Supabase-Database-3ECF8E?logo=supabase&logoColor=white)](https://supabase.com)
 
+## 線上網址
+
+| 介面 | 連結 |
+|---|---|
+| 🏠 入口頁 | https://alarm-system-j9dl.onrender.com/ |
+| 🔍 前台查詢 | https://alarm-system-j9dl.onrender.com/app |
+| ⚙️ 後台管理 | https://alarm-system-j9dl.onrender.com/admin |
+| 📊 回饋儀表板 | https://alarm-system-j9dl.onrender.com/admin/dashboard |
+
+> 首次開啟可能需要等待約 30 秒（Render 免費方案閒置後會休眠）。
+
 ---
 
 ## 功能總覽
