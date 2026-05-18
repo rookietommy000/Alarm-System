@@ -294,6 +294,10 @@ def create_app() -> Flask:
 
     @app.get("/ping")
     def ping():
+        try:
+            alarms_store.load()
+        except Exception:
+            pass
         return "pong", 200
 
     @app.get("/")
