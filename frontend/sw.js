@@ -8,7 +8,7 @@
  *   - API (/api/...): network-first with cache fallback
  */
 
-const CACHE = 'alarm-query-v8';
+const CACHE = 'alarm-query-v9';
 
 const STATIC_SHELL = [
   '/style.css',
