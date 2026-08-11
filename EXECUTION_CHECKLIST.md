@@ -43,9 +43,9 @@
 - [x] 建立 Render Web Service，連接 GitHub repo `rookietommy000/Alarm-System`；已建立並套用 `render.yaml`（`gunicorn --chdir backend --bind 0.0.0.0:$PORT app:app`）
 - [x] 環境變數搬遷：`SUPABASE_URL`/`SUPABASE_KEY`/`GEMINI_API_KEY`/`FLASK_SECRET_KEY`/`LOGIN_PASSWORD`/`ADMIN_PASSWORD`（過程中發現並修正 `SUPABASE_KEY` 誤貼含變數名前綴的問題，見第十三輪）
 - [x] **【第十三輪新增】確認 `requirements.txt` 的 `google-genai` 修正已部署並生效**——`curl`/Python 直測空白圖確認 503 消失、回 200 且 Gemini 真的被呼叫（`ERR_MODEL_UNKNOWN` 是測試圖無內容的正常回應，非套件問題）；使用者實機拍攝真實警報畫面測試，AI 辨識正常運作，確認修復完整生效
-- [ ] **決策：沿用免費層 + `cron-job.org` 防休眠**（既有機制，`app.py` 的 `/ping` 端點已存在）——確認防休眠排程指向新的 Render 網域；已知偶爾仍可能遇到喚醒延遲，先上線觀察，非本次必須解決項目
+- [x] **決策：沿用免費層 + `cron-job.org` 防休眠**（既有機制，`app.py` 的 `/ping` 端點已存在）——已確認排程指向新的 Render 網域 `alarm-system-1.onrender.com/ping`；已知偶爾仍可能遇到喚醒延遲，先上線觀察，非本次必須解決項目
 - [x] Cookie 設定 `Secure`／`HttpOnly`／`SameSite=Lax`——`app.py` `create_app()` 新增 `SESSION_COOKIE_SECURE`（依 `RENDER_EXTERNAL_URL` 是否存在動態開關，本機 HTTP 開發環境維持 `False` 避免登入失效）、`SESSION_COOKIE_HTTPONLY=True`、`SESSION_COOKIE_SAMESITE="Lax"`，57 個既有 pytest 測試全綠
-- [ ] **確認 Service Worker 在 HTTPS 下的實際行為**——Service Worker 只在 HTTPS（或 `localhost`）下運作，本機一直是 HTTP 環境，代表 PWA 快取行為（含 5.4 節當作安全機制在處理的 `/api/*` 排除快取、`activate` 清除舊快取）從未在真實環境跑過，Render 部署後必須重新走一次階段 14 的 SW 手動驗證步驟
+- [ ] **確認 Service Worker 在 HTTPS 下的實際行為**——Service Worker 只在 HTTPS（或 `localhost`）下運作，本機一直是 HTTP 環境，代表 PWA 快取行為（含 5.4 節當作安全機制在處理的 `/api/*` 排除快取、`activate` 清除舊快取）從未在真實環境跑過。**此項不阻塞階段 -0.5 結束**——真正有意義的驗證要等階段 13（前端改動含 sw.js 修改）完成後才有東西可測，屆時階段 14 的 SW 手動驗證步驟會在真正的 HTTPS 環境（現在已具備）下執行，此處僅確認 Render 已提供必要的 HTTPS 前提
 - [x] 確認 Render 實際配置的 worker 數量：**`WEB_CONCURRENCY=1`**（免費層預設，見 Render 部署 log）——這是 2.2.3 節粗細節流設計「共用 IP 不會被誤傷」推論的前提假設，本機測試環境通常也是單一 worker，數量差異不大，暫不需重新校準門檻，但正式上線後應持續觀察
 
 ## 階段 0：資料庫前置確認（對應計畫 1.2、1.3、1.7）— 【第十一輪：已用 00_preflight_check.sql 完成，結果如下】
