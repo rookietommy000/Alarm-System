@@ -10,8 +10,8 @@
 
 - [x] 確認專案已是 git repo：`main` 分支，有 `origin` 遠端
 - [x] **【第九輪定案】採選項甲**：先 commit 這批舊變更當基準點，打 tag `pre-multitenancy`，之後所有 diff 以此為基準
-- [ ] **實測現況可跑**（commit 前，20 分鐘）：拍照分析、警報搜尋、後台四個分頁、清理過期資料逐一跑過一次。有已知半完成的部分，三選一處理：改完／還原掉／照樣 commit 但在訊息裡寫清楚——不要默默帶過，這是基準線最容易失效的方式
-- [ ] **寫 `.gitignore`（必須在 `git add` 之前）**：
+- [x] **實測現況可跑**（commit 前）：搜尋、後台四個分頁、清理過期資料皆正常。**拍照分析因本機非 HTTPS 環境無法測相機權限，順延至階段 -0.5 Render 部署（HTTPS）後補測**——這是刻意延後，不是遺漏，順便也符合 5.5 節「SW 快取行為需在真實 HTTPS 環境驗證」的既有要求
+- [x] **寫 `.gitignore`（必須在 `git add` 之前）**：
   ```
   # 祕密（最重要）
   .env
@@ -27,39 +27,35 @@
   .DS_Store
   venv/
   ```
-  `.env` 含 Supabase key、Gemini API key、`LOGIN_PASSWORD`、`ADMIN_PASSWORD`（之後還會加 `SUPERADMIN_PASSWORD`）——即使不打算推上 GitHub 也不該進版本庫，Railway 部署很可能會接 GitHub 遠端，屆時就晚了。`data/backup/` 內有原廠文件 PDF，進了 git 歷史就永遠在裡面
-- [ ] 建立並 commit `.env.example`（只列 key 名稱、無值），供換機器或交接時知道要設哪些變數
-- [ ] `git add -A` 後，**先看再 commit**：`git status` 逐行確認沒有 `.env`、沒有大檔；`git diff --cached --stat` 複核
-- [ ] 視情況輕度拆分（路徑好拆就拆，例如 `backend/ai/` 一批、`frontend/dashboard.html` 一批、RWD 一批），但不超過 15 分鐘——中間狀態多半啟動不了，`git bisect` 在這批交織開發的變更上沒有意義，拆分價值只剩「文件性質」，commit message 寫清楚就達成
-- [ ] Commit：
-  ```
-  git commit -m "baseline: 多部門改造前的完整可用狀態
-
-  包含前次累積但未提交的變更：
-  - 後台 Dashboard 統一介面（總覽/掃描紀錄/警報管理/機種管理）
-  - AI 分析管線六層（ai_pipeline / ai_memory / ai_logger）
-  - RWD 與 PWA 修正
-  - 資料清理（3 筆髒翻譯、17 個舊檔歸檔）
-
-  此為多部門隔離工程的起點，後續所有 diff 以此為基準。"
-  ```
-- [ ] `git tag pre-multitenancy`
+  `.env` 含 Supabase key、Gemini API key、`LOGIN_PASSWORD`、`ADMIN_PASSWORD`（之後還會加 `SUPERADMIN_PASSWORD`）——即使不打算推上 GitHub 也不該進版本庫，Render 部署很可能會接 GitHub 遠端，屆時就晚了。`data/backup/` 內有原廠文件 PDF，進了 git 歷史就永遠在裡面
+- [x] 建立並 commit `.env.example`（只列 key 名稱、無值），供換機器或交接時知道要設哪些變數
+- [x] `git add -A` 後，**先看再 commit**：`git status` 逐行確認沒有 `.env`、沒有大檔；`git diff --cached --stat` 複核（確認乾淨，另外發現 `color.html` 為 0 bytes 空檔案，判斷為廢棄草稿，已刪除不進 commit）
+- [x] 視情況輕度拆分（路徑好拆就拆，例如 `backend/ai/` 一批、`frontend/dashboard.html` 一批、RWD 一批），但不超過 15 分鐘——中間狀態多半啟動不了，`git bisect` 在這批交織開發的變更上沒有意義，拆分價值只剩「文件性質」，commit message 寫清楚就達成
+- [x] Commit：實際拆成 4 個 commit（`585821e` AI 管線、`84d4b50` 前台/後台/PWA、`cf13647` 後端 API＋資料清理、`8f50f33` 規劃文件＋`.gitignore`/`.env.example`）
+- [x] `git tag pre-multitenancy`（已打在 `8f50f33`）
 - [ ] **【關鍵，連動階段 10/11 設計】確認 `storage.py` 的改動與 `app.py` 的改動落在不同 commit**——階段 10/11 刻意分兩步部署（先只上 storage.py 驗證行為不變，再上 app.py），前提是兩者能分別部署到「只有 storage.py 生效」的中間點，若同一個 commit 混著兩者的改動，這個分階段部署的安全設計會失效
 - [ ] **往後 commit 紀律**：每階段結束 commit 一次（訊息帶階段編號，如 `stage 5: storage.py 部門過濾與 DepartmentStore`）；每個部署點打 tag（`deploy-stage10-storage`、`deploy-stage11-app`），部署時指定 tag 不用「當前 main」；不開 branch，單人+階段中途要部署，branch 只會多一道 merge 手續，直接在 main 上做，靠 tag 標記部署點——階段 11 若出問題，回滾就是部署 `deploy-stage10-storage` tag，一行指令
 
-## 階段 -0.5：Railway 正式部署（對應計畫「尚未做」項，多部門改造的前置）
+**階段 -1 已完成（除上方兩條往後才會用到的紀律提醒外）。** Baseline 建立於 2026-08-11。
 
-- [ ] 環境變數搬遷：`SUPABASE_URL`/`SUPABASE_KEY`/`GEMINI_API_KEY`/`FLASK_SECRET_KEY`（固定值，非隨機產生，見階段 7）
+## 階段 -0.5：Render 正式部署（對應計畫「尚未做」項，多部門改造的前置）— 【第十二輪：Railway→Render，沿用免費層+cron-job.org防休眠】
+
+- [ ] 建立 Render Web Service，連接 GitHub repo `rookietommy000/Alarm-System`；建立 `render.yaml` 或於 Render Dashboard 手動設定 build/start command（取代已刪除的 `railway.toml`；start command 建議 `gunicorn --chdir backend --bind 0.0.0.0:$PORT app:app`）
+- [ ] 環境變數搬遷：`SUPABASE_URL`/`SUPABASE_KEY`/`GEMINI_API_KEY`/`FLASK_SECRET_KEY`（固定值，非隨機產生，見階段 7）/`LOGIN_PASSWORD`/`ADMIN_PASSWORD`
+- [ ] **決策：沿用免費層 + `cron-job.org` 防休眠**（既有機制，`app.py` 的 `/ping` 端點已存在）——確認防休眠排程指向新的 Render 網域；已知偶爾仍可能遇到喚醒延遲，先上線觀察，非本次必須解決項目
 - [ ] Cookie 設定 `Secure`／`HttpOnly`／`SameSite=Lax`
-- [ ] **確認 Service Worker 在 HTTPS 下的實際行為**——Service Worker 只在 HTTPS（或 `localhost`）下運作，本機一直是 HTTP 環境，代表 PWA 快取行為（含 5.4 節當作安全機制在處理的 `/api/*` 排除快取、`activate` 清除舊快取）從未在真實環境跑過，Railway 部署後必須重新走一次階段 14 的 SW 手動驗證步驟
-- [ ] 確認 Railway 實際配置的 worker 數量——這是 2.2.3 節粗細節流設計「共用 IP 不會被誤傷」推論的前提假設，worker 數量若跟本機測試環境差異很大，門檻（粗網 20 次）可能需要重新校準
+- [ ] **確認 Service Worker 在 HTTPS 下的實際行為**——Service Worker 只在 HTTPS（或 `localhost`）下運作，本機一直是 HTTP 環境，代表 PWA 快取行為（含 5.4 節當作安全機制在處理的 `/api/*` 排除快取、`activate` 清除舊快取）從未在真實環境跑過，Render 部署後必須重新走一次階段 14 的 SW 手動驗證步驟
+- [ ] 確認 Render 實際配置的 worker 數量——這是 2.2.3 節粗細節流設計「共用 IP 不會被誤傷」推論的前提假設，worker 數量若跟本機測試環境差異很大，門檻（粗網 20 次）可能需要重新校準
 
-## 階段 0：資料庫前置確認（對應計畫 1.2、1.3、1.7）
+## 階段 0：資料庫前置確認（對應計畫 1.2、1.3、1.7）— 【第十一輪：已用 00_preflight_check.sql 完成，結果如下】
 
-- [ ] 確認 `devices` 現行主鍵/唯一約束的實際型態：情況 A（代理鍵，`device_model` 無額外 unique 約束）／情況 B（`device_model` 本身是約束對象，需連動切換）
-- [ ] 確認 `alarms` 現行主鍵是否確實是 `(device_model, code)`
+- [x] 確認 `devices` 現行主鍵/唯一約束的實際型態：**已確認為混合型**——主鍵 `id`（獨立代理鍵，如 `M-201`）不動，另有獨立 `UNIQUE(model)` 約束（注意：型號欄位實際叫 `model`，不是 `device_model`，見 PLAN 1.2 節命名決策）需切換為 `(department, model)`
+- [x] 確認 `alarms` 現行主鍵是否確實是 `(device_model, code)`：**已確認**，`alarms_pkey` 就是 `PRIMARY KEY (device_model, code)`，欄位命名與 PLAN 假設一致
 - [ ] Supabase 遷移前備份（快照或關鍵表 CSV 匯出），記錄回滾方式
-- [ ] 執行重複值預檢 SQL：`select device_model, code, count(*) from alarms group by device_model, code having count(*) > 1`，確認回傳 0 筆（若非 0，代表現行約束跟本計畫假設不符，需先查清楚再繼續）
+- [x] 執行重複值預檢：`00_preflight_check.sql` 已含此檢查，結果 **0 筆重複**，`alarms`/`devices` 均可安全繼續
+- [x] **【第十一輪額外查明】無外鍵指向 `alarms`/`devices` 舊主鍵**（0 筆），主鍵切換不用擔心連動；基準筆數 `alarms` 1759、`devices` 14、`ai_scans` 5，與既有記錄一致
+- [x] **【第十一輪額外查明】`devices.id` 是否為型號本身**：已確認不是（`id` 與 `model` 完全脫鉤），新機種安全建立不需要額外設計 id 產生規則
+- [x] **【第十一輪額外查明】`devices.line` 是否隱含跨部門資料**：已與使用者確認，`line`（2.1/2.2）只是同一部門內的產線分類標記，非隱藏的部門邊界，不影響現行「只有一個部門」的前提
 
 ## 階段 1：建表與加欄位（對應計畫 1.1、1.2、1.3、1.4、2.2.1）— 全部 nullable，零行為變更
 
@@ -77,8 +73,8 @@
 
 ## 階段 3：主鍵/唯一約束切換（對應計畫 1.2、1.3、第 7 節步驟 3）— 獨立階段，必須在階段 5（storage.py 含 `upsert_one()`）之前完成
 
-- [ ] 依情況 A/B 決定 `devices` 是否需要 drop 舊約束、切換為 `(department, device_model)` 複合唯一索引
-- [ ] `alarms` 主鍵從 `(device_model, code)` 切換為 `(department, device_model, code)`，執行並驗證
+- [ ] **【第十一輪：已確認為混合型，工作量比原假設輕】** `devices` 主鍵 `id` 不動，只需 `alter table devices drop constraint devices_model_key;` + `alter table devices add constraint devices_dept_model_key unique (department, model);`（注意欄位名是 `model`）
+- [ ] `alarms` 主鍵從 `(device_model, code)` 切換為 `(department, device_model, code)`，執行並驗證（欄位名確認無誤，直接照 PLAN 1.3 節做）
 - [ ] 確認無其他表以外鍵指向這兩張表的舊主鍵（若有，先 drop 再重建）
 
 ## 階段 4：後端 — 密碼與登入安全（對應計畫第 2 節，本清單風險最高的階段）
@@ -120,7 +116,7 @@
 - [ ] 新增 `superadmin_required`、`@public_endpoint` 裝飾器；`login_required`/`admin_required`/`superadmin_required`/`public_endpoint` 四者各自設 `_auth_level` 標記屬性（`"login"`/`"admin"`/`"superadmin"`/`"public"`）
 - [ ] **【第七輪關鍵】確認同一 rule 依 HTTP method 拆成獨立 view function**（例如 `GET /api/alarms/<department>/<device_model>/<code>` 用 `login_required`，同路徑 `PUT`/`DELETE` 用 `admin_required`），不可用單一函式處理多個 method 又想要不同權限層級——此決定務必在動手寫其餘端點前先確認，事後拆分成本高
 - [ ] `create_app()` 啟動時 fail-fast 檢查：生產環境未設 Supabase 直接中止，不悄悄降級
-- [ ] 更換 `FLASK_SECRET_KEY` 並確認寫死在 Railway 環境變數（非隨機產生，否則每次重啟/擴容全體被登出）
+- [ ] 更換 `FLASK_SECRET_KEY` 並確認寫死在 Render 環境變數（非隨機產生，否則每次重啟/擴容全體被登出）
 
 ## 階段 8：後端 — 各端點改動（對應計畫 4.4~4.7）
 
@@ -185,11 +181,12 @@
 
 ## 階段 12：哨兵驗證（對應計畫第 7 節步驟 6、8.2，採用 `sentinel_pack`）— 不需前端，維護窗口期間可執行
 
-- [ ] **【第十輪提醒】執行前先確認 `/Applications/My Project/sentinel_pack/` 是不是最新版**——截至第十輪，本機這份仍是 T-01~T-10／50 筆的舊版；作者表示已交付 v3（T-00~T-14、50 筆哨兵＋2 筆孤兒列，新增 `00_preflight_check.sql`、`(rule, method)` 版路由測試範本、`DEVICES_ROUTE_STYLE` 開關），若手上有 v3 檔案，先整包換掉本機這份再往下走
-- [ ] 讀取 `sentinel_pack/README.md` 當下版本，確認驗證項目與資料筆數（**下面這段第七輪的描述僅供理解舊版設計，換成 v3 後請以 v3 README 實際內容為準，不要沿用這裡列的 T-01~T-10／50 筆數字**——原舊版尚未涵蓋本計畫第四~六輪新增機制：登入分岔、`?dept=` 越權、`DeptScope.ALL` 孤兒列驗證等，若確認手上是 v3，這些項目應已被 T-00~T-14 涵蓋，不需再靠階段 9 結構測試補充；若仍是舊版才需要手動 curl 補充，不能只靠 `verify_isolation.sh` 全過就認定完整）
+- [x] **【第十輪→已完成】`sentinel_pack` 已於第十一輪換成 v3**（`/Applications/My Project/sentinel_pack/`，內含 `00_preflight_check.sql`、`tests/`），舊版備份於 `sentinel_pack_old_v1/`
+- [ ] 讀取 `sentinel_pack/README.md` v3 內容，確認驗證項目與資料筆數（T-00~T-14、50 筆哨兵＋2 筆孤兒列）
+- [ ] **【第十一輪關鍵】`01_seed_sentinel.sql` 的 `devices` INSERT 段落，執行前務必核對是否已依實際 schema 更新**——正式 `devices` 表欄位是 `id`（PK，需明確給值）/`model`（非 `device_model`）/`category`/`line`，若 seed 腳本仍寫 `device_model` 或未給 `id`，INSERT 會直接失敗，需先手動修正
 - [ ] `pip install werkzeug>=3.0 && python gen_hashes.py` 產生密碼雜湊（隨機產生，不寫死進檔案）
 - [ ] 替換 `01_seed_sentinel.sql` 三個佔位字串（`__PW_HASH__`/`__ADMIN_PW_HASH__`、`__HOME_DEPT__`、`__COLLIDE_CODE__`）
-- [ ] 對照 Supabase 實際 schema 檢查各段 INSERT 假設欄位是否吻合（`alarm_views` 是計數表還是事件表要特別確認）
+- [ ] 對照 Supabase 實際 schema 檢查各段 INSERT 假設欄位是否吻合（`alarm_views` 是計數表還是事件表要特別確認；`devices` 段落見上一條）
 - [ ] 記錄 Dashboard 基準值（今日掃描數、機種數、Top10）
 - [ ] 執行 `01_seed_sentinel.sql`，確認自我檢查印出的合計筆數與 `null_dept_devices=0`（實際數字以套件當下版本為準）
 - [ ] `export` 密碼環境變數，執行 `verify_isolation.sh`，全數項目 exit 0
@@ -255,7 +252,7 @@
 ## 附註
 
 - **【第九輪定案】階段 -1 已從「待專家決策」轉為具體步驟**：採選項甲（先 commit 舊變更當基準），`.gitignore` 必須先於 `git add` 寫好（防祕密進歷史），commit 後打 `pre-multitenancy` tag。往後每階段一個 commit、每個部署點一個 tag，不開 branch
-- **【第八輪新增】階段 -1（git 基準點）與階段 -0.5（Railway 部署）必須在階段 0 之前完成**——這兩個是先前版本清單完全缺漏的前置階段，PLAN 明確要求 Railway 在多部門改造前完成，git 基準點則是階段 10/11 分兩步部署設計能不能真正回滾的前提
+- **【第八輪新增】階段 -1（git 基準點）與階段 -0.5（Render 部署）必須在階段 0 之前完成**——這兩個是先前版本清單完全缺漏的前置階段，PLAN 明確要求 Render 在多部門改造前完成，git 基準點則是階段 10/11 分兩步部署設計能不能真正回滾的前提
 - **【第八輪新增】階段 11～14 是同一個維護窗口，開始前先確認當天做得完，不要中途收工**——這段期間唯一部門的系統完全無法使用（登入頁與 API 路由形狀同時變動），細節見階段 11 前的警示區塊
 - 每個階段完成後才進入下一階段，尤其：
   - 階段 3（主鍵切換）必須在階段 5（`storage.py` 含 `upsert_one()`）之前完成
@@ -263,4 +260,6 @@
 - 階段 10、11 之間刻意分兩步部署，讓過濾邏輯上線時全公司仍只有一個部門，任何 bug 表現成「本部門看不到自己資料」而非「跨部門洩漏」；**兩者改動必須落在不同 commit，否則無法真正部署到「只有 storage.py 生效」的中間點**（見階段 -1、階段 10）
 - **【第十輪新增】階段 14 跨帳號測試前，記得臨時把哨兵部門 `hidden` 改 `false`，測完立刻改回 `true`**——否則登入頁選不到第二個部門帳號，這個測試步驟做不了（見階段 14）
 - **【第十輪提醒】階段 12 執行前，先確認本機 `sentinel_pack` 是不是作者已交付的 v3**（T-00~T-14、含 `00_preflight_check.sql`）——本機截至第十輪仍是舊版 T-01~T-10，換成 v3 後清單裡「以 README 當下版本為準」的寫法會自動對上新內容，不需要再改文字（見階段 12）
-- 完整審查對照見 `PLAN_department_isolation.md` 附錄（共十輪審查）
+- **【第十一輪新增】`devices` 表實際欄位是 `model`，不是 `device_model`**（`alarms` 才是 `device_model`）——PLAN 全文 `devices` 相關 SQL 已改用 `model`，路由/API 層維持 `device_model` 名稱但經由 `storage.py` 的 `_row_to_device()` 做唯一轉換點；`devices` 主鍵切換（階段 3）比原假設輕，只需 drop/add unique 約束兩行，不動主鍵（見 PLAN 1.2、3.1.1 節）
+- **【第十二輪新增】部署平台由 Railway 改回 Render**（成本考量；`git log` 顯示這本來就是專案原本的臨時方案，這次是轉正）——全文所有 Railway 字樣已置換為 Render，階段 -0.5 執行時需另外建立 Render 的部署設定（`render.yaml` 或後台手動設定），並確認是否要用免費層＋防休眠 cron（見 PLAN 第十二輪附錄）
+- 完整審查對照見 `PLAN_department_isolation.md` 附錄（共十二輪審查）

@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: alarm-system
+    runtime: python
+    plan: free
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: gunicorn --chdir backend --bind 0.0.0.0:$PORT app:app
+    healthCheckPath: /api/server-url
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: FLASK_SECRET_KEY
+        sync: false
+      - key: LOGIN_PASSWORD
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      # PUBLIC_URL 不需手動設定 —— backend/app.py 的 /api/server-url 端點
+      # 優先讀取 Render 自動注入的 RENDER_EXTERNAL_URL，PUBLIC_URL 僅作為
+      # 非 Render 平台時的備援，可留空

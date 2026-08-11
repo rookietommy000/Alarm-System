@@ -51,7 +51,7 @@
 - ⏸ **個人帳號層級稽核身份**（GMP `confirmed_by` 目前只做到部門層級，如 `"2.1線/admin"`；若日後稽核需要追蹤到個人，需另外設計使用者帳號系統——這是已知限制，非本次疏漏）
 
 ### ⬜ 尚未做，本次規劃前的待辦
-- ⬜ **正式部署到 Railway**（目前僅本機區網運作，電腦關機/換網路即斷線）— **確認在多部門改造前先完成**：理由不只是避免同時改兩件大事，更重要的是隔離驗證（第 8 節）需要對正式環境的 Supabase 跑才有意義，且部署後才會遇到 cookie Secure、反向代理等環境差異，這些跟登入機制改動同屬一塊，先踩完比較好
+- ⬜ **正式部署到 Render**（目前僅本機區網運作，電腦關機/換網路即斷線）— **確認在多部門改造前先完成**：理由不只是避免同時改兩件大事，更重要的是隔離驗證（第 8 節）需要對正式環境的 Supabase 跑才有意義，且部署後才會遇到 cookie Secure、反向代理等環境差異，這些跟登入機制改動同屬一塊，先踩完比較好
 - ⬜ **【第八輪審查發現】專案已是 git repo（`main` 分支，有 `origin` 遠端），但有一大批從先前多次對話累積、從未 commit 過的變更**（Dashboard 重構、AI 管線、RWD 修正、`data/alarms.json`/`data/devices.json` 刪除等，`git status` 已確認）。在動工多部門隔離之前，這批舊變更**如何處理待專家決定**（先 commit 當基準點，或先確認內容後再說）——這件事必須先解決，否則階段 10/11「刻意分兩步部署以便精確回滾」的設計會失去意義（沒有乾淨的基準線，無法區隔「舊工作的問題」與「這次隔離改動的問題」）
 
 ---
@@ -97,27 +97,45 @@ create table departments (
 
 **【審查修正】`active` 與 `hidden` 是兩個獨立的軸**：原設計只有 `active`，公開登入清單（4.7 節）過濾 `active=true`。但哨兵/測試部門需要「能登入（`active=true`）同時不出現在下拉選單（`hidden=true`）」——這兩個需求無法用單一旗標同時滿足：設 `active=true` 會讓所有正式部門使用者在登入頁看到「這個陌生部門是什麼」，設 `active=false` 又根本登不進去、驗證做不了。因此拆成兩個獨立欄位，`sentinel_pack` 的 `01_seed_sentinel.sql` 已經是這樣設計（`hidden=true`），本計畫的表結構需要跟上。
 
-#### 1.2 `devices` 表加欄位【審查修正：唯一約束沒跟著 1.3 一起改，會讓 1.3 的前提無法成立】
+#### 1.2 `devices` 表加欄位【第十一輪：已用 `00_preflight_check.sql` 確認實際 schema，取代先前的假設性描述】
 
-**問題**：1.3 節決定「`device_model` 允許跨部門重複」，但如果 `devices` 表現在的主鍵/唯一約束就是 `device_model` 本身（很可能是，因為現行系統只有一個部門），這個約束不會因為 `alarms` 表怎麼改就自動跟著變。第二個部門要建立同名機種（例如 `PILM003`）時，會在 `INSERT INTO devices` 這一步就直接被唯一約束擋下，整個 1.3 節「允許跨部門同名」的設計會在最前面就卡死，不會等到 `alarms` 表才出問題。
+**問題**：1.3 節決定「`device_model` 允許跨部門重複」，但如果 `devices` 表現在的唯一約束就綁在型號欄位上，這個約束不會因為 `alarms` 表怎麼改就自動跟著變。第二個部門要建立同名機種時，會在 `INSERT INTO devices` 這一步就直接被唯一約束擋下，整個 1.3 節「允許跨部門同名」的設計會在最前面就卡死。
 
-**修正**：`devices` 表要跟 `alarms` 做同樣的事——唯一約束範圍從單獨的 `device_model`（若現行是這樣）改成 `(department, device_model)`：
+**【第十一輪確認的實際現況，取代原本的情況 A/B 二選一假設】** 執行 `00_preflight_check.sql`（`sentinel_pack` v3）後，`\d devices` 顯示：
+```
+Table "public.devices"
+  Column  | Type | Nullable | Default
+----------+------+----------+----------
+ id       | text | not null |
+ model    | text | not null |
+ category | text | not null | ''::text
+ line     | text | not null | ''::text
+Indexes:
+    "devices_pkey" PRIMARY KEY, btree (id)
+    "devices_model_key" UNIQUE CONSTRAINT, btree (model)
+```
+
+實際情況是**混合型**，比原先預想的情況 A（純代理鍵）或情況 B（型號本身是約束對象）都窄：**主鍵是獨立代理鍵 `id`（例如 `M-201`），另外有一個獨立的 `UNIQUE (model)` 約束**——`id` 完全不受這次改動影響，只需要把 `model` 的唯一範圍從全域收窄成 `(department, model)`：
+
 ```sql
 alter table devices add column department text references departments(id);
 -- 遷移驗證無 NULL 後才執行：
 -- alter table devices alter column department set not null;
 create index idx_devices_department on devices(department);
 
--- 【審查修正】唯一約束改成複合鍵，允許不同部門有同名 device_model：
--- 若現行 devices 的主鍵/唯一約束就是 device_model（或 id 以外還有 device_model 的 unique 約束），
--- 需要先確認現況再決定怎麼改：
---   情況 A：devices.id 已經是獨立的代理鍵（例如 UUID 或流水號），device_model 只是一般欄位、
---           沒有額外的 unique 約束 → 只需新增 create unique index，不需要動主鍵
---   情況 B：device_model 本身就是主鍵或帶 unique 約束 → 需要 drop 該約束，
---           改建 (department, device_model) 的複合唯一索引，跟 1.3 節 alarms 主鍵切換同步處理
-create unique index idx_devices_dept_model on devices(department, device_model);
+-- 主鍵 id 不動；只需 drop 舊的全域唯一約束、換成複合唯一約束
+alter table devices drop constraint devices_model_key;
+alter table devices add constraint devices_dept_model_key unique (department, model);
 ```
-**執行前必須先確認現行 `devices` 表的實際約束是情況 A 還是情況 B**（`\d devices` 或 Supabase Dashboard 查看），這會決定是否需要連動主鍵切換——若是情況 B，這個改動要併入 1.3 節的主鍵切換階段一起做（見第 7 節「2.5 主鍵切換」），不能只加新索引就當作完成。
+
+**額外查證：`devices.id` 是否為型號本身（會影響新機種能否安全建立）**——已查明 `id` 為獨立代理鍵（如 `M-201`、`M-501`），與 `model` 完全脫鉤，14 筆現有資料印證無誤。這代表第二部門建立同名機種時，只要給一個新的 `id`（沿用現行流水號風格，或改用 UUID 皆可），`(department, model)` 複合唯一約束就能正常運作，**不需要另外設計新機種的 id 產生規則**——這件事原本被列為「必須先查清楚」的風險項，查證後確認不成立，故不再需要額外處理。
+
+**【第十一輪：欄位命名不一致，採用「PLAN 改用實際欄位名」原則】** `devices` 表實際欄位是 `model`，不是 `device_model`（`alarms` 表則確實是 `device_model`，兩表命名不一致，非統一疏漏）。**決策：不改資料庫欄位名**——現行系統已上線在跑，為了命名整齊去 rename 正式表欄位，是在安全邊界工程之外額外引入一個對現行功能有實際風險的改動，不符合這次工程「只動安全邊界，不做順手清理」的原則（呼應 5.1 節「不順便改前端架構」的同一條理由）。因此：
+- 本計畫所有涉及 `devices` 表的 SQL，一律使用 `model`（而非 `device_model`）
+- API／路由層的 `device_model` 這個名字維持不變（它是應用層的邏輯命名，不代表 DB 欄位名必須一致），但需在 `storage.py` 有一個唯一的轉換點做正規化，避免 `model` 這個名字擴散到十幾個呼叫點（見 3.1 節新增的 `_row_to_device()` 說明）
+- 若日後決定要讓兩表命名徹底一致（`ALTER TABLE devices RENAME COLUMN model TO device_model`），列為多部門穩定運作後的獨立清理工作，不在本次範圍內
+
+**`devices.line` 欄位確認與 department 無關**——`00_preflight_check.sql` 順帶查出 `devices` 還有一個 `line`（產線）欄位，14 筆資料分成 `2.1`／`2.2` 兩組各 7 筆，一度懷疑這兩組線代表隱藏的跨部門混合資料。**已與使用者確認：`2.1`／`2.2` 只是同一個使用單位內的產線分類標記，不代表不同的登入/權限邊界**，不需要當作部門拆分的依據。`department` 是權限與資料隔離的邊界，`line` 是部門內部的產線分類，一個部門可能有多條線——兩者關係在此明確記錄，避免日後被誤認為同一件事。
 
 #### 1.3 `alarms` 表【審查修正：推翻原「不加欄位」設計】
 
@@ -297,7 +315,7 @@ def assert_session_valid() -> None:
 
 **修正**：改用**漸進式延遲**而非硬鎖——第 N 次失敗後，該 IP+部門組合再次嘗試登入需要等待 `2^N` 秒（上限例如 60 秒封頂，不無限增長），成功登入後計數歸零。失敗紀錄照樣寫入（`alarm_history` 或新開 `login_attempts` 表），供總管查核異常嘗試模式。真正的硬鎖只保留給「單一 IP 極高頻請求」這種明顯自動化攻擊樣態（例如每秒數十次），用另一層更粗的節流規則處理，不與正常人為誤觸的節流邏輯混在一起。
 
-**【審查修正】延遲不能用 `sleep()` 在請求處理中實作**——若在 Flask view function 裡真的 `time.sleep(60)`，會整整佔住一個 worker process/thread 60 秒不釋放。Railway 上可用的 worker 數量有限，攻擊者只要開幾十個並行連線去觸發這個延遲，就能把所有 worker 佔滿、讓正常使用者完全連不上——這比原本要防的「硬鎖单一部門」更嚴重，等於自己做了一個更好用的阻斷服務工具。
+**【審查修正】延遲不能用 `sleep()` 在請求處理中實作**——若在 Flask view function 裡真的 `time.sleep(60)`，會整整佔住一個 worker process/thread 60 秒不釋放。Render 上可用的 worker 數量有限，攻擊者只要開幾十個並行連線去觸發這個延遲，就能把所有 worker 佔滿、讓正常使用者完全連不上——這比原本要防的「硬鎖单一部門」更嚴重，等於自己做了一個更好用的阻斷服務工具。
 
 正確做法：**伺服器不等待，直接回應**。還在延遲窗口內的請求，伺服器立即回 `429 Too Many Requests`，並帶上標準的 `Retry-After: <秒數>` 標頭告知客戶端該等多久再重試。等待這件事完全交給客戶端（登入頁的前端邏輯讀取 `Retry-After` 值，倒數計時後才允許使用者再次送出表單），伺服器端的請求處理本身是即時返回、不佔用資源的，不管失敗次數再多，都不會有 worker 被卡住。
 
@@ -416,9 +434,30 @@ delay        = min(max(delay_fine, delay_coarse), 60)
 POST /rest/v1/alarms?on_conflict=department,device_model,code
 Prefer: resolution=merge-duplicates
 ```
-`devices` 同理：`?on_conflict=department,device_model`
+`devices` 表【第十一輪修正：欄位實際叫 `model`，見 1.2 節命名不一致決策】：`?on_conflict=department,model`
 
-若改走直連 Postgres 下原生 SQL，一樣寫死 `ON CONFLICT (department, device_model, code)` 欄位組合，不使用 `ON CONFLICT ON CONSTRAINT <名稱>`（約束名稱會在主鍵切換時改變）。
+若改走直連 Postgres 下原生 SQL，一樣寫死 `ON CONFLICT (department, device_model, code)`（`alarms`）／`ON CONFLICT (department, model)`（`devices`）欄位組合，不使用 `ON CONFLICT ON CONSTRAINT <名稱>`（約束名稱會在主鍵切換時改變）。
+
+#### 3.1.1 【第十一輪新增】`devices` 讀取正規化：`_row_to_device()`，命名不一致的唯一轉換點
+
+**問題**：1.2 節決定 DB 欄位維持 `model`（不改資料庫），但 API／路由層對外一律使用 `device_model`（見 4.4 節路由設計）。若沒有一個集中的轉換點，`model` 這個名字會散落到 `app.py`、前端、`sentinel_pack` 驗證腳本等十幾個地方——一旦散布開，日後想統一命名（見 1.2 節「長期清理」選項）就會變成到處要改的麻煩事，而不是改一行。
+
+**修正**：整個系統只有 `storage.py` 裡的一個函式知道 `devices` 表的欄位實際叫 `model`：
+```python
+def _row_to_device(row: dict) -> dict:
+    """DB 讀出來的 devices 列一律經過這裡，對外統一用 device_model 這個 key。
+    這是系統裡唯一知道 devices 表欄位實際叫 model 的地方（見 PLAN 1.2 節命名決策）。"""
+    return {
+        "device_model": row["model"],
+        "id":           row["id"],
+        "category":     row["category"],
+        "line":         row["line"],
+        "department":   row["department"],
+    }
+```
+寫入方向同理：`devices_store` 的 create/update 方法接收 `device_model` 參數，內部組 SQL/PostgREST payload 時才轉成 `model` 欄位名，呼叫端全程看不到 `model`。
+
+**【重要，會改變現有行為，需要在階段 5 動手前確認】** 目前 `app.py` 的機種相關端點（`POST /api/devices` 等）是直接用 `body.get("model")` / 回應裡放 `"model": model` 這個 key（現有程式碼已如此，非本次改動引入），也就是說**現有 API 回應目前用的就是 `model`，不是 `device_model`**。導入 `_row_to_device()` 正規化後，`devices` 相關端點的回應格式會從 `model` 變成 `device_model`——這是一個**會影響現有前端的行為變更**，不是無痛的內部重構。階段 5 實作前，需要先確認目前 `frontend/index.html`/`dashboard.html` 有多少地方讀取 `model` 這個 key，一併同步修改，或在轉換函式裡過渡期兩個 key 都給（`{"device_model": ..., "model": ...}`）避免一次性破壞前端。
 
 #### 3.2 【第四輪審查修正】`JsonStore` 維持單租戶，開發環境另闢，不讓 JsonStore 承擔多部門角色
 
@@ -589,12 +628,12 @@ AlarmApi.post(`/api/devices/${viewing}`, {device_model: 'PILM003'})
 **UI 連帶決定**：超管選了 `?dept=__all__`（見 5.2.1）時沒有目標部門，「新增機種／新增警報」按鈕必須停用並提示「請先選擇部門」——這不是額外限制，是把上面「總管寫入必須明確指定目標部門」這條規則在 UI 上顯性化，否則使用者要按下按鈕才拿到 400，體驗差且看起來像 bug。
 
 #### 4.2 【審查補強】啟動時 fail fast
-`create_app()` 啟動階段新增檢查：若環境變數標示這是生產環境（例如 `FLASK_ENV=production` 或偵測到 Railway 的環境變數）但 `_use_supabase()` 回 `False`，直接拋例外中止啟動，不允許悄悄降級成 JsonStore 單租戶模式在生產環境跑。
+`create_app()` 啟動階段新增檢查：若環境變數標示這是生產環境（例如 `FLASK_ENV=production` 或偵測到 Render 的環境變數）但 `_use_supabase()` 回 `False`，直接拋例外中止啟動，不允許悄悄降級成 JsonStore 單租戶模式在生產環境跑。
 
 #### 4.3 【審查補強】部署時清空既有 session
 多部門改造上線當下，**更換 `FLASK_SECRET_KEY`**，讓所有舊 cookie 一次性失效，避免任何人帶著改造前簽發的 session 跨過這個邊界（此時 session 裡沒有 `department` 欄位，若沒清空、又搭配 4.1 的顯式失敗，行為上會是全部被踢出重新登入，這是預期且正確的）。
 
-**【審查修正】`FLASK_SECRET_KEY` 部署後必須是固定的環境變數**，不可讓應用程式啟動時隨機產生——若隨機產生，每次 Railway 重啟或擴容都會讓所有使用者被登出，這在正式環境是不能接受的干擾。多部門上線那一次性換新之後，往後就固定寫在 Railway 的環境變數設定裡，不再變動（除非有明確理由要強制全體重新登入）。
+**【審查修正】`FLASK_SECRET_KEY` 部署後必須是固定的環境變數**，不可讓應用程式啟動時隨機產生——若隨機產生，每次 Render 重啟或擴容都會讓所有使用者被登出，這在正式環境是不能接受的干擾。多部門上線那一次性換新之後，往後就固定寫在 Render 的環境變數設定裡，不再變動（除非有明確理由要強制全體重新登入）。
 
 #### 4.4 各端點改動摘要
 
@@ -675,7 +714,7 @@ DELETE /api/admin/departments/<id>                     硬刪除，僅 purgeable
 
 **背景**：Vue 3 CDN 沒有模組系統，但純 `<script src>` 一直可用，不需要 ESM、不需要打包、不需要改任何部署方式。原規劃若照「超管在每個列表/篩選器/新增對話框都多一個部門欄位」的方式做，會讓 `dashboard.html` 大幅膨脹——每個列表要加部門欄位、每個篩選器要加部門維度、每個統計要決定是否跨部門加總。改採以下兩個決策後，前端實際增量遠小於此。
 
-**不做的事（刻意按住）**：不藉這次機會把前後台拆乾淨、上 build step、模組化。理由與「Railway 部署要在多部門改造前先做完」同一條——不要同時改兩件大事。現在動的是安全邊界，若同時換前端架構，出問題時分不清是隔離邏輯寫錯還是打包搞壞的。抽 `js/api.js` 是重構的最小增量，不改變任何既有結構，隨時可以停在那裡；等多部門穩定跑一段時間，再回頭談要不要進一步拆。
+**不做的事（刻意按住）**：不藉這次機會把前後台拆乾淨、上 build step、模組化。理由與「Render 部署要在多部門改造前先做完」同一條——不要同時改兩件大事。現在動的是安全邊界，若同時換前端架構，出問題時分不清是隔離邏輯寫錯還是打包搞壞的。抽 `js/api.js` 是重構的最小增量，不改變任何既有結構，隨時可以停在那裡；等多部門穩定跑一段時間，再回頭談要不要進一步拆。
 
 #### 5.1 抽出 `frontend/js/api.js`：統一封裝，兩個 HTML 共用
 
@@ -1051,7 +1090,7 @@ def test_resolve_target_department_does_not_read_request_args():
 **🟡 小項（已納入）**
 - `department` 參數遷移期需預設值、正式上線後應拿掉改必填 → 見 4.8
 - 超管密碼比對改用 `hmac.compare_digest` → 見第 2 節
-- Railway 部署後 cookie 需設 `Secure`/`HttpOnly`/`SameSite=Lax` → 併入 Railway 部署工作項目，不重複列在此規劃（多部門規劃聚焦隔離邏輯本身）
+- Render 部署後 cookie 需設 `Secure`/`HttpOnly`/`SameSite=Lax` → 併入 Render 部署工作項目，不重複列在此規劃（多部門規劃聚焦隔離邏輯本身）
 - GMP 稽核只到部門層級是已知限制，非疏漏 → 已寫入「已知決定不做」章節，供稽核時佐證決策紀錄
 
 ---
@@ -1082,7 +1121,7 @@ def test_resolve_target_department_does_not_read_request_args():
 1. **`devices` 的唯一性約束沒跟著改，會讓 1.3 的前提在最前面就卡住**——`alarms` 改了複合鍵，但 `devices` 若現行約束就是單獨的 `device_model`，第二部門連建立同名機種都會被擋下，1.3 節「允許跨部門同名」的設計根本走不到 `alarms` 那一步就先失敗 → `devices` 唯一約束一併改為 `(department, device_model)`，並列出情況 A（代理鍵，只需加索引）／情況 B（`device_model` 本身是約束對象，需要連動切換）兩種可能，執行前先確認現況（見 1.2）
 2. **主鍵切換「必須獨立列一個部署階段」的指示沒有真的出現在第 7 節編號清單裡**——1.3 節文字寫了要求，但清單本身沒有對應步驟，等於指示沒被套用 → 插入為新的第 3 步「主鍵/唯一約束切換」，明確排在 `storage.py` 部署（含 `upsert_one()`）之前，後續步驟編號全部順移（見第 7 節）
 3. **`/api/whoami`、`/api/departments/public` 會讓 8.1 的路由白名單測試直接失敗**——兩者刻意不掛驗證裝飾器，但測試只認得 `login`/`admin`/`superadmin` 三種層級，白名單裡無處安放這兩個公開端點 → 新增第四種 `public` 層級，並用主動宣告的 `@public_endpoint` 標記裝飾器區分「刻意公開」與「忘記加裝飾器」，兩者不能共用「沒有標記」這個狀態（見 8.1、4.6、4.7）
-4. **`2^N` 秒延遲若用 `sleep()` 實作，會佔用 Flask worker，反而製造比原本硬鎖更好用的阻斷手段**——Railway worker 數量有限，攻擊者開幾十個連線觸發延遲就能把服務打滿 → 改為伺服器不等待、直接回 `429` + `Retry-After` 標頭，等待邏輯交給客戶端，伺服器請求處理保持即時返回、不佔用資源（見 2.2）
+4. **`2^N` 秒延遲若用 `sleep()` 實作，會佔用 Flask worker，反而製造比原本硬鎖更好用的阻斷手段**——Render worker 數量有限，攻擊者開幾十個連線觸發延遲就能把服務打滿 → 改為伺服器不等待、直接回 `429` + `Retry-After` 標頭，等待邏輯交給客戶端，伺服器請求處理保持即時返回、不佔用資源（見 2.2）
 5. **8.2 節「前提確認」段落是舊版殘留**，內容還停留在「反查模型會不會串」的舊設計，但 1.3 節已經決定 `alarms` 直接加 `department` 欄位、不用反查 → 重寫為撞名測試現在真正驗證的目標：過濾條件是否確實帶上 `department`，而不只是比對 `device_model`；`ACM001` INSERT 現在預期應該成功，若失敗代表複合唯一約束沒有正確套用，需要回頭檢查（見 8.2）
 
 ---
@@ -1116,7 +1155,7 @@ def test_resolve_target_department_does_not_read_request_args():
 1. **前端會因超管跨部門功能大幅膨脹**——若照「每個列表/篩選器/新增對話框都加部門欄位」的方式做 → 抽出 `frontend/js/api.js` 統一封裝 fetch（401 攔截、429 倒數、whoami 快取），兩個 HTML 反而變薄；超管改採「切換檢視部門」模式取代跨部門混合列表，既有畫面不用逐一加部門欄位（見 5.1、5.2）
 2. **檢視部門狀態存哪裡**——存 session 會造成分頁互相污染、同一 URL 回傳不同資料、違背整份規劃已建立的「拒絕隱性狀態」原則 → 改用 URL query param（`?dept=`）為唯一權威，`sessionStorage` 僅作重載後補位；`__all__` 必須是明確選擇而非參數遺失的預設值（見 5.2.1）
 3. **`confirmed_by` 組法在超管情境下會產生 `"None/admin"`** → 改用寫入目標部門＋含 `superadmin` 的三態角色組成（見 5.2.2）
-4. **不順便改前端架構**——刻意不藉這次機會拆前後台、上 build step、模組化，理由與「Railway 部署先做完」同一條：不要同時改兩件大事（見第 5 節開頭）
+4. **不順便改前端架構**——刻意不藉這次機會拆前後台、上 build step、模組化，理由與「Render 部署先做完」同一條：不要同時改兩件大事（見第 5 節開頭）
 
 第六輪審查（`resolve_target_department()` 來源清理、登入節流的枚舉防護與繞過修正）：
 
@@ -1151,7 +1190,7 @@ def test_resolve_target_department_does_not_read_request_args():
 1. **舊版 `app.py` 部署（原階段 11）與前端部署（原階段 13/14）之間存在一段「登入頁還沒改、但後端路由已經變了」的空窗**——`/login` 現在需要 `department` 欄位，舊版 `login.html` 不會送 → 登入直接失敗；`/api/alarms/<device_model>/<code>` 舊路由已不存在（改三段式）→ 舊版前台警報詳情、後台編輯全部 404。若中途收工，唯一使用部門會在這段期間完全無法使用系統 → **採方案 B：階段 11~14（app.py 部署 → 哨兵驗證 → 前端部署 → SW 手動驗證）視為同一個維護窗口，一次做完再收工**，不拆分成「先讓登入能用」的中間狀態——半殘可用比乾脆離線更容易引發誤操作或困惑。EXECUTION_CHECKLIST 附註需明確寫下這條「開始前先確認當天有足夠時間，不要中途收工」
 
 **🟠 清單缺兩個前置階段（已修正）**
-2. **Railway 部署完全沒有出現在 EXECUTION_CHECKLIST 裡**——PLAN 第 54 行明確要求「多部門改造前先完成」，但清單直接從階段 0 開始，只在階段 7 順帶提到環境變數 → 新增階段 -0.5「Railway 正式部署」，含環境變數搬遷、cookie 屬性設定、**SW 在 HTTPS 下的實際行為確認**（本機 HTTP 環境下 Service Worker 從未真正驗證過運作情形，而 5.4 節把它當安全機制在處理，這件事的可信度建立在「它真的有在 HTTPS 下跑過」）、worker 數量確認（影響 2.2.3 節流設計的前提假設）
+2. **Render 部署完全沒有出現在 EXECUTION_CHECKLIST 裡**——PLAN 第 54 行明確要求「多部門改造前先完成」，但清單直接從階段 0 開始，只在階段 7 順帶提到環境變數 → 新增階段 -0.5「Render 正式部署」，含環境變數搬遷、cookie 屬性設定、**SW 在 HTTPS 下的實際行為確認**（本機 HTTP 環境下 Service Worker 從未真正驗證過運作情形，而 5.4 節把它當安全機制在處理，這件事的可信度建立在「它真的有在 HTTPS 下跑過」）、worker 數量確認（影響 2.2.3 節流設計的前提假設）
 3. **專案已是 git repo（`main` 分支、有 `origin` 遠端），但有一大批先前多次對話累積、從未 commit 過的變更**——若不處理就直接動工，階段 10/11「刻意分兩步部署以便精確回滾」的設計精神會失效（無法區隔「舊工作的問題」vs「這次隔離改動的問題」，出問題也無法用 git 做二分法定位）→ 新增階段 -1「建立乾淨的版本控制基準點」，**這批舊變更如何處理（先 commit 當基準、或先確認內容）留給專家判斷**，本計畫僅記錄此發現與待決策狀態，不預設答案
 
 ---
@@ -1162,7 +1201,7 @@ def test_resolve_target_department_does_not_read_request_args():
 
 **🔴 commit 前必須先做的兩件事（已修正）**
 1. **commit 之前要先確認現況真的能跑，不能直接把未驗證過的累積變更當基準**——這批變更是多次對話交織產生的，若夾雜半完成的東西（mock 模式忘了關、debug print、改到一半的函式），commit 成基準線等於把問題烘進基準裡，之後多部門改造出錯時分不清是新改的還是本來就壞的 → commit 前花 20 分鐘實測：拍照分析、警報搜尋、後台四個分頁、清理過期資料逐一跑過；已知半完成的部分三選一（改完/還原/照樣 commit 但訊息寫清楚），不默默帶過（見階段 -1）
-2. **`.gitignore` 必須先於 `git add` 寫好，順序不能顛倒**——祕密一旦進了 git 歷史就很難清乾淨，比「commit 怎麼切」重要得多。專案的 `.env` 含 Supabase key、Gemini API key、`LOGIN_PASSWORD`、`ADMIN_PASSWORD`（之後還會加 `SUPERADMIN_PASSWORD`），即使目前不打算推上 GitHub 也不該進版本庫——Railway 部署很可能會接 GitHub 遠端，屆時才處理就晚了。`data/backup/` 內有原廠文件 PDF，一旦進了 git 歷史就永遠留在裡面，體積只會增不會減 → `.gitignore` 排除 `.env`/`.env.local`/`data/`/`data/backup/`/`__pycache__/`/`*.pyc`/`.DS_Store`/`venv/`，並建立 `.env.example`（只列 key 名稱無值）一併 commit，供換機器/交接時參考（見階段 -1）
+2. **`.gitignore` 必須先於 `git add` 寫好，順序不能顛倒**——祕密一旦進了 git 歷史就很難清乾淨，比「commit 怎麼切」重要得多。專案的 `.env` 含 Supabase key、Gemini API key、`LOGIN_PASSWORD`、`ADMIN_PASSWORD`（之後還會加 `SUPERADMIN_PASSWORD`），即使目前不打算推上 GitHub 也不該進版本庫——Render 部署很可能會接 GitHub 遠端，屆時才處理就晚了。`data/backup/` 內有原廠文件 PDF，一旦進了 git 歷史就永遠留在裡面，體積只會增不會減 → `.gitignore` 排除 `.env`/`.env.local`/`data/`/`data/backup/`/`__pycache__/`/`*.pyc`/`.DS_Store`/`venv/`，並建立 `.env.example`（只列 key 名稱無值）一併 commit，供換機器/交接時參考（見階段 -1）
 
 **🟠 commit 切分與往後紀律（已修正）**
 3. **是否拆成多個 commit**——路徑好拆就拆（`backend/ai/`、`frontend/dashboard.html`、RWD 相關各一批），但不超過 15 分鐘成本。這些變更本來就是交織開發出來的，中間 commit 從未被單獨驗證過能不能跑，硬拆出來的中間狀態很可能根本啟動不了，`git bisect`（拆分 commit 的主要價值）在這裡沒有意義——拆分的價值只剩「文件性質」，commit message 寫清楚就達成同樣效果，不必為此耗費太多手工（見階段 -1）
@@ -1175,3 +1214,38 @@ def test_resolve_target_department_does_not_read_request_args():
 
 **🟡 階段 14 的跨帳號測試在哨兵部門身上做不了（已修正）**
 1. **`sentinel_pack` 的哨兵部門 `hidden=true` 是刻意設計（見 1.1、8.2）**，目的是讓它能登入但不出現在正式登入頁下拉選單裡，避免正式使用者看到陌生部門名稱產生疑惑。但這與 5.5 節（4.7 節路由對應）的 5.5 節 SW 驗證步驟 5「登出 A、登入 B」直接衝突——`/api/departments/public` 只回傳 `hidden=false` 的部門，哨兵部門不會出現在選單裡，維護窗口這個時間點又還沒有真實的第二部門可用，B 帳號無處可登入 → **採方案一**：測試前執行 `UPDATE departments SET hidden=false WHERE id='<哨兵部門id>'` 暫時讓哨兵部門出現，測完立即改回 `hidden=true`。比起把跨帳號測試延到階段 16（真實第二部門上線後）才做，這個做法不用調整維護窗口的結束點，也不需要在登入頁加一個保留的手動輸入部門 id 入口（會增加一個平常用不到、但長期存在的攻擊面）
+
+---
+
+第十一輪審查（首次針對正式 Supabase schema 實測，`00_preflight_check.sql` 揭露的落差）：
+
+**背景**：階段 -1（git 基準點）完成後，換上 `sentinel_pack` v3，執行其中的 `00_preflight_check.sql`（純唯讀，PLAN 1.7 節要求的遷移前預檢）——這是整份計畫從第一輪到第十輪以來，**第一次真正對正式 Supabase 資料庫查詢，而非憑推測撰寫 SQL**。結果揭露一個此前十輪審查都沒抓到的落差。
+
+**🔴 `devices` 表實際欄位名與 PLAN 全文假設不符（已修正）**
+1. **`devices` 表的型號欄位實際叫 `model`，不是 PLAN 全文統一使用的 `device_model`**（`alarms` 表則確實是 `device_model`，兩表命名本來就不同，非本次疏漏）。`\d devices` 顯示：`id text PRIMARY KEY`、`model text UNIQUE`、`category text`、`line text`。這代表 1.2 節先前所有 SQL 範例、3.1 節 `on_conflict` 參數、4.4 節路由設計裡凡是提到 `devices.device_model` 的地方，直接照抄執行都會因欄位不存在而報錯 → **決策：不改資料庫欄位名，PLAN 改用實際欄位名**——這是本次工程唯一不會碰觸正式表結構的選項，符合「只動安全邊界、不做順手清理」的既有原則（1.2 節新增完整說明）；新增 `_row_to_device()` 作為整個系統唯一知道 `model`/`device_model` 對應關係的轉換點（見 3.1.1 節），避免命名不一致擴散到十幾個呼叫點；順帶查明現有 `app.py` 的機種端點目前就是用 `model` 這個 key 對外回應，代表引入正規化會是一個**改變現有 API 回應格式的行為變更**，需在階段 5 動手前同步檢查前端
+
+**🟢 附帶的好消息：`devices` 主鍵切換比原先假設輕（已修正）**
+2. **原先 1.2/1.3 節的「情況 A / 情況 B」二選一假設，實際是介於兩者之間的混合型**——主鍵 `id` 是獨立代理鍵（如 `M-201`），與型號完全脫鉤；另外查明 `id` 不是型號本身，代表新機種只需給一個新 `id` 即可安全建立，不需要像原本擔心的那樣額外設計 id 產生規則 → 階段 3 的 `devices` 部分只需要 drop 舊 `UNIQUE(model)` 約束、建立 `(department, model)` 複合唯一約束兩行 SQL，主鍵完全不用動，比 PLAN 先前預期的工作量小（見 1.2 節）
+
+**🟡 `devices.line` 欄位一度疑似隱藏的跨部門資料，已排除（已修正）**
+3. **`00_preflight_check.sql` 順帶查出 `devices.line` 欄位分成 `2.1`／`2.2` 兩組各 7 筆**，一度懷疑現行系統其實已經混著兩個部門的資料在跑，而多部門隔離工程的必要性被低估了。**已與使用者確認：`line` 只是同一使用單位內部的產線分類標記，不是不同的登入/權限邊界**，不作為部門拆分依據 → 明確記錄 `department`（權限與隔離邊界）與 `line`（部門內產線分類）的關係，避免日後誤認兩者是同一件事（見 1.2 節）
+
+**待辦（列入階段 12 執行前提醒，非本輪修正範圍）**
+4. `sentinel_pack` v3 的 `01_seed_sentinel.sql` 目前假設 `devices` 表有 `device_model` 欄位，依本輪結論需要改用 `model`，且 `id` 欄位需明確給值（無預設值）——執行階段 12 前需要先核對 `01_seed_sentinel.sql` 是否已依這次查明的 schema 更新，若尚未更新，需要在灌入哨兵資料前手動修正這段 INSERT
+
+---
+
+第十二輪審查（部署平台決策反轉：Railway → Render，成本考量）：
+
+**決策：部署平台由 Railway 改為 Render**——原因是 Railway 的免費額度已不足以支撐長期正式運作，需要付費方案，而 `git log` 早先就已顯示這個專案原本就是接 Render（`cron-job.org` 防止 Render 休眠的既有機制），改回 Render 是回到原本的臨時方案並轉正，不是全新嘗試一個平台。
+
+**處理方式**：PLAN 與 EXECUTION_CHECKLIST 全文所有「Railway」字樣已統一置換為「Render」（階段 -0.5 標題、環境變數搬遷說明、worker 數量確認、`FLASK_SECRET_KEY` 固定值要求、cookie 設定前提、`.gitignore` 的 GitHub 遠端說明等）。這些引用全部是平台無關的通用部署概念（環境變數、cookie 屬性、worker pool 大小、固定 secret key），沒有 Railway 專屬語法混在文字說明裡，置換後內容邏輯不變、無需另外改寫論述。
+
+**已捨棄的產物**：先前已建立的 `railway.toml`（Nixpackage build/start command、健康檢查路徑設定）已刪除，未進入 git 版本控制，不留殘跡。
+
+**決策：沿用免費層 + `cron-job.org` 防休眠**，不升級付費層。理由：這是專案本來就在用的既有方案（`git log` 可見 `0ac91de 新增 /ping 端點供 cron-job.org 防止 Render 休眠`），多部門上線並不改變流量規模到需要付費層的程度，維持零額外成本；已知取捨是防休眠 cron 並非 100% 保證，偶爾仍可能遇到喚醒延遲，這點不視為需要立即解決的問題，先上線觀察，若後續使用者實際反應延遲造成困擾，再重新評估升級付費層（不在本次多部門隔離工程範圍內預先解決）。
+
+**待辦（列入階段 -0.5 執行前提醒）**：
+- 確認既有的 `/ping` 端點（`backend/app.py`，`0ac91de` commit 加入）在 Render 部署後仍正常運作，`cron-job.org` 的排程設定需要指向新的 Render 網域（若網域跟先前的臨時部署不同）
+- Render 的部署設定檔（`render.yaml` 或直接在 Render Dashboard 設定 build/start command）尚未建立，需要在階段 -0.5 實際操作時建立，取代原本規劃但已刪除的 `railway.toml`
+- `_lan_ip()`／`RENDER_EXTERNAL_URL` 相關的既有程式碼（`backend/app.py` 的 `/api/server-url` 端點）已經有 Render 環境變數的處理邏輯，這代表接回 Render 比接 Railway 更貼合現有程式碼、改動更少——這是決策反轉後意外發現的優點，值得記錄
