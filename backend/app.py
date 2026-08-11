@@ -1,3 +1,4 @@
+import json
 import os
 import socket
 from datetime import datetime, timezone
@@ -10,7 +11,7 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 from flask import Flask, abort, jsonify, redirect, request, send_from_directory, session, url_for
 from flask_cors import CORS
 
-from storage import alarms_store, audit_logger, devices_store, feedback_store, view_store
+from storage import ai_scan_store, alarms_store, audit_logger, devices_store, feedback_store, view_store
 
 BASE = Path(__file__).resolve().parent.parent
 FRONTEND = BASE / "frontend"
@@ -132,7 +133,7 @@ def create_app() -> Flask:
     # ── Read API (一般登入即可) ──────────────────────────────────────
 
     @app.get("/api/alarms")
-    @login_required
+
     def list_alarms():
         q = request.args.get("q", "").strip().lower()
         device = request.args.get("device", "").strip()
@@ -157,7 +158,7 @@ def create_app() -> Flask:
         return jsonify([a for a in items if match(a)])
 
     @app.get("/api/alarms/<device_model>/<code>")
-    @login_required
+
     def get_alarm(device_model: str, code: str):
         for a in alarms_store.load():
             if a["code"] == code and a.get("device_model") == device_model:
@@ -165,12 +166,43 @@ def create_app() -> Flask:
         abort(404, "找不到此警報代碼")
 
     @app.get("/api/devices")
-    @login_required
+
     def list_devices():
         return jsonify(devices_store.load())
 
+    @app.post("/api/devices")
+    @admin_required
+    def create_device():
+        body = request.get_json(silent=True) or {}
+        model = (body.get("model") or "").strip()
+        if not model:
+            abort(400, "model 為必填")
+        items = devices_store.load()
+        if any(d.get("model") == model for d in items):
+            abort(409, "機種已存在")
+        new_id = (body.get("id") or "").strip() or f"M-{model}"
+        device = {
+            "id": new_id,
+            "model": model,
+            "category": (body.get("category") or "").strip(),
+            "line": (body.get("line") or "").strip(),
+        }
+        items.append(device)
+        devices_store.save(items)
+        return jsonify(device), 201
+
+    @app.delete("/api/devices/<model>")
+    @admin_required
+    def delete_device(model: str):
+        items = devices_store.load()
+        new = [d for d in items if d.get("model") != model]
+        if len(new) == len(items):
+            abort(404, "找不到此機種")
+        devices_store.save(new)
+        return "", 204
+
     @app.get("/api/server-url")
-    @login_required
+
     def server_url():
         public = os.environ.get("RENDER_EXTERNAL_URL") or os.environ.get("PUBLIC_URL")
         if public:
@@ -222,7 +254,7 @@ def create_app() -> Flask:
         return "", 204
 
     @app.post("/api/feedback")
-    @login_required
+
     def submit_feedback():
         body = request.get_json(silent=True) or {}
         code = body.get("code", "").strip()
@@ -240,7 +272,7 @@ def create_app() -> Flask:
         return jsonify({"ok": True}), 201
 
     @app.get("/api/feedback/stats")
-    @login_required
+
     def feedback_stats():
         records = feedback_store.load()
         stats: dict[tuple, dict] = {}
@@ -254,7 +286,7 @@ def create_app() -> Flask:
         return jsonify(list(stats.values()))
 
     @app.post("/api/view")
-    @login_required
+
     def record_view():
         body = request.get_json(silent=True) or {}
         code = body.get("code", "").strip()
@@ -269,7 +301,7 @@ def create_app() -> Flask:
         return jsonify({"ok": True}), 201
 
     @app.get("/api/view/stats")
-    @login_required
+
     def view_stats():
         records = view_store.load()
         counts: dict[tuple, int] = {}
@@ -280,11 +312,173 @@ def create_app() -> Flask:
                   for k, v in sorted(counts.items(), key=lambda x: -x[1])]
         return jsonify(result)
 
+    @app.post("/api/analyze")
+    def analyze_image():
+        body = request.get_json(silent=True) or {}
+        image_b64 = body.get("image")
+        mime_type = body.get("mime_type", "image/jpeg")
+        known_model = (body.get("model") or "").strip() or None
+        if not image_b64:
+            abort(400, "image (base64) 為必填")
+        try:
+            from ai import run_pipeline
+            return jsonify(run_pipeline(image_b64, mime_type, known_model=known_model))
+        except ImportError as e:
+            abort(503, f"AI 模組未安裝：{e}")
+        except KeyError as e:
+            abort(503, f"缺少環境變數：{e}")
+        except Exception as e:
+            abort(500, f"AI 分析失敗：{e}")
+
+    @app.post("/api/confirm")
+    def confirm_scan():
+        """操作員確認 AI 結果正確（未修改），補寫 source=confirmed 記錄。"""
+        body = request.get_json(silent=True) or {}
+        scan_id = (body.get("scan_id") or "").strip()
+        model = (body.get("model") or "").strip()
+        confirmed_by = (body.get("confirmed_by") or "").strip()
+        if not scan_id or not model or not confirmed_by:
+            abort(400, "scan_id、model、confirmed_by 為必填")
+        try:
+            from ai import run_confirmation
+            raw_conf = body.get("model_conf")
+            result = run_confirmation(
+                scan_id=scan_id,
+                model=model,
+                alarms=body.get("alarms", []),
+                model_conf=int(raw_conf) if raw_conf is not None else None,
+                original_model=body.get("original_model"),
+                original_analyzer=body.get("original_analyzer"),
+                confirmed_by=confirmed_by,
+            )
+            return jsonify(result), 201
+        except Exception as e:
+            abort(500, f"確認記錄失敗：{e}")
+
+    @app.post("/api/correct")
+    def correct_scan():
+        """操作員修正 AI 辨識結果（MEM-002）。"""
+        body = request.get_json(silent=True) or {}
+        scan_id = (body.get("scan_id") or "").strip()
+        corrected_model = (body.get("corrected_model") or "").strip()
+        confirmed_by = (body.get("confirmed_by") or "").strip()
+        if not scan_id or not corrected_model or not confirmed_by:
+            abort(400, "scan_id、corrected_model、confirmed_by 為必填")
+        try:
+            from ai import run_correction
+            raw_conf = body.get("model_conf")
+            result = run_correction(
+                scan_id=scan_id,
+                original_model=body.get("original_model"),
+                corrected_model=corrected_model,
+                original_codes=body.get("original_codes", []),
+                corrected_codes=body.get("corrected_codes", []),
+                model_conf=int(raw_conf) if raw_conf is not None else None,
+                original_analyzer=body.get("original_analyzer"),
+                confirmed_by=confirmed_by,
+            )
+            return jsonify(result), 201
+        except Exception as e:
+            abort(500, f"修正記錄失敗：{e}")
+
     @app.get("/api/audit")
     @admin_required
     def list_audit():
         limit = min(int(request.args.get("limit", 100)), 500)
         return jsonify(audit_logger.load(limit))
+
+    # ── Admin dashboard (AI 掃描統計) ─────────────────────────────────
+
+    def _parse_dt(iso: str):
+        try:
+            return datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+    @app.get("/api/admin/scan-stats")
+    @admin_required
+    def scan_stats():
+        scans = ai_scan_store.load_scans()
+        now = datetime.now(timezone.utc)
+        today = now.date()
+        week_start = today.fromordinal(today.toordinal() - today.weekday())
+
+        today_count = 0
+        week_count = 0
+        fail_count = 0
+        total = len(scans)
+        for s in scans:
+            dt = _parse_dt(s.get("created_at", ""))
+            if dt is not None:
+                d = dt.astimezone(timezone.utc).date()
+                if d == today:
+                    today_count += 1
+                if d >= week_start:
+                    week_count += 1
+            if s.get("tier") in ("failure", "low_confidence"):
+                fail_count += 1
+
+        fail_rate = round(fail_count / total * 100, 1) if total else 0.0
+        return jsonify({
+            "today_count": today_count,
+            "week_count": week_count,
+            "total_count": total,
+            "fail_count": fail_count,
+            "fail_rate": fail_rate,
+        })
+
+    def _parse_alarms(raw):
+        if isinstance(raw, str):
+            try:
+                return json.loads(raw)
+            except Exception:
+                return []
+        return raw or []
+
+    @app.get("/api/admin/scan-recent")
+    @admin_required
+    def scan_recent():
+        limit = min(int(request.args.get("limit", 50)), 200)
+        scans = ai_scan_store.load_scans(limit=limit)
+        result = [{
+            "scan_id": s.get("scan_id"),
+            "scanned_at": s.get("created_at"),
+            "model": s.get("model"),
+            "model_conf": s.get("model_conf"),
+            "tier": s.get("tier"),
+            "source": s.get("source"),
+            "corrected": s.get("source") == "corrected",
+            "alarms": _parse_alarms(s.get("alarms")),
+        } for s in scans]
+        return jsonify(result)
+
+    @app.get("/api/admin/scan-ranking")
+    @admin_required
+    def scan_ranking():
+        scans = ai_scan_store.load_scans()
+        counts: dict[str, dict] = {}
+        for s in scans:
+            model = s.get("model") or "未知"
+            if model not in counts:
+                counts[model] = {"model": model, "count": 0, "fail_count": 0}
+            counts[model]["count"] += 1
+            if s.get("tier") in ("failure", "low_confidence"):
+                counts[model]["fail_count"] += 1
+        ranking = sorted(counts.values(), key=lambda x: -x["count"])
+        for r in ranking:
+            r["fail_rate"] = round(r["fail_count"] / r["count"] * 100, 1) if r["count"] else 0.0
+        return jsonify(ranking)
+
+    @app.post("/api/admin/cleanup-expired")
+    @admin_required
+    def cleanup_expired():
+        try:
+            from ai.ai_memory import RETENTION
+        except ImportError as e:
+            abort(503, f"AI 模組未安裝：{e}")
+        removed = ai_scan_store.cleanup_expired(RETENTION)
+        total = sum(n for n in removed.values() if n > 0)
+        return jsonify({"removed_by_tier": removed, "total_removed": total})
 
     # ── Pages ───────────────────────────────────────────────────────
 
@@ -296,28 +490,27 @@ def create_app() -> Flask:
     def ping():
         try:
             alarms_store.load()
-        except Exception:
-            pass
-        return "pong", 200
+            return {"status": "ok"}, 200
+        except Exception as e:
+            return {"status": "db_error", "msg": str(e)}, 200
 
     @app.get("/")
     def portal():
-        return _no_cache(send_from_directory(FRONTEND, "portal.html"))
+        return redirect("/app")
 
     @app.get("/app")
-    @login_required
     def index():
         return _no_cache(send_from_directory(FRONTEND, "index.html"))
 
     @app.get("/admin")
     @admin_required
     def admin():
-        return _no_cache(send_from_directory(FRONTEND, "admin.html"))
+        return _no_cache(send_from_directory(FRONTEND, "dashboard.html"))
 
     @app.get("/admin/dashboard")
     @admin_required
     def admin_dashboard():
-        return _no_cache(send_from_directory(FRONTEND, "dashboard.html"))
+        return redirect("/admin")
 
     # ── Error handlers ──────────────────────────────────────────────
 

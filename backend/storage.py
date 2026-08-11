@@ -3,7 +3,7 @@ import os
 import urllib.parse
 import urllib.request
 import urllib.error
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
 from typing import Optional
@@ -328,6 +328,57 @@ class ViewStore:
             return []
 
 
+class AiScanStore:
+    """Read-only access to ai_scans / ai_corrections for dashboard stats."""
+
+    def _get(self, table: str, query: str) -> list:
+        if not _use_supabase():
+            return []
+        try:
+            base = os.environ.get("SUPABASE_URL", "").rstrip("/")
+            key = os.environ.get("SUPABASE_KEY", "")
+            req = urllib.request.Request(
+                f"{base}/rest/v1/{table}?{query}",
+                headers={"apikey": key, "Authorization": f"Bearer {key}"},
+                method="GET",
+            )
+            with urllib.request.urlopen(req) as r:
+                return json.loads(r.read().decode())
+        except Exception:
+            return []
+
+    def load_scans(self, limit: int = 5000) -> list:
+        return self._get("ai_scans", f"select=*&order=created_at.desc&limit={limit}")
+
+    def load_corrections(self, limit: int = 5000) -> list:
+        return self._get("ai_corrections", f"select=*&order=created_at.desc&limit={limit}")
+
+    def cleanup_expired(self, retention_days: dict) -> dict:
+        """依 tier 分級保留天數，刪除 Supabase 過期的 ai_scans 紀錄。回傳各 tier 刪除筆數。"""
+        if not _use_supabase():
+            return {}
+        base = os.environ.get("SUPABASE_URL", "").rstrip("/")
+        key = os.environ.get("SUPABASE_KEY", "")
+        now = datetime.now(timezone.utc)
+        removed = {}
+        for tier, days in retention_days.items():
+            cutoff = (now - timedelta(days=days)).isoformat()
+            try:
+                qs = f"tier=eq.{urllib.parse.quote(tier)}&created_at=lt.{urllib.parse.quote(cutoff)}"
+                req = urllib.request.Request(
+                    f"{base}/rest/v1/ai_scans?{qs}",
+                    headers={"apikey": key, "Authorization": f"Bearer {key}",
+                             "Prefer": "return=representation"},
+                    method="DELETE",
+                )
+                with urllib.request.urlopen(req) as r:
+                    deleted = json.loads(r.read().decode())
+                    removed[tier] = len(deleted)
+            except Exception:
+                removed[tier] = -1
+        return removed
+
+
 if _use_supabase():
     alarms_store = SupabaseStore("alarms", pk="code", pk_fields=["device_model", "code"])
     devices_store = SupabaseStore("devices", pk="id")
@@ -338,3 +389,4 @@ else:
 feedback_store = FeedbackStore()
 view_store = ViewStore()
 audit_logger = AuditLogger()
+ai_scan_store = AiScanStore()
