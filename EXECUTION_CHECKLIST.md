@@ -52,7 +52,13 @@
 
 - [x] 確認 `devices` 現行主鍵/唯一約束的實際型態：**已確認為混合型**——主鍵 `id`（獨立代理鍵，如 `M-201`）不動，另有獨立 `UNIQUE(model)` 約束（注意：型號欄位實際叫 `model`，不是 `device_model`，見 PLAN 1.2 節命名決策）需切換為 `(department, model)`
 - [x] 確認 `alarms` 現行主鍵是否確實是 `(device_model, code)`：**已確認**，`alarms_pkey` 就是 `PRIMARY KEY (device_model, code)`，欄位命名與 PLAN 假設一致
-- [ ] Supabase 遷移前備份（快照或關鍵表 CSV 匯出），記錄回滾方式
+- [ ] **【第十五輪：展開為六步驟，取代原「快照或CSV擇一」】Supabase 遷移前備份**，詳見 PLAN 1.6 節：
+  - [x] 1. 查清 `alarms` 主鍵實際名稱——已於本階段上方確認為 `alarms_pkey PRIMARY KEY (device_model, code)`
+  - [ ] 2. 撰寫 `rollback_stage3.sql`（DROP COLUMN 新欄位、DROP INDEX 新索引、還原 1.3 節主鍵切換，用上面查到的真實約束名稱），納入版本控制並 commit
+  - [ ] 3. `pg_dump -Fc --no-owner --no-privileges -f pre_migration_$(date +%Y%m%d_%H%M).dump`，並用 `pg_restore -l` 驗證可讀（**此步驟取代 CSV 匯出，不需另外再做**）
+  - [ ] 4. Supabase Dashboard 確認內建備份/保留天數（額外保險，不當主力）
+  - [ ] 5. 確認 `migrate_add_departments.py`（階段 2）與主鍵/約束切換（階段 3）的 SQL 全部包在 `BEGIN`/`COMMIT` 交易內
+  - [ ] 6. 遷移執行後重跑 `00_preflight_check.sql` 驗收
 - [x] 執行重複值預檢：`00_preflight_check.sql` 已含此檢查，結果 **0 筆重複**，`alarms`/`devices` 均可安全繼續
 - [x] **【第十一輪額外查明】無外鍵指向 `alarms`/`devices` 舊主鍵**（0 筆），主鍵切換不用擔心連動；基準筆數 `alarms` 1759、`devices` 14、`ai_scans` 5，與既有記錄一致
 - [x] **【第十一輪額外查明】`devices.id` 是否為型號本身**：已確認不是（`id` 與 `model` 完全脫鉤），新機種安全建立不需要額外設計 id 產生規則
@@ -265,4 +271,5 @@
 - **【第十二輪新增】部署平台由 Railway 改回 Render**（成本考量；`git log` 顯示這本來就是專案原本的臨時方案，這次是轉正）——全文所有 Railway 字樣已置換為 Render，階段 -0.5 執行時需另外建立 Render 的部署設定（`render.yaml` 或後台手動設定），並確認是否要用免費層＋防休眠 cron（見 PLAN 第十二輪附錄）
 - **【第十三輪新增】`backend/requirements.txt` 的 `google-generativeai` 已改為 `google-genai`**（程式碼實際用新版 SDK 語法，本機 `.venv` 因新舊套件並存長期掩蓋此落差，Render 乾淨環境部署後才首次曝光）——修正後尚未部署驗證，見階段 -0.5 補充項
 - **【第十四輪定案】部門正式名稱**：`id="mf4d"`、`name="製造四部包裝組"`——待確認事項已全部解決，可正式進入階段 0/2
-- 完整審查對照見 `PLAN_department_isolation.md` 附錄（共十四輪審查）
+- **【第十五輪定案】遷移前備份策略確定為六步驟流程**（查主鍵真名 → 寫 `rollback_stage3.sql` → `pg_dump -Fc` 並驗證可還原 → Dashboard 備份確認 → 遷移腳本全包 `BEGIN`/`COMMIT` → 事後重跑 `00_preflight_check.sql`）——取代原本「快照或CSV擇一」的簡化版本，CSV 匯出已被 `pg_dump` 完全取代不需另做；兩層安全網（`rollback_stage3.sql`+交易包裹 vs `pg_dump`+Dashboard）分工不同但六步驟都要做完，非可略過項目（見 PLAN 1.6 節、階段 0）
+- 完整審查對照見 `PLAN_department_isolation.md` 附錄（共十五輪審查）
