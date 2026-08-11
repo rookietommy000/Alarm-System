@@ -40,8 +40,9 @@
 
 ## 階段 -0.5：Render 正式部署（對應計畫「尚未做」項，多部門改造的前置）— 【第十二輪：Railway→Render，沿用免費層+cron-job.org防休眠】
 
-- [ ] 建立 Render Web Service，連接 GitHub repo `rookietommy000/Alarm-System`；建立 `render.yaml` 或於 Render Dashboard 手動設定 build/start command（取代已刪除的 `railway.toml`；start command 建議 `gunicorn --chdir backend --bind 0.0.0.0:$PORT app:app`）
-- [ ] 環境變數搬遷：`SUPABASE_URL`/`SUPABASE_KEY`/`GEMINI_API_KEY`/`FLASK_SECRET_KEY`（固定值，非隨機產生，見階段 7）/`LOGIN_PASSWORD`/`ADMIN_PASSWORD`
+- [x] 建立 Render Web Service，連接 GitHub repo `rookietommy000/Alarm-System`；已建立並套用 `render.yaml`（`gunicorn --chdir backend --bind 0.0.0.0:$PORT app:app`）
+- [x] 環境變數搬遷：`SUPABASE_URL`/`SUPABASE_KEY`/`GEMINI_API_KEY`/`FLASK_SECRET_KEY`/`LOGIN_PASSWORD`/`ADMIN_PASSWORD`（過程中發現並修正 `SUPABASE_KEY` 誤貼含變數名前綴的問題，見第十三輪）
+- [ ] **【第十三輪新增】確認 `requirements.txt` 的 `google-genai` 修正已部署並生效**——用 `curl`／腳本直接打 `POST /api/analyze` 帶測試圖片，確認不再回 503「AI 模組未安裝」，且能取得正常的 AI 辨識結果（tier 不是 `failure`）
 - [ ] **決策：沿用免費層 + `cron-job.org` 防休眠**（既有機制，`app.py` 的 `/ping` 端點已存在）——確認防休眠排程指向新的 Render 網域；已知偶爾仍可能遇到喚醒延遲，先上線觀察，非本次必須解決項目
 - [ ] Cookie 設定 `Secure`／`HttpOnly`／`SameSite=Lax`
 - [ ] **確認 Service Worker 在 HTTPS 下的實際行為**——Service Worker 只在 HTTPS（或 `localhost`）下運作，本機一直是 HTTP 環境，代表 PWA 快取行為（含 5.4 節當作安全機制在處理的 `/api/*` 排除快取、`activate` 清除舊快取）從未在真實環境跑過，Render 部署後必須重新走一次階段 14 的 SW 手動驗證步驟
@@ -262,4 +263,5 @@
 - **【第十輪提醒】階段 12 執行前，先確認本機 `sentinel_pack` 是不是作者已交付的 v3**（T-00~T-14、含 `00_preflight_check.sql`）——本機截至第十輪仍是舊版 T-01~T-10，換成 v3 後清單裡「以 README 當下版本為準」的寫法會自動對上新內容，不需要再改文字（見階段 12）
 - **【第十一輪新增】`devices` 表實際欄位是 `model`，不是 `device_model`**（`alarms` 才是 `device_model`）——PLAN 全文 `devices` 相關 SQL 已改用 `model`，路由/API 層維持 `device_model` 名稱但經由 `storage.py` 的 `_row_to_device()` 做唯一轉換點；`devices` 主鍵切換（階段 3）比原假設輕，只需 drop/add unique 約束兩行，不動主鍵（見 PLAN 1.2、3.1.1 節）
 - **【第十二輪新增】部署平台由 Railway 改回 Render**（成本考量；`git log` 顯示這本來就是專案原本的臨時方案，這次是轉正）——全文所有 Railway 字樣已置換為 Render，階段 -0.5 執行時需另外建立 Render 的部署設定（`render.yaml` 或後台手動設定），並確認是否要用免費層＋防休眠 cron（見 PLAN 第十二輪附錄）
-- 完整審查對照見 `PLAN_department_isolation.md` 附錄（共十二輪審查）
+- **【第十三輪新增】`backend/requirements.txt` 的 `google-generativeai` 已改為 `google-genai`**（程式碼實際用新版 SDK 語法，本機 `.venv` 因新舊套件並存長期掩蓋此落差，Render 乾淨環境部署後才首次曝光）——修正後尚未部署驗證，見階段 -0.5 補充項
+- 完整審查對照見 `PLAN_department_isolation.md` 附錄（共十三輪審查）

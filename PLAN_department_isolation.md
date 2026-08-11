@@ -1249,3 +1249,26 @@ def test_resolve_target_department_does_not_read_request_args():
 - 確認既有的 `/ping` 端點（`backend/app.py`，`0ac91de` commit 加入）在 Render 部署後仍正常運作，`cron-job.org` 的排程設定需要指向新的 Render 網域（若網域跟先前的臨時部署不同）
 - Render 的部署設定檔（`render.yaml` 或直接在 Render Dashboard 設定 build/start command）尚未建立，需要在階段 -0.5 實際操作時建立，取代原本規劃但已刪除的 `railway.toml`
 - `_lan_ip()`／`RENDER_EXTERNAL_URL` 相關的既有程式碼（`backend/app.py` 的 `/api/server-url` 端點）已經有 Render 環境變數的處理邏輯，這代表接回 Render 比接 Railway 更貼合現有程式碼、改動更少——這是決策反轉後意外發現的優點，值得記錄
+
+---
+
+第十三輪審查（Render 實際部署驗證中發現的既有 bug，非本次隔離工程引入）：
+
+**背景**：階段 -0.5 建立 `render.yaml` 並實際部署到 Render 後，逐項驗證功能時發現兩個問題，過程本身印證了「不要同時改兩件大事」原則的價值——若沒有先在乾淨環境（Render）跑一次，這些既有問題會被本機混雜的開發環境長期掩蓋，直到多部門功能上線後才會第一次浮現，那時候更難定位是新改動還是舊 bug。
+
+**🔴 環境變數貼值錯誤（已修正，操作失誤非程式問題）**
+1. **`SUPABASE_KEY` 貼到 Render Value 欄位時，把 `SUPABASE_KEY=` 這個變數名稱前綴也一併貼了進去**，導致實際送給 Supabase 的認證字串變成 `SUPABASE_KEY=eyJhbGc...`，Supabase 端完全無法辨識這把 key，`/api/devices`、`/api/alarms` 等所有走 `SupabaseStore` 的端點回 500，`urllib.error.HTTPError: HTTP Error 401: Unauthorized`（Render Logs 可見完整 traceback）→ 使用者重新只複製 JWT 值本身（不含變數名稱前綴）貼回 Value 欄位後解決。這個錯誤模式值得記住：Render／多數 PaaS 的環境變數輸入是「Key 獨立欄位＋Value 獨立欄位」兩格分離設計，貼值時只該貼 Value 部分
+
+**🔴 依賴套件與程式碼不匹配（已修正，既有 bug，Render 環境下首次曝光）**
+2. **`requirements.txt` 寫的是舊版 SDK `google-generativeai`，但 `backend/ai/ai_analyzer.py` 程式碼實際用的是新版 SDK 語法 `from google import genai`（屬於 `google-genai` 這個不同的 PyPI 套件）**——兩者 import 路徑不相容，新版套件沒有提供 `google.genai` 這個命名空間路徑給舊版寫法用，反之亦然。
+
+   **本機為何沒發現**：檢查本機 `.venv` 發現兩個套件都被裝著（`google-genai==1.47.0` 與 `google-generativeai==0.8.6` 並存，推測是先前手動額外安裝新版套件時沒有同步移除舊版、也沒有同步更新 `requirements.txt`），讓這個不匹配長期被本機環境掩蓋。加上「拍照分析」這條 code path 因為相機需要 HTTPS，一直是計畫裡明確標註延後到 Render 部署後才補測的項目（見階段 -1 實測記錄），所以這是這條 code path 自新版 SDK 改寫以來**第一次在乾淨環境下真正被執行到**。
+
+   **如何發現**：不透過瀏覽器（無法操作相機拍照），改用 `curl`／Python `urllib` 直接對 `POST /api/analyze` 送出一張測試圖片的 base64 payload，繞開前端 UI 直接測後端邏輯，取得明確錯誤訊息 `AI 模組未安裝：cannot import name 'genai' from 'google' (unknown location)`（`app.py` 的 `except ImportError as e: abort(503, ...)` 分支）——這個明確的 503 錯誤幫助排除了「AI 辨識判斷邏輯有問題」的懷疑方向，直接定位到套件安裝層級。
+
+   **修正**：`requirements.txt` 的 `google-generativeai>=0.7` 改為 `google-genai>=1.0`（版本號比照本機 `.venv` 裡已驗證能正常運作的 `1.47.0`），與程式碼實際使用的 import 路徑一致。
+
+   **【重要，尚待驗證】此修正尚未部署驗證**——需要 commit、push、等 Render 重新部署後，再次用同樣的直接 API 測試方式確認 `/api/analyze` 能正常回傳 AI 辨識結果，而不只是不再噴 503
+
+**🟡 管線設計本身的可觀察性缺口（記錄，非本輪修正範圍，留待後續評估）**
+3. **`ai_pipeline.py` 的 `run_pipeline()` 刻意把 Analyzer 層的例外全部吞掉，統一降級回傳 `tier: "failure"` 且 `alarms: []`**（見 `ai_pipeline.py` 第 61-97 行的 try/except），設計初衷是「不要讓 AI 服務的暫時性問題導致整個請求 500」，這個取捨本身合理。但目前前端（`index.html`）若沒有特別檢查 `tier === "failure"` 並顯示對應的錯誤訊息，`pipeline_error` 這種**系統性故障**（例如這次的套件缺失、API key 失效、額度用盡）跟 `tier: "no_alarm"` 這種**正常結果**（畫面上真的沒有警報）在使用者眼中會長得一模一樣，都顯示「未偵測到警報」——這正是這次問題一開始難以判斷方向的原因。是否要在前端明確區分這兩種情況（例如 `failure` 顯示「AI 服務暫時無法使用，請稍後再試或聯繫管理員」），不在本次多部門隔離工程範圍內，但值得記錄下來供後續獨立評估，尤其正式推廣給第二部門後，這種「看起來像沒警報、其實是服務故障」的情況會更難被工廠現場人員自行判斷
