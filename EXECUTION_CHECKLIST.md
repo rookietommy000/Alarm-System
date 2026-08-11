@@ -246,7 +246,7 @@
 
 ## 待確認事項（需先決定才能排入階段 2）
 
-- [ ] 你目前這個部門（ACM001、TFM001 等機種）要取什麼正式名稱？（`migrate_add_departments.py`（階段 2）建立第一筆 `departments` 資料列需要；`import_alarms.py`（階段 15）的 `--department` 是另一支工具的必填參數，兩者依賴同一名稱但屬不同工具，可先用暫定 slug，之後改名不影響 id）
+- [x] **【第十四輪定案】部門正式名稱**：`id = "mf4d"`（小寫 ASCII slug，符合 2.2.4 節 `DEPT_ID_RE` 格式驗證，永久不可改）、`name = "製造四部包裝組"`（顯示名稱，可改）。過程中發現一個原本要踩的坑：使用者一開始提出大寫 `MF4D` 或直接用中文當 `id`，兩者都會讓 2.2.4 節的登入節流格式驗證判定為「格式不合法」、導致真實部門完全無法登入——已說明 `id`（URL/DB 安全 slug）與 `name`（人類可讀顯示名稱，可放中文）本來就是刻意分開的兩個欄位，中文/大寫一律放 `name`，`id` 維持小寫 ASCII
 
 ---
 
@@ -264,4 +264,5 @@
 - **【第十一輪新增】`devices` 表實際欄位是 `model`，不是 `device_model`**（`alarms` 才是 `device_model`）——PLAN 全文 `devices` 相關 SQL 已改用 `model`，路由/API 層維持 `device_model` 名稱但經由 `storage.py` 的 `_row_to_device()` 做唯一轉換點；`devices` 主鍵切換（階段 3）比原假設輕，只需 drop/add unique 約束兩行，不動主鍵（見 PLAN 1.2、3.1.1 節）
 - **【第十二輪新增】部署平台由 Railway 改回 Render**（成本考量；`git log` 顯示這本來就是專案原本的臨時方案，這次是轉正）——全文所有 Railway 字樣已置換為 Render，階段 -0.5 執行時需另外建立 Render 的部署設定（`render.yaml` 或後台手動設定），並確認是否要用免費層＋防休眠 cron（見 PLAN 第十二輪附錄）
 - **【第十三輪新增】`backend/requirements.txt` 的 `google-generativeai` 已改為 `google-genai`**（程式碼實際用新版 SDK 語法，本機 `.venv` 因新舊套件並存長期掩蓋此落差，Render 乾淨環境部署後才首次曝光）——修正後尚未部署驗證，見階段 -0.5 補充項
-- 完整審查對照見 `PLAN_department_isolation.md` 附錄（共十三輪審查）
+- **【第十四輪定案】部門正式名稱**：`id="mf4d"`、`name="製造四部包裝組"`——待確認事項已全部解決，可正式進入階段 0/2
+- 完整審查對照見 `PLAN_department_isolation.md` 附錄（共十四輪審查）
