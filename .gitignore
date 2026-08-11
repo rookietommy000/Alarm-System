@@ -1,8 +1,14 @@
 .env
+.env.local
 .venv/
+venv/
 __pycache__/
 *.pyc
 .pytest_cache/
 .DS_Store
 .claude/
 Alerm Data/
+
+# 本機資料（JsonStore fallback、備份、AI 記憶）
+data/
+data/backup/
