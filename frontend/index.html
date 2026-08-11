@@ -3,19 +3,67 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#1f2937" />
+  <meta name="theme-color" content="#f5f4f0" />
   <meta name="description" content="設備警報代碼查詢 — 快速搜尋警報代碼、機種、嚴重度與解決方案" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="警報查詢" />
   <title>設備警報代碼查詢</title>
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="icon" type="image/svg+xml" href="/icon.svg" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;700&display=swap" rel="stylesheet">
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
   <link rel="stylesheet" href="style.css" />
   <style>
+    /* Topbar nav links */
+    .nav-link-muted {
+      color: var(--text-secondary);
+      text-decoration: none;
+      font-size: 13px;
+      padding: 8px 10px;
+      min-height: var(--tap-min);
+      display: inline-flex;
+      align-items: center;
+      transition: color 0.15s;
+    }
+    .nav-link-muted:hover { color: var(--primary); }
+    .topbar .nav-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-secondary);
+      font-size: 14px;
+      padding: 8px 12px;
+      min-height: var(--tap-min);
+      cursor: pointer;
+      font-family: 'Barlow Condensed', inherit;
+      font-weight: 500;
+      letter-spacing: 0.04em;
+      transition: color 0.15s;
+      border-radius: 0;
+    }
+    .topbar .nav-btn:hover { color: var(--primary); }
+    .topbar .nav-btn.active {
+      color: var(--primary);
+      border-bottom: 2px solid var(--primary);
+    }
+    .nav-divider {
+      width: 1px;
+      height: 20px;
+      background: var(--border-strong);
+      margin: 0 4px;
+      align-self: center;
+    }
+    .topbar-nav-wide {
+      display: none;
+    }
+    @media (min-width: 768px) {
+      .topbar-nav-wide { display: flex; align-items: center; }
+    }
+
     /* 自訂機種下拉 */
     .custom-select { position: relative; flex: 1; min-width: 0; }
     .custom-select-btn {
@@ -55,7 +103,7 @@
       overflow-y: auto;
     }
     .custom-select-group-label {
-      background: rgba(77,219,196,0.12);
+      background: rgba(187, 233, 225, 0.12);
       color: var(--primary);
       font-size: 11px;
       font-weight: 700;
@@ -274,11 +322,11 @@
       letter-spacing: 0.06em;
       text-transform: uppercase;
       padding: 10px 16px;
-      background: #0a1118;
+      background: var(--surface-hover);
       color: var(--muted);
     }
     thead tr {
-      box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08);
     }
     .code { font-weight: 700; font-size: 14px; display: block; }
     .code-device {
@@ -311,109 +359,630 @@
     .old-sol-toggle { background: none; border: none; color: var(--muted); font-size: 12px; cursor: pointer; padding: 4px 0; font-family: inherit; }
     .old-sol-toggle:hover { color: var(--text); }
     .old-sol-body { margin-top: 6px; font-size: 13px; color: var(--muted); white-space: pre-wrap; line-height: 1.6; padding: 10px 12px; background: var(--surface-hover); border-radius: var(--radius-sm); }
+
+    /* ── 拍照頁 ── */
+    .page-camera { display: flex; flex-direction: column; height: calc(100vh - 56px - 64px); overflow: hidden; background: var(--bg); position: relative; }
+
+    /* Camera live view */
+    .camera-view { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+    .camera-frame {
+      flex: 1;
+      min-height: 0;
+      position: relative;
+      background: #0a1118;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      max-height: calc(100vh - 56px - 64px - 120px);
+    }
+    .camera-video { width: 100%; height: 100%; object-fit: cover; }
+    .camera-guide {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+    }
+    .camera-guide-inner {
+      width: 80%;
+      max-width: 340px;
+      aspect-ratio: 4/3;
+      border: 2px dashed rgba(196,160,64,0.6);
+      border-radius: 4px;
+      box-shadow: 0 0 0 9999px rgba(0,0,0,0.4);
+    }
+    .camera-hints {
+      position: absolute;
+      bottom: 12px;
+      left: 0; right: 0;
+      display: flex;
+      justify-content: center;
+      gap: 16px;
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      pointer-events: none;
+    }
+    .camera-controls {
+      background: #0a1118;
+      padding: 20px 24px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+    }
+    .camera-err { color: #f87171; font-size: 13px; text-align: center; }
+    .shutter-btn {
+      width: 68px; height: 68px;
+      border-radius: 50%;
+      background: #fff;
+      border: 4px solid rgba(196,160,64,0.6);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 0.1s;
+    }
+    .shutter-btn:active { transform: scale(0.93); }
+    .shutter-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .shutter-inner {
+      width: 52px; height: 52px;
+      border-radius: 50%;
+      background: #fff;
+      border: 2px solid #ccc;
+    }
+    .camera-tip { font-size: 13px; color: rgba(255,255,255,0.5); letter-spacing: 0.04em; }
+    .hint-ok  { color: #4ade80; }
+    .hint-bad { color: #f87171; }
+    .hint-unk { color: rgba(255,255,255,0.4); }
+
+    /* Analyzing */
+    .analyzing-panel {
+      position: absolute;
+      inset: 0;
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 24px;
+      padding: 32px 24px;
+      background: var(--bg);
+    }
+    .analyzing-title {
+      font-family: 'Barlow Condensed', sans-serif;
+      font-size: 28px;
+      letter-spacing: 0.04em;
+      color: var(--text);
+    }
+    .analyzing-bar {
+      width: 100%;
+      max-width: 360px;
+      height: 6px;
+      background: var(--border-strong);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .analyzing-fill {
+      height: 100%;
+      background: #c4a040;
+      border-radius: 3px;
+      transition: width 0.4s ease;
+    }
+    .analyzing-stages { display: flex; flex-direction: column; gap: 10px; width: 100%; max-width: 360px; }
+    .analyzing-stage { display: flex; align-items: center; gap: 12px; font-size: 15px; color: var(--muted); }
+    .analyzing-stage.done { color: var(--text); }
+    .analyzing-stage.active { color: #c4a040; }
+    .stage-mark { width: 20px; text-align: center; font-size: 16px; }
+
+    /* Confirm panel */
+    .confirm-panel { position: absolute; inset: 0; z-index: 10; overflow-y: auto; padding: 20px 16px; display: flex; flex-direction: column; gap: 16px; background: var(--bg); }
+    .confirm-header {}
+    .confirm-title { font-family: 'Barlow Condensed', sans-serif; font-size: 24px; letter-spacing: 0.02em; }
+    .confirm-sub { font-size: 13px; color: var(--muted); margin-top: 4px; }
+    .confirm-fields { display: flex; flex-direction: column; gap: 12px; }
+    .confirm-field {}
+    .confirm-field-label { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
+    .confirm-field-body {
+      border: 1px solid var(--border-strong);
+      padding: 12px 14px;
+      background: var(--surface);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .confirm-field-body.field-uncertain { background: rgba(196,160,64,0.08); border-color: rgba(196,160,64,0.4); }
+    .field-value-row { display: flex; align-items: center; gap: 10px; }
+    .field-value-code { font-family: 'Barlow Condensed', sans-serif; font-size: 22px; letter-spacing: 0.04em; }
+    .field-code-input {
+      font-family: 'Barlow Condensed', sans-serif;
+      font-size: 22px;
+      letter-spacing: 0.04em;
+      border: none;
+      background: transparent;
+      color: var(--text);
+      width: 120px;
+      padding: 0;
+      outline: none;
+      border-bottom: 1px solid var(--border-strong);
+    }
+    .field-conf { font-size: 13px; font-variant-numeric: tabular-nums; font-weight: 600; margin-left: auto; }
+    .conf-high { color: #4ade80; }
+    .conf-mid  { color: #c4a040; }
+    .conf-low  { color: #f87171; }
+    .conf-bar-wrap { }
+    .conf-bar { height: 4px; background: var(--border-strong); border-radius: 2px; overflow: hidden; }
+    .conf-bar-fill { height: 100%; border-radius: 2px; }
+    .conf-bar-fill.conf-high { background: #4ade80; }
+    .conf-bar-fill.conf-mid  { background: #c4a040; }
+    .conf-bar-fill.conf-low  { background: #f87171; }
+    .field-note { font-size: 12px; color: var(--muted); }
+    .field-manual { display: flex; flex-direction: column; gap: 6px; }
+    .field-manual-label { font-size: 12px; color: #f87171; }
+    .confirm-actions { display: flex; gap: 10px; margin-top: auto; }
+    .btn-primary {
+      flex: 1; height: 52px; font-size: 16px;
+      background: #c4a040; color: #fff; border: none;
+      cursor: pointer; font-family: 'Barlow Condensed', inherit;
+      letter-spacing: 0.04em; font-size: 18px;
+    }
+    .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-secondary {
+      height: 52px; padding: 0 20px; font-size: 16px;
+      background: transparent; color: var(--text);
+      border: 1px solid var(--border-strong);
+      cursor: pointer; font-family: inherit;
+    }
+
+    /* ── 搜尋頁 ── */
+    .page-search { display: flex; flex-direction: column; }
+    .search-bar-wrap {
+      position: sticky; top: 56px; z-index: 10;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 16px;
+      display: flex; flex-direction: column; gap: 8px;
+    }
+    .search-input-row { display: flex; gap: 8px; }
+    .search-input-main {
+      flex: 1;
+      height: 48px;
+      padding: 0 14px;
+      font-size: 16px;
+      border: 1px solid var(--border-strong);
+      border-radius: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: inherit;
+    }
+    .search-input-main:focus { outline: 2px solid #c4a040; outline-offset: -2px; }
+    .search-device-row {
+      display: flex; gap: 6px; flex-wrap: nowrap; overflow-x: auto;
+      padding-bottom: 2px; scrollbar-width: none;
+    }
+    .search-device-row::-webkit-scrollbar { display: none; }
+    .device-chip {
+      height: 32px; padding: 0 14px; white-space: nowrap;
+      font-size: 13px; font-family: 'Barlow Condensed', inherit; letter-spacing: 0.04em;
+      border: 1px solid var(--border-strong); background: transparent; color: var(--muted); cursor: pointer;
+      flex-shrink: 0;
+    }
+    .device-chip.active { background: #c4a040; color: #fff; border-color: #c4a040; }
+    .search-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+    .chip {
+      height: 32px; padding: 0 12px;
+      font-size: 13px; font-family: 'Barlow Condensed', inherit;
+      letter-spacing: 0.04em;
+      border: 1px solid var(--border-strong);
+      background: transparent; color: var(--muted);
+      cursor: pointer;
+    }
+    .chip.active { background: #1a1a1a; color: #fff; border-color: #1a1a1a; }
+    .chip.chip-high.active { background: #dc2626; border-color: #dc2626; }
+    .chip.chip-mid.active  { background: #d97706; border-color: #d97706; }
+    .chip.chip-low.active  { background: #2563eb; border-color: #2563eb; }
+
+    .search-results { padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
+    .search-empty { text-align: center; padding: 48px 16px; color: var(--muted); font-size: 15px; }
+    .search-count { font-size: 12px; color: var(--muted); letter-spacing: 0.06em; text-transform: uppercase; padding: 4px 0 8px; }
+
+    /* 結果卡片 */
+    .alarm-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--border-strong);
+      padding: 14px 14px 14px 12px;
+      cursor: pointer;
+      transition: box-shadow 0.15s;
+      display: flex; align-items: center; gap: 12px;
+    }
+    .alarm-card:hover { box-shadow: 0 2px 12px rgba(0,0,0,0.1); }
+    .alarm-card.sev-border-high { border-left-color: #dc2626; }
+    .alarm-card.sev-border-mid  { border-left-color: #d97706; }
+    .alarm-card.sev-border-low  { border-left-color: #2563eb; }
+    .alarm-card-main { flex: 1; min-width: 0; }
+    .alarm-card-top { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }
+    .alarm-card-code { font-family: 'Barlow Condensed', sans-serif; font-size: 20px; letter-spacing: 0.04em; }
+    .alarm-card-device { font-size: 12px; color: var(--muted); margin-left: auto; white-space: nowrap; }
+    .alarm-card-desc { font-size: 14px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .alarm-card-arrow { color: var(--muted); font-size: 18px; flex-shrink: 0; }
+
+    /* 機種選擇 modal */
+    .model-picker-backdrop {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.4);
+      z-index: 100;
+      display: flex; align-items: flex-end;
+    }
+    .model-picker {
+      background: var(--surface);
+      width: 100%;
+      border-radius: 14px 14px 0 0;
+      padding: 20px 16px;
+      padding-bottom: max(20px, env(safe-area-inset-bottom));
+      display: flex; flex-direction: column; gap: 12px;
+    }
+    .model-picker-title { font-family: 'Barlow Condensed', sans-serif; font-size: 20px; }
+    .model-picker-sub { font-size: 13px; color: var(--muted); margin-top: -8px; }
+    .model-picker-list { display: flex; flex-direction: column; gap: 6px; max-height: 50vh; overflow-y: auto; }
+    .model-picker-item {
+      padding: 14px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      cursor: pointer;
+      font-size: 15px;
+      display: flex; align-items: center; justify-content: space-between;
+      transition: background 0.1s;
+    }
+    .model-picker-item:hover { background: var(--surface-hover); }
+    .model-picker-item-model { font-family: 'Barlow Condensed', sans-serif; font-size: 18px; }
+    .model-picker-item-cat { font-size: 13px; color: var(--muted); }
+    .model-picker-cancel {
+      height: 48px; width: 100%;
+      border: 1px solid var(--border-strong);
+      background: transparent; color: var(--muted);
+      cursor: pointer; font-size: 15px; font-family: inherit;
+    }
+
+    /* Placeholder */
+    .page-placeholder {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      height: calc(100vh - 56px - 64px);
+      gap: 8px; color: var(--muted);
+    }
+    .placeholder-icon { font-size: 48px; }
+    .placeholder-text { font-family: 'Barlow Condensed', sans-serif; font-size: 22px; color: var(--text); }
+    .placeholder-sub { font-size: 14px; }
   </style>
 </head>
-<body>
+<body class="has-bottom-nav">
   <div id="app">
     <header class="topbar">
-      <h1>設備警報代碼查詢</h1>
-      <nav>
-        <a href="/admin">後台管理</a>
-        <a href="/logout">登出</a>
+      <h1>警報查找系統</h1>
+      <nav class="topbar-nav-wide">
+        <button class="nav-btn" :class="{ active: page === 'camera' }" @click="page = 'camera'">📷 拍照分析</button>
+        <button class="nav-btn" :class="{ active: page === 'search' }" @click="page = 'search'">🔍 搜尋代碼</button>
+        <span class="nav-divider"></span>
+        <a href="/admin" class="nav-link-muted">後台</a>
+        <a href="/logout" class="nav-link-muted">登出</a>
       </nav>
     </header>
 
-    <!-- 搜尋欄（永遠顯示） -->
-    <section class="filters">
-      <input v-model="q" @input="onSearch" @keyup.enter="fetchAlarms" placeholder="輸入代碼 / 關鍵字 / 描述" class="q" inputmode="search" autocomplete="off" />
-      <div class="custom-select" v-click-outside="() => dropdownOpen = false">
-        <button type="button" class="custom-select-btn" @click="dropdownOpen = !dropdownOpen">
-          <span>{{ filterDevice || '全部機種' }}</span>
-          <span class="custom-select-arrow">▼</span>
-        </button>
-        <div class="custom-select-dropdown" v-if="dropdownOpen">
-          <div class="custom-select-option all-opt" :class="{ selected: !filterDevice }" @click="setDevice('')">全部機種</div>
-          <template v-for="l in lines" :key="l.id">
-            <div class="custom-select-group-label">{{ l.id }} 線</div>
-            <div class="custom-select-option" v-for="d in l.devices" :key="d.model"
-                 :class="{ selected: filterDevice === d.model }"
-                 @click="setDevice(d.model)">
-              {{ d.model }}（{{ d.category }}）
+    <!-- ═══ 拍照頁 ═══ -->
+    <div v-if="page === 'camera'" class="page-camera">
+
+      <!-- 選擇機種（拍照後第一步） -->
+      <div v-if="camState === 'model-select'" class="confirm-panel">
+        <div class="confirm-header">
+          <div class="confirm-title">選擇機台型號</div>
+          <div class="confirm-sub">請選擇你正在操作的機台，再開始 AI 分析</div>
+        </div>
+        <div class="confirm-fields">
+          <div class="confirm-field">
+            <div class="confirm-field-label" style="color:#c4a040;font-size:13px;">▶ 機台型號</div>
+            <div class="confirm-field-body field-uncertain">
+              <div class="custom-select" v-click-outside="() => confirmDropOpen = false">
+                <button type="button" class="custom-select-btn" @click="confirmDropOpen = !confirmDropOpen">
+                  <span>{{ selectedCorrectModel || '點此選擇機種…' }}</span>
+                  <span class="custom-select-arrow">▼</span>
+                </button>
+                <div class="custom-select-dropdown" v-if="confirmDropOpen">
+                  <template v-for="l in lines" :key="l.id">
+                    <div class="custom-select-group-label">{{ l.id }} 線</div>
+                    <div class="custom-select-option" v-for="d in l.devices" :key="d.model"
+                         :class="{ selected: selectedCorrectModel === d.model }"
+                         @click="selectedCorrectModel = d.model; confirmDropOpen = false">
+                      {{ d.model }}（{{ d.category }}）
+                    </div>
+                  </template>
+                </div>
+              </div>
             </div>
-          </template>
+          </div>
+        </div>
+        <div class="confirm-actions">
+          <button class="btn-secondary" @click="resetCamera">重拍</button>
+          <button class="btn-primary" @click="submitAnalyze" :disabled="!selectedCorrectModel">開始分析</button>
         </div>
       </div>
-      <select v-model="severity" @change="onFilterChange">
-        <option value="">全部嚴重度</option>
-        <option>嚴重</option><option>警告</option><option>資訊</option>
-      </select>
-      <button class="search-btn" @click="fetchAlarms">搜尋</button>
-    </section>
 
-    <!-- 產線卡 -->
-    <div class="card-view" v-if="view === 'lines'">
-      <div class="card-view-title">選擇產線</div>
-      <div class="line-grid">
-        <div class="line-card" v-for="l in lines" :key="l.id" @click="selectLine(l)">
-          <div class="line-card-num">{{ l.id }}</div>
-          <div class="line-card-label">{{ l.id }} 線</div>
-          <div class="line-card-count">{{ l.devices.length }} 台設備</div>
+      <!-- 分析中 -->
+      <div v-if="camState === 'analyzing'" class="analyzing-panel">
+        <div class="analyzing-title">AI 分析中</div>
+        <div class="analyzing-bar"><div class="analyzing-fill" :style="{ width: analyzeProgress + '%' }"></div></div>
+        <div class="analyzing-stages">
+          <div v-for="s in analyzeStages" :key="s.label" class="analyzing-stage" :class="s.state">
+            <span class="stage-mark">{{ s.mark }}</span>
+            <span>{{ s.label }}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 辨識結果確認 -->
+      <div v-else-if="camState === 'confirm'" class="confirm-panel">
+
+        <!-- 情境A：AI 辨識出機種，但需要二次確認 -->
+        <template v-if="!aiResult.needs_model_selection">
+          <div class="confirm-header">
+            <div class="confirm-title">請確認辨識結果</div>
+            <div class="confirm-sub" v-if="aiResult.validation && aiResult.validation.reasons && aiResult.validation.reasons.length">
+              {{ aiResult.validation.reasons[0] }}
+            </div>
+            <div class="confirm-sub" v-else>AI 信心度偏低，請確認結果是否正確</div>
+          </div>
+
+          <div class="confirm-fields">
+            <!-- 機種（唯讀，AI 已辨識） -->
+            <div class="confirm-field">
+              <div class="confirm-field-label">辨識機種</div>
+              <div class="confirm-field-body" :class="{ 'field-uncertain': (aiResult.modelConf || 0) < 90 }">
+                <div class="field-value-row">
+                  <span class="field-value-code">{{ aiResult.model }}</span>
+                  <span class="field-conf" :class="confClass(aiResult.modelConf)">{{ aiResult.modelConf }}%</span>
+                </div>
+                <div class="conf-bar-wrap">
+                  <div class="conf-bar"><div class="conf-bar-fill" :class="confClass(aiResult.modelConf)" :style="{ width: (aiResult.modelConf || 0) + '%' }"></div></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 警報代碼列表（可點擊單獨查詢） -->
+            <div class="confirm-field" v-for="alarm in aiResult.alarms" :key="alarm._id"
+                 style="cursor:pointer" @click="doConfirmSingle(alarm)">
+              <div class="confirm-field-label">警報代碼 <span style="font-size:10px;color:var(--primary);">▶ 點擊查詢</span></div>
+              <div class="confirm-field-body" :class="{ 'field-uncertain': (alarm.conf || 0) < 90 }">
+                <div class="field-value-row">
+                  <span class="field-value-code">{{ alarm.code }}</span>
+                  <span class="field-conf" :class="confClass(alarm.conf)">{{ alarm.conf != null ? alarm.conf + '%' : '—' }}</span>
+                </div>
+                <div class="conf-bar-wrap" v-if="alarm.conf != null">
+                  <div class="conf-bar"><div class="conf-bar-fill" :class="confClass(alarm.conf)" :style="{ width: alarm.conf + '%' }"></div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="confirmError" style="margin:0;padding:10px 14px;background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;color:#b91c1c;font-size:14px;">
+            {{ confirmError }}
+          </div>
+          <div class="confirm-actions">
+            <button class="btn-secondary" @click="resetCamera">重拍</button>
+            <button class="btn-secondary" @click="showCorrectionPicker = true">修正</button>
+            <button class="btn-primary" @click="doConfirm">查詢全部</button>
+          </div>
+        </template>
+
+        <!-- 情境B：AI 無法辨識機種，需人工手選 -->
+        <template v-else>
+          <div class="confirm-header">
+            <div class="confirm-title">無法辨識機種</div>
+            <div class="confirm-sub">請先選擇機台型號，再查詢警報代碼</div>
+          </div>
+
+          <div class="confirm-fields">
+            <!-- 機種手動選擇（放最上面，第一眼就看到） -->
+            <div class="confirm-field">
+              <div class="confirm-field-label" style="color:#c4a040;font-size:13px;">▶ 請選擇機種</div>
+              <div class="confirm-field-body field-uncertain">
+                <div class="custom-select" v-click-outside="() => confirmDropOpen = false">
+                  <button type="button" class="custom-select-btn" @click="confirmDropOpen = !confirmDropOpen">
+                    <span>{{ selectedCorrectModel || '點此選擇機種…' }}</span>
+                    <span class="custom-select-arrow">▼</span>
+                  </button>
+                  <div class="custom-select-dropdown" v-if="confirmDropOpen">
+                    <template v-for="l in lines" :key="l.id">
+                      <div class="custom-select-group-label">{{ l.id }} 線</div>
+                      <div class="custom-select-option" v-for="d in l.devices" :key="d.model"
+                           :class="{ selected: selectedCorrectModel === d.model }"
+                           @click="selectedCorrectModel = d.model; confirmDropOpen = false">
+                        {{ d.model }}（{{ d.category }}）
+                      </div>
+                    </template>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 警報代碼列表（唯讀，僅供參考） -->
+            <div class="confirm-field" v-for="alarm in aiResult.alarms" :key="alarm._id">
+              <div class="confirm-field-label">AI 偵測到的警報代碼</div>
+              <div class="confirm-field-body" :class="{ 'field-uncertain': (alarm.conf || 0) < 90 }">
+                <div class="field-value-row">
+                  <span class="field-value-code">{{ alarm.code }}</span>
+                  <span class="field-conf" :class="confClass(alarm.conf)">{{ alarm.conf != null ? alarm.conf + '%' : '—' }}</span>
+                </div>
+                <div class="conf-bar-wrap" v-if="alarm.conf != null">
+                  <div class="conf-bar"><div class="conf-bar-fill" :class="confClass(alarm.conf)" :style="{ width: alarm.conf + '%' }"></div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="confirmError" style="margin:0;padding:10px 14px;background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;color:#b91c1c;font-size:14px;">
+            {{ confirmError }}
+          </div>
+          <div class="confirm-actions">
+            <button class="btn-secondary" @click="resetCamera">重拍</button>
+            <button class="btn-primary" @click="doCorrection" :disabled="!selectedCorrectModel">查詢</button>
+          </div>
+        </template>
+      </div>
+
+      <!-- 機種修正 picker（情境A 按「修正」後出現） -->
+      <div v-if="showCorrectionPicker" class="model-picker-backdrop" @click.self="showCorrectionPicker = false">
+        <div class="model-picker">
+          <div class="model-picker-title">修正機種</div>
+          <div class="model-picker-sub">AI 辨識為 {{ aiResult.model }}，請選擇正確機種</div>
+          <div class="model-picker-list">
+            <div class="model-picker-item" v-for="d in allDevices" :key="d.model"
+                 @click="selectedCorrectModel = d.model; showCorrectionPicker = false; doCorrection()">
+              <span class="model-picker-item-model">{{ d.model }}</span>
+              <span class="model-picker-item-cat">{{ d.category }}</span>
+            </div>
+          </div>
+          <button class="model-picker-cancel" @click="showCorrectionPicker = false">取消</button>
+        </div>
+      </div>
+
+      <!-- 解析結果列表 -->
+      <div v-else-if="camState === 'results'" class="confirm-panel">
+        <div class="confirm-header">
+          <div class="confirm-title">解析結果</div>
+          <div class="confirm-sub">{{ selectedCorrectModel }} · 共 {{ camResults.length }} 筆警報</div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;flex:1;overflow-y:auto;">
+          <div class="alarm-card" v-for="a in camResults" :key="a.device_model + a.code"
+               :class="sevBorderClass(a.severity)"
+               @click="openDetail(a)">
+            <div class="alarm-card-main">
+              <div class="alarm-card-top">
+                <span class="alarm-card-code">{{ a.code }}</span>
+                <span class="tag" :class="sevClass(a.severity)">{{ a.severity || '—' }}</span>
+                <span class="alarm-card-device">{{ a.device_model || '—' }}</span>
+              </div>
+              <div class="alarm-card-desc">{{ a.description }}</div>
+            </div>
+            <span class="alarm-card-arrow">›</span>
+          </div>
+        </div>
+        <div class="confirm-actions">
+          <button class="btn-secondary" style="flex:1" @click="resetCamera">重拍</button>
+        </div>
+      </div>
+
+      <!-- 無警報提示 -->
+      <div v-else-if="camState === 'no-alarm'" class="analyzing-panel">
+        <div style="font-size:48px">🔍</div>
+        <div class="analyzing-title">未偵測到警報</div>
+        <div style="font-size:14px;color:var(--muted);text-align:center">請確認畫面中有警報代碼，並對準框內重拍</div>
+        <button class="btn-secondary" style="margin-top:8px;width:100%;max-width:360px" @click="resetCamera">重拍</button>
+      </div>
+
+      <!-- 相機 live view -->
+      <div v-else class="camera-view">
+        <div class="camera-frame">
+          <video ref="videoEl" class="camera-video" autoplay playsinline muted></video>
+          <div class="camera-guide">
+            <div class="camera-guide-inner"></div>
+          </div>
+        </div>
+        <div class="camera-controls">
+          <div class="camera-err" v-if="camError">{{ camError }}</div>
+          <button class="shutter-btn" @click="takePhoto" :disabled="!!camError && !isDesktopDev">
+            <span class="shutter-inner"></span>
+          </button>
+          <div class="camera-tip" v-if="!camError">將警報畫面對準框內</div>
+          <button v-if="camError && isDesktopDev" class="btn-secondary" style="margin-top:8px" @click="takePhoto">模擬拍照（開發用）</button>
         </div>
       </div>
     </div>
 
-    <!-- 設備卡 -->
-    <div class="card-view" v-else-if="view === 'devices'">
-      <div class="card-view-title">
-        <button class="card-back" @click="selectedLine = null">← 返回產線</button>
-        {{ selectedLine.id }} 線 · {{ selectedLine.devices.length }} 台設備
-      </div>
-      <div class="device-grid">
-        <div class="device-card" v-for="d in selectedLine.devices" :key="d.model" @click="selectDevice(d)">
-          <div class="device-card-model">{{ d.model }}</div>
-          <div class="device-card-cat">{{ d.category }}</div>
+    <!-- ═══ 搜尋頁 ═══ -->
+    <div v-else-if="page === 'search'" class="page-search">
+      <div class="search-bar-wrap">
+        <div class="search-input-row">
+          <input class="search-input-main" v-model="q" @input="onSearch" @keyup.enter="fetchAlarms"
+            placeholder="代碼 / 關鍵字 / 描述…" inputmode="search" autocomplete="off" />
+        </div>
+        <!-- 機種篩選下拉 -->
+        <div class="custom-select" v-click-outside="() => searchDeviceDropOpen = false">
+          <button type="button" class="custom-select-btn" @click="searchDeviceDropOpen = !searchDeviceDropOpen">
+            <span>{{ filterDevice || '全部機種' }}</span>
+            <span class="custom-select-arrow">▼</span>
+          </button>
+          <div class="custom-select-dropdown" v-if="searchDeviceDropOpen">
+            <div class="custom-select-option all-opt" :class="{ selected: filterDevice === '' }"
+                 @click="setDevice(''); searchDeviceDropOpen = false">全部機種</div>
+            <template v-for="l in lines" :key="l.id">
+              <div class="custom-select-group-label">{{ l.id }} 線</div>
+              <div class="custom-select-option" v-for="d in l.devices" :key="d.model"
+                   :class="{ selected: filterDevice === d.model }"
+                   @click="setDevice(d.model); searchDeviceDropOpen = false">
+                {{ d.model }}（{{ d.category }}）
+              </div>
+            </template>
+          </div>
+        </div>
+        <div class="search-chips">
+          <button class="chip" :class="{ active: severity === '' }" @click="setSeverity('')">全部</button>
+          <button class="chip chip-high" :class="{ active: severity === '嚴重' }" @click="setSeverity('嚴重')">嚴重</button>
+          <button class="chip chip-mid"  :class="{ active: severity === '警告' }" @click="setSeverity('警告')">警告</button>
+          <button class="chip chip-low"  :class="{ active: severity === '資訊' }" @click="setSeverity('資訊')">資訊</button>
         </div>
       </div>
-    </div>
 
-    <!-- 結果 -->
-    <template v-else>
-      <div class="result-meta">
-        <div class="result-crumb">
-          <button @click="goBack">← 返回</button>
-          <span v-if="selectedDevice">{{ selectedLine && selectedLine.id }} 線 · {{ selectedDevice.model }}</span>
-          <span v-else>搜尋結果</span>
-        </div>
-        <span v-if="!loading && items.length">共 {{ items.length }} 筆</span>
-      </div>
-
-      <section class="results">
+      <div class="search-results">
         <div v-if="loading" class="loading-overlay"><div class="spinner"></div></div>
-        <p v-else-if="!items.length" class="empty">無符合資料</p>
-        <table v-else>
-          <thead>
-            <tr><th>代碼</th><th>機種</th><th>嚴重度</th><th>描述</th><th>成功率</th><th></th></tr>
-          </thead>
-          <tbody>
-            <tr v-for="a in items" :key="a.device_model + a.code" :class="{ 'hot-row': isHot(a) }">
-              <td data-label="代碼"><span class="code">{{ a.code }}</span></td>
-              <td data-label="機種">{{ a.device_model || '—' }}</td>
-              <td data-label="嚴重度"><span class="tag" :class="sevClass(a.severity)">{{ a.severity || '—' }}</span></td>
-              <td data-label="描述">{{ a.description }}</td>
-              <td data-label="成功率" class="fb-cell">
-                <span v-if="feedbackStats[a.device_model + '|' + a.code]"
-                      class="feedback-stat"
-                      :class="feedbackStatClass(feedbackStats[a.device_model + '|' + a.code])">
-                  {{ feedbackStatShort(feedbackStats[a.device_model + '|' + a.code]) }}
-                </span>
-                <span v-else class="fb-none">—</span>
-              </td>
-              <td class="actions-cell"><button @click="openDetail(a)" aria-label="查看詳情">詳情</button></td>
-            </tr>
-          </tbody>
-        </table>
-      </section>
-    </template>
+        <div v-else-if="!q && !severity && !filterDevice" class="search-empty">選擇機種或輸入代碼開始搜尋</div>
+        <div v-else-if="!items.length" class="search-empty">無符合資料</div>
+        <template v-else>
+          <div class="search-count">共 {{ items.length }} 筆</div>
+          <div class="alarm-card" v-for="a in items" :key="a.device_model + a.code"
+               :class="sevBorderClass(a.severity)"
+               @click="onCardClick(a)">
+            <div class="alarm-card-main">
+              <div class="alarm-card-top">
+                <span class="alarm-card-code">{{ a.code }}</span>
+                <span class="tag" :class="sevClass(a.severity)">{{ a.severity || '—' }}</span>
+                <span class="alarm-card-device">{{ a.device_model || '—' }}</span>
+              </div>
+              <div class="alarm-card-desc">{{ a.description }}</div>
+            </div>
+            <span class="alarm-card-arrow">›</span>
+          </div>
+        </template>
+      </div>
+
+    </div>
+
+    <!-- Bottom navigation (mobile PWA) -->
+    <nav class="bottom-nav" aria-label="主選單">
+      <button class="bottom-nav__item nav-camera" :class="{ active: page === 'camera' }" @click="page = 'camera'">
+        <span class="bottom-nav__icon">📷</span>
+        <span class="bottom-nav__label">拍照</span>
+      </button>
+      <button class="bottom-nav__item nav-search" :class="{ active: page === 'search' }" @click="page = 'search'">
+        <span class="bottom-nav__icon">🔍</span>
+        <span class="bottom-nav__label">搜尋</span>
+      </button>
+      <button class="bottom-nav__item nav-more" :class="{ active: moreMenuOpen }" @click="moreMenuOpen = !moreMenuOpen">
+        <span class="bottom-nav__icon">⋯</span>
+        <span class="bottom-nav__label">更多</span>
+      </button>
+    </nav>
+
+    <div v-if="moreMenuOpen" class="more-menu-backdrop" @click.self="moreMenuOpen = false">
+      <div class="more-menu-sheet">
+        <a href="/admin" class="more-menu-item">
+          <span class="more-menu-icon">📊</span>後台管理
+        </a>
+        <a href="/logout" class="more-menu-item">
+          <span class="more-menu-icon">🚪</span>登出
+        </a>
+        <button class="more-menu-item more-menu-cancel" @click="moreMenuOpen = false">取消</button>
+      </div>
+    </div>
 
     <div v-if="selected" class="modal" @click.self="selected = null" role="dialog" aria-modal="true">
       <div class="modal-body">
@@ -468,6 +1037,8 @@
     createApp({
       data() {
         return {
+          page: 'search',
+          moreMenuOpen: false,
           q: '', severity: '', filterDevice: '', dropdownOpen: false,
           devices: [],
           selectedLine: null,
@@ -478,6 +1049,38 @@
           feedbackStats: {},
           viewStats: {},
           showOldSolution: false,
+          modelPicker: { show: false, code: '', candidates: [] },
+          // camera
+          camState: 'live', // 'live' | 'model-select' | 'analyzing' | 'confirm' | 'results' | 'no-alarm'
+          camResults: [],
+          camError: null,
+          camStream: null,
+          pendingImageB64: null,
+          pendingMimeType: 'image/jpeg',
+          analyzeProgress: 0,
+          analyzeStages: [
+            { label: '影像品質檢查', mark: '⬜', state: '' },
+            { label: '辨識機種', mark: '⬜', state: '' },
+            { label: 'OCR 讀取警報代碼', mark: '⬜', state: '' },
+            { label: '查詢資料庫', mark: '⬜', state: '' },
+          ],
+          aiResult: {
+            scan_id: null,
+            model: '',
+            modelConf: null,
+            alarms: [],
+            rejected_alarms: [],
+            needs_model_selection: false,
+            validation: null,
+            original_model: null,
+            original_analyzer: null,
+          },
+          confirmDropOpen: false,
+          searchDeviceDropOpen: false,
+          confirmError: '',
+          selectedCorrectModel: '',
+          showCorrectionPicker: false,
+          isDesktopDev: !/iPhone|iPad|Android/i.test(navigator.userAgent),
         };
       },
       computed: {
@@ -490,10 +1093,8 @@
           }
           return Object.values(map).sort((a, b) => a.id.localeCompare(b.id));
         },
-        view() {
-          if (this.q || this.severity || this.filterDevice || this.selectedDevice) return 'results';
-          if (this.selectedLine) return 'devices';
-          return 'lines';
+        allDevices() {
+          return this.devices;
         },
       },
       mounted() {
@@ -502,6 +1103,12 @@
           this.feedbackStats = Object.fromEntries(stats.map(s => [s.device_model + '|' + s.code, s]));
         }).catch(() => {});
         this.refreshViewStats();
+      },
+      watch: {
+        page(val) {
+          if (val === 'camera') this.startCamera();
+          else this.stopCamera();
+        }
       },
       methods: {
         async refreshViewStats() {
@@ -567,9 +1174,8 @@
           this.fetchAlarms();
         },
         onSearch() {
-          this.selectedDevice = null;
           clearTimeout(this.timer);
-          this.timer = setTimeout(() => this.fetchAlarms(), 400);
+          this.timer = setTimeout(() => this.fetchAlarms(), 350);
         },
         onFilterChange() {},
         setDevice(model) {
@@ -577,25 +1183,322 @@
           this.dropdownOpen = false;
           this.fetchAlarms();
         },
+        setSeverity(s) {
+          this.severity = s;
+          this.fetchAlarms();
+        },
         goBack() {
           this.q = ''; this.severity = ''; this.filterDevice = '';
           this.selectedDevice = null;
           this.items = [];
         },
+        sevBorderClass(s) {
+          return { '嚴重': 'sev-border-high', '警告': 'sev-border-mid', '資訊': 'sev-border-low' }[s] || '';
+        },
+        onCardClick(a) {
+          this.openDetail(a);
+        },
         async fetchAlarms() {
+          if (!this.q && !this.severity && !this.filterDevice) {
+            this.items = [];
+            return;
+          }
+          // 只選機種沒輸入關鍵字 → 列出該機種全部警報（不限筆數）
           this.loading = true;
           const p = new URLSearchParams();
           if (this.q) p.set('q', this.q);
-          const dev = this.filterDevice || (this.selectedDevice && this.selectedDevice.model);
-          if (dev) p.set('device', dev);
+          if (this.filterDevice) p.set('device', this.filterDevice);
           if (this.severity) p.set('severity', this.severity);
           const r = await fetch('/api/alarms?' + p.toString());
           if (r.status === 401) { location.href = '/login'; return; }
-          let data = await r.json();
-          this.items = data;
+          this.items = await r.json();
           this.loading = false;
         },
-        sevClass(s) { return { '嚴重': 'sev-high', '警告': 'sev-mid', '資訊': 'sev-low' }[s] || ''; }
+        sevClass(s) { return { '嚴重': 'sev-high', '警告': 'sev-mid', '資訊': 'sev-low' }[s] || ''; },
+
+        // ── Camera ──
+        async startCamera() {
+          this.camError = null;
+          this.camState = 'live';
+          const isMobile = /iPhone|iPad|Android/i.test(navigator.userAgent);
+          if (!isMobile) {
+            this.camError = '請用手機開啟拍照功能';
+            return;
+          }
+          try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+              video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
+            });
+            this.camStream = stream;
+            await this.$nextTick();
+            if (this.$refs.videoEl) this.$refs.videoEl.srcObject = stream;
+          } catch (e) {
+            this.camError = '無法開啟相機：' + (e.message || e.name);
+          }
+        },
+        stopCamera() {
+          if (this.camStream) {
+            this.camStream.getTracks().forEach(t => t.stop());
+            this.camStream = null;
+          }
+        },
+        confClass(v) { return v >= 90 ? 'conf-high' : v >= 70 ? 'conf-mid' : 'conf-low'; },
+
+        async takePhoto() {
+          // 擷取影像，進機種選擇
+          let imageB64 = null;
+          try {
+            const video = this.$refs.videoEl;
+            if (video && video.readyState >= 2) {
+              const canvas = document.createElement('canvas');
+              canvas.width = video.videoWidth || 640;
+              canvas.height = video.videoHeight || 480;
+              canvas.getContext('2d').drawImage(video, 0, 0);
+              const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+              imageB64 = dataUrl.split(',')[1];
+            }
+          } catch {}
+
+          if (!imageB64 && !this.isDesktopDev) {
+            this.camError = '無法擷取影像，請重試';
+            return;
+          }
+
+          this.pendingImageB64 = imageB64;
+          this.pendingMimeType = 'image/jpeg';
+          this.selectedCorrectModel = '';
+          this.confirmDropOpen = false;
+          this.camState = 'model-select';
+        },
+
+        async submitAnalyze() {
+          if (!this.selectedCorrectModel) return;
+
+          this.camState = 'analyzing';
+          this.analyzeProgress = 0;
+          this.analyzeStages = this.analyzeStages.map(s => ({ ...s, mark: '⬜', state: '' }));
+
+          const setStage = (i, state, mark) => {
+            this.analyzeStages[i] = { ...this.analyzeStages[i], state, mark };
+            this.analyzeProgress = (state === 'done' ? i + 1 : i) / this.analyzeStages.length * 100;
+          };
+
+          setStage(0, 'done', '✅');
+          setStage(1, 'active', '⏳');
+
+          // 桌面開發模式：不送 Gemini，直接從 DB 抓前幾筆代碼當假資料
+          const mockApiResult = async () => {
+            const res = await fetch(`/api/alarms?device=${encodeURIComponent(this.selectedCorrectModel)}`);
+            if (!res.ok) return null;
+            const all = await res.json();
+            const sample = all.slice(0, 3);
+            return {
+              scan_id: 'mock-' + Date.now(),
+              model: this.selectedCorrectModel,
+              model_conf: 100,
+              alarms: sample.map(a => ({ code: a.code, conf: 95, note: '模擬資料' })),
+              rejected_alarms: [],
+              needs_model_selection: false,
+              validation: { needs_reconfirm: false, reasons: [] },
+              analyzer: { name: 'mock', model: 'mock', prompt_version: 'v0' },
+            };
+          };
+
+          const apiPromise = this.isDesktopDev
+            ? mockApiResult()
+            : (this.pendingImageB64
+                ? fetch('/api/analyze', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      image: this.pendingImageB64,
+                      mime_type: this.pendingMimeType,
+                      model: this.selectedCorrectModel,
+                    }),
+                  }).then(r => r.json()).catch(() => null)
+                : Promise.resolve(null));
+
+          await new Promise(r => setTimeout(r, 700));
+          setStage(1, 'done', '✅');
+          setStage(2, 'active', '⏳');
+          await new Promise(r => setTimeout(r, 600));
+          setStage(2, 'done', '✅');
+          setStage(3, 'active', '⏳');
+
+          const apiResult = await apiPromise;
+          setStage(3, 'done', '✅');
+          this.analyzeProgress = 100;
+
+          try {
+            if (apiResult && !apiResult.error && !apiResult.pipeline_error) {
+              const alarms = (apiResult.alarms || []).map((a, i) => ({ ...a, _id: i }));
+              const model = this.selectedCorrectModel;
+              const modelConf = apiResult.model_conf ?? null;
+              const validation = apiResult.validation || null;
+
+              if (alarms.length === 0) {
+                this.camState = 'no-alarm';
+                return;
+              }
+
+              this.aiResult = {
+                scan_id: apiResult.scan_id || null,
+                model,
+                modelConf,
+                alarms,
+                rejected_alarms: (apiResult.rejected_alarms || []).map((a, i) => ({ ...a, _id: i })),
+                needs_model_selection: false,
+                validation,
+                original_model: model,
+                original_analyzer: apiResult.analyzer || null,
+              };
+
+              const needsReconfirm = validation && validation.needs_reconfirm;
+              if (needsReconfirm) {
+                this.camState = 'confirm';
+              } else {
+                await this.lookupAndShowAlarms(model, alarms);
+                if (apiResult.scan_id) {
+                  this.silentConfirm(apiResult.scan_id, model, alarms, modelConf, model, apiResult.analyzer);
+                }
+              }
+            } else {
+              this.camState = 'no-alarm';
+            }
+          } catch {
+            this.camState = 'no-alarm';
+          }
+        },
+
+        resetCamera() {
+          this.camState = 'live';
+          this.confirmError = '';
+          this.selectedCorrectModel = '';
+          this.showCorrectionPicker = false;
+          this.pendingImageB64 = null;
+          this.camResults = [];
+          this.aiResult = {
+            scan_id: null, model: '', modelConf: null, alarms: [], rejected_alarms: [],
+            needs_model_selection: false, validation: null, original_model: null, original_analyzer: null,
+          };
+          this.$nextTick(() => {
+            if (this.camStream && this.$refs.videoEl) {
+              this.$refs.videoEl.srcObject = this.camStream;
+            } else {
+              this.startCamera();
+            }
+          });
+        },
+
+        // 操作員點擊單一代碼查詢（情境A）
+        async doConfirmSingle(alarm) {
+          const { scan_id, model, alarms, modelConf, original_model, original_analyzer } = this.aiResult;
+          if (scan_id) {
+            fetch('/api/confirm', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                scan_id, model,
+                alarms: alarms.map(a => ({ code: a.code, conf: a.conf ?? null })),
+                model_conf: modelConf, original_model, original_analyzer,
+                confirmed_by: 'operator',
+              }),
+            }).catch(() => {});
+          }
+          await this.lookupAndShowAlarms(model, [alarm]);
+        },
+
+        // 操作員確認 AI 結果正確（查全部代碼）
+        async doConfirm() {
+          const { scan_id, model, alarms, modelConf, original_model, original_analyzer } = this.aiResult;
+          if (scan_id) {
+            await fetch('/api/confirm', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                scan_id,
+                model,
+                alarms: alarms.map(a => ({ code: a.code, conf: a.conf ?? null })),
+                model_conf: modelConf,
+                original_model,
+                original_analyzer,
+                confirmed_by: 'operator',
+              }),
+            }).catch(() => {});
+          }
+          await this.lookupAndShowAlarms(model, alarms);
+        },
+
+        // 操作員手選正確機種（修正）
+        async doCorrection() {
+          const { scan_id, model: original_model, alarms, modelConf, original_analyzer } = this.aiResult;
+          const corrected_model = this.selectedCorrectModel || this.aiResult.model;
+          if (!corrected_model) return;
+
+          if (scan_id) {
+            await fetch('/api/correct', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                scan_id,
+                original_model,
+                corrected_model,
+                original_codes: alarms.map(a => ({ code: a.code, conf: a.conf ?? null })),
+                corrected_codes: alarms.map(a => ({ code: a.code, conf: a.conf ?? null })),
+                model_conf: modelConf,
+                original_analyzer,
+                confirmed_by: 'operator',
+              }),
+            }).catch(() => {});
+          }
+          await this.lookupAndShowAlarms(corrected_model, alarms);
+        },
+
+        // 靜默送 confirm（高信心度自動通過時）
+        silentConfirm(scan_id, model, alarms, modelConf, original_model, original_analyzer) {
+          fetch('/api/confirm', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              scan_id,
+              model,
+              alarms: alarms.map(a => ({ code: a.code, conf: a.conf ?? null })),
+              model_conf: modelConf,
+              original_model,
+              original_analyzer,
+              confirmed_by: 'operator',
+            }),
+          }).catch(() => {});
+        },
+
+        // 查詢 DB 並在拍照頁顯示結果
+        async lookupAndShowAlarms(model, alarms) {
+          const codes = alarms.map(a => a.code.trim()).filter(Boolean);
+          if (!model || codes.length === 0) {
+            this.camState = 'no-alarm';
+            return;
+          }
+
+          let allAlarms = [];
+          try {
+            const res = await fetch(`/api/alarms?device=${encodeURIComponent(model)}`);
+            if (res.ok) allAlarms = await res.json();
+          } catch {}
+
+          const normalize = c => c.replace(/\D/g, '').replace(/^0+/, '');
+          const results = allAlarms.filter(a =>
+            codes.some(c => normalize(a.code) === normalize(c))
+          );
+
+          if (results.length === 0) {
+            this.confirmError = `找不到 ${model} 的警報代碼：${codes.join(', ')}`;
+            this.camState = 'no-alarm';
+          } else {
+            this.confirmError = '';
+            this.camResults = results;
+            this.camState = 'results';
+          }
+        },
       }
     }).directive('click-outside', {
       mounted(el, binding) {

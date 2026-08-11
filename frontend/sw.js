@@ -8,15 +8,18 @@
  *   - API (/api/...): network-first with cache fallback
  */
 
-const CACHE = 'alarm-query-v9';
+const CACHE = 'alarm-query-v10';
 
 const STATIC_SHELL = [
   '/style.css',
   '/manifest.webmanifest',
-  '/icon.svg'
+  '/icon.svg',
+  '/icon-192.png',
+  '/icon-512.png',
+  '/apple-touch-icon.png'
 ];
 
-const HTML_PATHS = ['/', '/admin', '/login', '/admin/login'];
+const HTML_PATHS = ['/', '/app', '/admin', '/admin/dashboard', '/login', '/admin/login'];
 
 self.addEventListener('install', event => {
   event.waitUntil(
