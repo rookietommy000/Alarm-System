@@ -38,6 +38,10 @@ def _lan_ip() -> str:
 def create_app() -> Flask:
     app = Flask(__name__, static_folder=str(FRONTEND), static_url_path="")
     app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-change-me")
+    # Secure 只在正式環境（Render 提供 HTTPS）開啟，本機 HTTP 開發環境開啟會讓 cookie 傳不出去
+    app.config["SESSION_COOKIE_SECURE"] = bool(os.environ.get("RENDER_EXTERNAL_URL"))
+    app.config["SESSION_COOKIE_HTTPONLY"] = True
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
     CORS(app)
 
     # ── Auth helpers ────────────────────────────────────────────────

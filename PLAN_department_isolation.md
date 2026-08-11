@@ -1272,3 +1272,7 @@ def test_resolve_target_department_does_not_read_request_args():
 
 **🟡 管線設計本身的可觀察性缺口（記錄，非本輪修正範圍，留待後續評估）**
 3. **`ai_pipeline.py` 的 `run_pipeline()` 刻意把 Analyzer 層的例外全部吞掉，統一降級回傳 `tier: "failure"` 且 `alarms: []`**（見 `ai_pipeline.py` 第 61-97 行的 try/except），設計初衷是「不要讓 AI 服務的暫時性問題導致整個請求 500」，這個取捨本身合理。但目前前端（`index.html`）若沒有特別檢查 `tier === "failure"` 並顯示對應的錯誤訊息，`pipeline_error` 這種**系統性故障**（例如這次的套件缺失、API key 失效、額度用盡）跟 `tier: "no_alarm"` 這種**正常結果**（畫面上真的沒有警報）在使用者眼中會長得一模一樣，都顯示「未偵測到警報」——這正是這次問題一開始難以判斷方向的原因。是否要在前端明確區分這兩種情況（例如 `failure` 顯示「AI 服務暫時無法使用，請稍後再試或聯繫管理員」），不在本次多部門隔離工程範圍內，但值得記錄下來供後續獨立評估，尤其正式推廣給第二部門後，這種「看起來像沒警報、其實是服務故障」的情況會更難被工廠現場人員自行判斷
+
+**階段 -0.5 剩餘項目完成記錄**：
+4. **Cookie 屬性設定**——`app.py` 的 `create_app()` 過去完全沒有明確設定 session cookie 屬性，全靠 Flask 預設值。新增三個設定：`SESSION_COOKIE_HTTPONLY=True`、`SESSION_COOKIE_SAMESITE="Lax"` 為固定值；`SESSION_COOKIE_SECURE` 則依 `RENDER_EXTERNAL_URL` 是否存在動態開關——這個環境變數只有部署在 Render 時才會被自動注入，本機 HTTP 開發環境維持 `False`（若無條件設為 `True`，本機開發環境的 cookie 會因為非 HTTPS 而傳不出去，直接讓登入失效）。57 個既有 pytest 測試全數通過，確認未破壞既有行為。
+5. **Render worker 數量確認**——部署 log 明確顯示 `Setting WEB_CONCURRENCY=1 by default, based on available CPUs in the instance`，免費層預設就是單一 worker。這是 2.2.3 節粗細節流設計「共用 IP 不會被誤傷」推論的前提假設之一，本機測試環境同樣通常是單一 worker（開發伺服器預設），數量差異不大，暫不需要重新校準粗網門檻（20 次），但正式上線有多部門真實流量後應持續觀察。
