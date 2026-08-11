@@ -42,7 +42,7 @@
 
 - [x] 建立 Render Web Service，連接 GitHub repo `rookietommy000/Alarm-System`；已建立並套用 `render.yaml`（`gunicorn --chdir backend --bind 0.0.0.0:$PORT app:app`）
 - [x] 環境變數搬遷：`SUPABASE_URL`/`SUPABASE_KEY`/`GEMINI_API_KEY`/`FLASK_SECRET_KEY`/`LOGIN_PASSWORD`/`ADMIN_PASSWORD`（過程中發現並修正 `SUPABASE_KEY` 誤貼含變數名前綴的問題，見第十三輪）
-- [ ] **【第十三輪新增】確認 `requirements.txt` 的 `google-genai` 修正已部署並生效**——用 `curl`／腳本直接打 `POST /api/analyze` 帶測試圖片，確認不再回 503「AI 模組未安裝」，且能取得正常的 AI 辨識結果（tier 不是 `failure`）
+- [x] **【第十三輪新增】確認 `requirements.txt` 的 `google-genai` 修正已部署並生效**——`curl`/Python 直測空白圖確認 503 消失、回 200 且 Gemini 真的被呼叫（`ERR_MODEL_UNKNOWN` 是測試圖無內容的正常回應，非套件問題）；使用者實機拍攝真實警報畫面測試，AI 辨識正常運作，確認修復完整生效
 - [ ] **決策：沿用免費層 + `cron-job.org` 防休眠**（既有機制，`app.py` 的 `/ping` 端點已存在）——確認防休眠排程指向新的 Render 網域；已知偶爾仍可能遇到喚醒延遲，先上線觀察，非本次必須解決項目
 - [ ] Cookie 設定 `Secure`／`HttpOnly`／`SameSite=Lax`
 - [ ] **確認 Service Worker 在 HTTPS 下的實際行為**——Service Worker 只在 HTTPS（或 `localhost`）下運作，本機一直是 HTTP 環境，代表 PWA 快取行為（含 5.4 節當作安全機制在處理的 `/api/*` 排除快取、`activate` 清除舊快取）從未在真實環境跑過，Render 部署後必須重新走一次階段 14 的 SW 手動驗證步驟

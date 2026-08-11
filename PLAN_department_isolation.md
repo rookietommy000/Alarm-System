@@ -1268,7 +1268,7 @@ def test_resolve_target_department_does_not_read_request_args():
 
    **修正**：`requirements.txt` 的 `google-generativeai>=0.7` 改為 `google-genai>=1.0`（版本號比照本機 `.venv` 裡已驗證能正常運作的 `1.47.0`），與程式碼實際使用的 import 路徑一致。
 
-   **【重要，尚待驗證】此修正尚未部署驗證**——需要 commit、push、等 Render 重新部署後，再次用同樣的直接 API 測試方式確認 `/api/analyze` 能正常回傳 AI 辨識結果，而不只是不再噴 503
+   **【已驗證，修正生效】** commit、push 後 Render 自動重新部署，直接 API 測試（空白測試圖）確認 503 消失、回 200 且 Gemini 真的被呼叫成功（回應含 `analyzer.model`、`scan_id` 等完整欄位，`ERR_MODEL_UNKNOWN` 是測試圖本身無內容可辨識的正常結果，不是套件問題）；使用者接著用實機拍攝真實警報畫面測試，AI 辨識正常運作，確認端到端修復完整生效
 
 **🟡 管線設計本身的可觀察性缺口（記錄，非本輪修正範圍，留待後續評估）**
 3. **`ai_pipeline.py` 的 `run_pipeline()` 刻意把 Analyzer 層的例外全部吞掉，統一降級回傳 `tier: "failure"` 且 `alarms: []`**（見 `ai_pipeline.py` 第 61-97 行的 try/except），設計初衷是「不要讓 AI 服務的暫時性問題導致整個請求 500」，這個取捨本身合理。但目前前端（`index.html`）若沒有特別檢查 `tier === "failure"` 並顯示對應的錯誤訊息，`pipeline_error` 這種**系統性故障**（例如這次的套件缺失、API key 失效、額度用盡）跟 `tier: "no_alarm"` 這種**正常結果**（畫面上真的沒有警報）在使用者眼中會長得一模一樣，都顯示「未偵測到警報」——這正是這次問題一開始難以判斷方向的原因。是否要在前端明確區分這兩種情況（例如 `failure` 顯示「AI 服務暫時無法使用，請稍後再試或聯繫管理員」），不在本次多部門隔離工程範圍內，但值得記錄下來供後續獨立評估，尤其正式推廣給第二部門後，這種「看起來像沒警報、其實是服務故障」的情況會更難被工廠現場人員自行判斷
