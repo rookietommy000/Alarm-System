@@ -1726,3 +1726,52 @@ mf4d impact counts: {'alarms': 1759, 'ai_scans': 0, 'ai_corrections': 0,
 判斷：真正符合「危險預設值——結果被用來做破壞性決策、且表面看起來正常」這個模式的只有已在第二十九輪修正的 `_count()`。其餘 11 處統一改成拋錯會是過度工程，且會讓原本合理的降級設計（Dashboard 統計頁面容錯）變得脆弱。記錄此判斷，不動這批程式碼。
 
 **影響範圍**：`backend/app.py`（`admin_logout()` 改用 `session.clear()`、`scope_department()`/`resolve_target_department()` 加超管部門存在性驗證）；59 個既有 pytest 全數通過；三項修正用真實 Flask test client + 真實 Supabase 連線驗證（session 清空、越權部門 404、正常部門仍可用、寫入路徑 404）。🟡6/9/10 三項評估後判斷不需修正或暫不修正，理由已記錄在案，避免日後重複討論同一個問題。至此外部審查衍生的所有項目全部處理完畢，正式進入部署前置作業階段。
+
+---
+
+第三十一輪審查（第 5 節：前端全面實作，含一個外部專家介入的架構決策——登入節流 UI 不依賴 fetch）：
+
+**背景**：使用者提供了一份完整的多部門介面原型設計（`.dc.html` 格式，某原型工具產生，含互動狀態機與假資料），涵蓋後台部門切換器、部門管理 CRUD（含刪除三步驟流程）、登入頁部門選單、前台部門標示、五種狀態畫面。使用者明確要求「結合原本單部門的設計」——不是整套替換視覺風格，而是把多部門邏輯融合進既有的深色卡片登入頁／Bootstrap modal 後台登入／淺色 Vue 前台／`--color-accent` 系統 dashboard 這套既有視覺語言裡（確認過現有 `dashboard.html` 的 `--color-accent: #5980a6` 與原型的 `ACCENT` 色值完全一致，融合成本低）。
+
+**🔴 登入節流的前端呈現方式：外部專家推翻了兩個表面合理的方案（已採納第三方案）**
+
+原型設計要求 429 節流時顯示動態倒數畫面，但現有登入表單是原生 `<form method="post" action="/login">`，伺服器回應是 `redirect`；`_check_login_throttle()`（第 2.2/2.2.3 節）回的是 429 JSON + `Retry-After` header。這兩者天然衝突：原生表單提交拿不到 JSON 回應內容與 header，無法做動態倒數。
+
+提出的兩個方案都被外部專家否決：
+1. **改用 fetch 攔截提交**——專家指出這會讓「登入」這條最不能壞的路徑依賴 JavaScript 才能運作；`js/api.js` 載入失敗或某台舊平板 JS 出問題時，使用者會完全進不去系統，且成本包含要自己處理重導、`next` 參數組裝、`Set-Cookie` 在 fetch 下的 `credentials` 設定等連鎖複雜度
+2. **維持原生表單，接受裸 JSON 回應**——專家指出使用者看到 `{"error":"..."}` 後無路可退（沒有連結、沒有按鈕），且 `Retry-After` 秒數在 header 裡使用者根本看不到
+
+**採納方案：維持原生表單，`_check_login_throttle()` 依情境分流**——表單提交（非 `/api/*`）時改為 `redirect(url_for(login_page_endpoint, throttled=delay))`，把剩餘秒數帶在 query string；登入頁前端用純 `setInterval` 讀取並渲染倒數，不需要 fetch。這個決策也點出了一個既有的一致性問題：`login_required` 裝飾器已經依 `/api/` 前綴分流回應格式（JSON vs 重導），但 `_check_login_throttle()` 先前不論路徑一律回 JSON，是這個約定的例外而非通例——本輪修正後恢復一致。
+
+**進一步補強（同一輪專家追加建議，已採納）**：
+1. **server-side `disabled` 屬性 vs 純 JS 渲染**：現有頁面全部是 `send_from_directory` 純靜態檔案，沒有 Jinja 模板系統。專家確認「server-side disabled 的價值只在解釋、不在攔截——攔截本來就在伺服器端，跟前端渲染與否無關」，引入模板系統的成本（影響部署、SW 快取的 HTML always-network 策略、所有既有頁面載入路徑）不值得為此付出，故採用純 JS 渲染方案，不引入模板系統
+2. **`<div id="throttle-hint">` 預設可見的靜態說明**：JS 正常時被替換成即時倒數；JS 完全掛掉（不只是被停用，包含載入失敗、語法錯誤）時這段文字留在原地不會消失，讓使用者知道「這是預期行為，不是系統壞了」——這比 `<noscript>` 更貼近實際失效情境，因為 `<noscript>` 只在 JS 被主動停用時觸發，涵蓋不到 JS 載入失敗的情況
+3. **倒數結束不自動送出表單**：共用平板上使用者可能已離開，或密碼欄位是別人剛才留下的內容，自動送出有風險，只恢復按鈕可用狀態
+4. **`history.replaceState` 清除 `?throttled=` 參數**：避免使用者之後因 session 失效被導回登入頁時，殘留舊的倒數參數重新觸發顯示
+
+**🟢 完整前端實作（六個核心檔案，全部完成並用真實 Supabase 連線端到端驗證）**
+
+1. **`frontend/js/api.js`（新檔）**：`AlarmApi.get/post/put/delete` 統一封裝 fetch，401 全域攔截導向對應登入頁、429 讀 `Retry-After` 拋出結構化錯誤（供其他非登入端點未來使用）、`whoami()` 帶記憶體快取（`force` 參數可強制刷新）
+2. **`login.html`**：保留既有深色卡片視覺風格；新增部門選單（`GET /api/departments/public` 動態載入，預設選第一個）；新增節流倒數 UI（上述架構）
+3. **`admin-login.html`**：保留既有 Bootstrap modal 視覺風格；部門選單 + `__super__`（系統管理員）分岔選項，用虛線樣式與分隔線視覺區分「不同的驗證路徑」；節流倒數 UI 同 login.html
+4. **`dashboard.html`（改動最大）**：
+   - `whoami`/`viewDept`/`departments` 狀態；`mounted()` 依序執行：讀 URL `?dept=`（或 `sessionStorage` 補位）→ 載入 `whoami` → 超管才載入部門清單並同步 URL → 載入頁面資料
+   - 部門切換器（超管專用，`isAll` 時額外顯示「跨部門檢視可編輯不可新增」提示）；部門管理員固定範圍提示（無切換器）
+   - 所有讀取端點呼叫加上 `?dept=` query（超管專用，`deptQuery()` helper）；`404` 回應時自動退回 `__all__`（處理超管带了已被刪除或打錯字的部門）
+   - 機種/警報 CRUD 全部改三段式路徑（`/api/alarms/<dept>/...`、`/api/devices/<dept>/...`），寫入目標統一用 `writeDept()`（超管是 `viewDept`，部門管理員是自己的 `whoami.department`），`isAll` 時 UI 隱藏新增按鈕（最後一道防線，非唯一防線——後端 `resolve_target_department()` 本來就會擋超管未指定部門的寫入）
+   - 新增「部門管理」頁籤（`superOnly` nav 項目）：列表、新增、重設密碼、停用/啟用、刪除三步驟（`GET /impact` 查詢影響範圍 → 手動輸入識別碼二次確認 → 顯示實際刪除筆數），完整比照原型設計的三步驟流程與視覺語言
+   - 機種列表在 `isAll` 檢視時額外顯示「所屬部門」欄位（跨部門同名機種在總管視角必須可辨識，對應 PLAN 1.3 節設計動機）
+5. **`index.html`**：新增 `whoami` 狀態與 `currentDeptName`/`currentDeptCode` computed；topbar 新增部門顯示列（比照原型設計：圓點 + 部門名稱 + 識別碼），拆分成 `.topbar-main`（原有標題列）+ `.topbar-dept`（新增部門列）兩行；移除四處寫死的 `confirmed_by: 'operator'`（伺服器端 `_confirmed_by()` 已改用真實 session 計算，前端傳值本來就會被忽略，直接不傳）
+6. **`sw.js`**：`CACHE` 版本號 v10→v11；`STATIC_SHELL` 加入 `js/api.js`；`/api/*` fetch handler 從「network-first + cache fallback」改為純 `fetch(req)`（network only，不讀寫快取）——避免共用平板上 A 部門登出、B 部門登入時網路不穩，讓 B 部門看到 A 部門殘留在快取裡的 API 回應；`activate` 事件除既有的舊版 cache 清除外，新增清除當前 cache 裡殘留 `/api/*` 回應的防禦性邏輯；`index.html`/`dashboard.html` 的登出連結新增 click handler 主動 `caches.delete()` 作縱深防禦
+
+**🟢 端到端驗證（真實 Supabase 連線，非 mock）**
+
+啟動本機 Flask server 連正式 Supabase 資料庫，完整走過：
+- `GET /api/departments/public` 正確回傳 `mf4d`（製造四部包裝組）
+- 一般帳號登入 `mf4d` → 302 導向 `/app` → `whoami` 正確含 `department_name` → 前台頁面 HTML 含部門顯示邏輯（`topbar-dept`/`currentDeptName`）→ `/api/alarms` 正確回傳 1759 筆（session 自動過濾）→ 登出 302 成功
+- 超管登入 `__super__` → 302 導向 `/admin` → `whoami` 正確顯示 `superadmin:true, department:null` → dashboard HTML 含部門切換器/部門管理 UI 元素（`dept-band`/`dept-tabs`/「部門管理」文字）→ `/api/admin/departments` 正確回傳部門列表 → `/api/admin/departments/mf4d/impact` 正確回傳各表筆數（`alarms:1759`/`devices:14`，與正式資料吻合）→ `?dept=mf4d` 正確過濾（1759 筆）→ `?dept=不存在的部門` 正確回 404（驗證第三十輪修正的存在性檢查在真實 HTTP 請求下確實生效，不只是單元測試層級）
+- 節流重導行為驗證：連續打錯密碼確認第二次以後變成 `redirect` 帶 `?throttled=N`（不再是 429 JSON），節流視窗過期後恢復正常 `?error=1` 行為
+
+測試期間產生的 `login_attempts` 記錄（`mf4d`/`__super__`）已清除，正式資料全程未受影響；59 個既有 pytest（後端邏輯本身無改動，僅 `_check_login_throttle()` 的節流回應方式調整）全數通過。JS 語法用 Node.js `new Function()` 額外驗證（`dashboard.html`、`index.html` 兩份腳本皆通過），避免大範圍字串編輯引入語法錯誤未被發現。
+
+**尚未完成（下一步）**：PLAN 5.5 節「SW 快取行為手動驗證」需要真實瀏覽器操作（開發者工具檢查 Cache Storage、模擬弱網/離線），無法自動化，且依 PLAN 第十輪審查需要 B 帳號（哨兵部門暫時 `hidden=false`），這步驟排在維護窗口內、`app.py` 實際部署之後才有意義執行（本機環境的 Service Worker 行為與 Render 正式 HTTPS 環境下可能不同，PLAN 第八輪審查已記錄這個風險）。

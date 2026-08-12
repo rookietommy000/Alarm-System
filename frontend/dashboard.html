@@ -13,6 +13,7 @@
 <link rel="icon" type="image/svg+xml" href="/icon.svg" />
 <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script src="/js/api.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
@@ -156,6 +157,47 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 .toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); background: var(--color-accent-900); color: var(--color-bg); padding: 10px 18px; font-size: 14px; box-shadow: var(--shadow-md); z-index: 3000; }
+
+/* ── 部門切換器（總管專用）／固定範圍提示（部門管理員）── */
+.dept-band { display: flex; border-bottom: 1px solid var(--color-divider); }
+.dept-band-rail { width: 8px; flex: none; }
+.dept-band-body { flex: 1; min-width: 0; padding: 16px 24px; display: flex; flex-wrap: wrap; align-items: center; gap: 20px; }
+.dept-band-current { display: flex; flex-direction: column; gap: 2px; min-width: 190px; }
+.dept-band-current .kicker { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: color-mix(in srgb, var(--color-text) 60%, transparent); }
+.dept-band-current .name { font-family: var(--font-heading); font-size: 26px; font-weight: 700; line-height: 1.1; }
+.dept-band-current .code { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size: 12px; letter-spacing: 0.06em; color: color-mix(in srgb, var(--color-text) 60%, transparent); }
+.dept-tabs { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.dept-tab {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
+  min-height: 48px; padding: 6px 16px; cursor: pointer;
+  border: 1px solid var(--color-divider); background: transparent; color: var(--color-text);
+  font-family: inherit;
+}
+.dept-tab .name { font-size: 15px; font-weight: 600; }
+.dept-tab .code { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size: 10px; letter-spacing: 0.06em; opacity: 0.7; }
+.dept-tab.active { background: var(--color-accent); border-color: var(--color-accent); color: var(--color-bg); }
+.dept-tab.all-tab { border-style: dashed; }
+.dept-tab.all-tab.active { background: #d08b1f; border-color: #d08b1f; color: #fffdf8; }
+.dept-tab-sep { width: 1px; height: 40px; background: var(--color-divider); }
+.dept-band-allnotice { padding: 10px 24px; border-bottom: 1px solid var(--color-divider); background: #efece3; font-size: 13px; color: #5c4a2e; }
+
+.dept-scope-notice { display: flex; border-bottom: 1px solid var(--color-divider); background: color-mix(in srgb, var(--color-accent) 6%, transparent); }
+.dept-scope-notice-rail { width: 8px; flex: none; background: var(--color-accent); }
+.dept-scope-notice-body { flex: 1; padding: 14px 24px; display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+
+/* ── 部門管理頁 ── */
+.status-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; display: inline-block; }
+.impact-list { border: 1px solid rgba(162,59,59,0.35); background: rgba(162,59,59,0.05); }
+.impact-list.done { border-color: var(--color-divider); background: transparent; }
+.impact-row { display: flex; align-items: baseline; gap: 12px; padding: 12px 16px; border-bottom: 1px solid rgba(162,59,59,0.18); }
+.impact-list.done .impact-row { border-bottom-color: color-mix(in srgb, var(--color-text) 8%, transparent); }
+.impact-row .n { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; min-width: 76px; text-align: right; color: #8c3333; }
+.impact-list.done .impact-row .n { color: var(--color-text); }
+.impact-row .label { font-size: 15px; }
+.impact-row .table-name { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size: 11px; color: color-mix(in srgb, var(--color-text) 55%, transparent); margin-left: auto; }
+.confirm-input { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size: 18px; letter-spacing: 0.08em; }
+.confirm-input.matched { border-color: #5b9e6f !important; }
+.confirm-input.mismatched { border-color: rgba(162,59,59,0.5) !important; }
 </style>
 </head>
 <body>
@@ -169,7 +211,7 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
         <div style="font-size:11px; letter-spacing:0.12em; text-transform:uppercase; color:var(--color-accent); margin-top:4px">Admin Console</div>
       </div>
       <nav class="sidenav" style="display:flex; flex-direction:column; gap:2px; padding:0 10px">
-        <button v-for="n in navItems" :key="n.key" @click="page = n.key"
+        <button v-for="n in visibleNavItems" :key="n.key" @click="page = n.key"
           :style="{background: page===n.key ? 'color-mix(in srgb, var(--color-accent) 16%, transparent)' : 'transparent', color: page===n.key ? 'var(--color-accent-900)' : 'var(--color-text)'}"
           style="display:flex; align-items:center; justify-content:space-between; gap:8px; width:100%; text-align:left; cursor:pointer; font-family:var(--font-heading); font-weight:600; font-size:15px; padding:9px 10px; border:1px solid transparent; background-color:transparent">
           <span>{{ n.label }}</span>
@@ -178,7 +220,7 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
       </nav>
       <div class="navselect-wrap" style="display:none; padding:0 18px">
         <select class="input navselect" v-model="page">
-          <option v-for="n in navItems" :key="n.key" :value="n.key">{{ n.label }}（{{ n.code }}）</option>
+          <option v-for="n in visibleNavItems" :key="n.key" :value="n.key">{{ n.label }}（{{ n.code }}）</option>
         </select>
       </div>
       <div class="user" style="margin-top:auto; padding:14px 18px 0; border-top:1px solid var(--color-divider); display:flex; flex-direction:column; gap:4px">
@@ -200,6 +242,43 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
           <span style="font-size:12px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">{{ nowLabel }}</span>
         </div>
       </header>
+
+      <!-- 目前檢視部門切換器（總管專用，PLAN 5.2 節：切換檢視部門模式，
+           既有畫面不用逐一加部門欄位，只是資料範圍隨切換器改變） -->
+      <div v-if="isSuper" class="dept-band" :style="{background: isAll ? '#efece3' : 'color-mix(in srgb, var(--color-accent) 8%, transparent)'}">
+        <div class="dept-band-rail" :style="{background: isAll ? '#d08b1f' : 'var(--color-accent)'}"></div>
+        <div class="dept-band-body">
+          <div class="dept-band-current">
+            <span class="kicker">目前檢視部門</span>
+            <span class="name">{{ isAll ? '全部部門' : (currentDeptName || '—') }}</span>
+            <span class="code">{{ isAll ? 'ALL · 無法新增' : viewDept }}</span>
+          </div>
+          <div class="dept-tabs">
+            <button v-for="d in departments.filter(x => x.active)" :key="d.id" class="dept-tab"
+              :class="{active: viewDept === d.id}" @click="setViewDept(d.id)">
+              <span class="name">{{ d.name }}</span>
+              <span class="code">{{ d.id }}</span>
+            </button>
+            <span class="dept-tab-sep"></span>
+            <button class="dept-tab all-tab" :class="{active: isAll}" @click="setViewDept('__all__')">
+              <span class="name">全部部門</span>
+              <span class="code">ALL · 無法新增</span>
+            </button>
+          </div>
+        </div>
+      </div>
+      <div v-if="isSuper && isAll" class="dept-band-allnotice">跨部門檢視可以編輯既有資料，但無法新增——沒有指定部門就無法決定要建立到哪裡。</div>
+
+      <!-- 部門管理員固定範圍提示（無切換器） -->
+      <div v-if="whoamiLoaded && !isSuper" class="dept-scope-notice">
+        <div class="dept-scope-notice-rail"></div>
+        <div class="dept-scope-notice-body">
+          <span class="kicker" style="font-size:11px; letter-spacing:0.12em; text-transform:uppercase; color:color-mix(in srgb, var(--color-text) 60%, transparent)">管理範圍</span>
+          <span style="font-family:var(--font-heading); font-size:20px; font-weight:700">{{ currentDeptName || whoami.department }}</span>
+          <span style="font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace; font-size:12px; color:color-mix(in srgb, var(--color-text) 60%, transparent)">{{ whoami.department }}</span>
+          <span style="font-size:13px; color:color-mix(in srgb, var(--color-text) 60%, transparent)">部門管理員只管理自己的部門，無切換器。</span>
+        </div>
+      </div>
 
       <div class="pad" style="padding:26px 32px 60px; display:flex; flex-direction:column; gap:26px">
 
@@ -412,12 +491,13 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
                   <option v-for="d in devices" :key="d.id" :value="d.model">{{ d.model }}</option>
                 </select>
                 <input class="input toolbar-field" style="width:200px" v-model="alarmListSearch" placeholder="搜尋代碼或描述…" />
-                <button class="btn btn-primary blueprint toolbar-field" @click="newAlarm">
+                <button v-if="!isAll" class="btn btn-primary blueprint toolbar-field" @click="newAlarm">
                   <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
                   ＋ 新增警報
                 </button>
               </div>
             </div>
+            <p v-if="isAll" style="margin:0; font-size:13px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">跨部門檢視可以編輯既有資料，但無法新增——沒有指定部門就無法決定要建立到哪裡。</p>
             <div class="table-wrap">
             <table class="table" style="min-width:760px">
               <thead><tr><th>代碼</th><th>機種</th><th>嚴重度</th><th>描述</th><th>回饋</th><th></th></tr></thead>
@@ -464,20 +544,22 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
         <div v-if="page === 'models'">
           <section class="card blueprint" style="padding:16px; gap:12px">
             <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
-            <div style="display:flex; align-items:center; justify-content:space-between">
+            <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px">
               <h2 style="font-size:18px">機種列表 <span style="font-size:11px; font-family:var(--font-body); color:color-mix(in srgb, var(--color-text) 55%, transparent)">M-04</span></h2>
-              <button class="btn btn-primary blueprint" @click="newDevice">
+              <button v-if="!isAll" class="btn btn-primary blueprint" @click="newDevice">
                 <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
                 ＋ 新增機種
               </button>
+              <span v-else style="font-size:13px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">跨部門檢視可以編輯既有資料，但無法新增——沒有指定部門就無法決定要建立到哪裡。</span>
             </div>
             <div class="table-wrap">
             <table class="table" style="min-width:520px">
-              <thead><tr><th>機種代號</th><th>類別</th><th>產線</th><th>掃描量</th><th>失敗率</th><th></th></tr></thead>
+              <thead><tr><th>機種代號</th><th>類別</th><th v-if="isAll">所屬部門</th><th>產線</th><th>掃描量</th><th>失敗率</th><th></th></tr></thead>
               <tbody>
                 <tr v-for="d in devicesWithStats" :key="d.id">
                   <td style="font-weight:500">{{ d.model }}</td>
                   <td>{{ d.category || '—' }}</td>
+                  <td v-if="isAll" style="color:color-mix(in srgb, var(--color-text) 65%, transparent)">{{ deptName(d.department) }}</td>
                   <td>{{ d.line || '—' }}</td>
                   <td style="font-variant-numeric:tabular-nums">{{ d.scans }}</td>
                   <td style="font-variant-numeric:tabular-nums" :style="{color: d.fail_rate >= 20 ? '#a23b3b' : 'inherit'}">{{ d.fail_rate }}%</td>
@@ -489,7 +571,46 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
             </table>
             </div>
             <p v-if="!devices.length" style="font-size:13px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">尚無機種資料</p>
+            <p v-if="isAll" style="margin:0; font-size:13px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">跨部門檢視時「所屬部門」欄位一律顯示，因為不同部門可能有同名機種。</p>
             <div style="font-size:12px; color:color-mix(in srgb, var(--color-text) 60%, transparent)">刪除機種不影響既有警報代碼與掃描紀錄。</div>
+          </section>
+        </div>
+
+        <!-- ══ 部門管理（超管專用）══ -->
+        <div v-if="page === 'depts'">
+          <section class="card blueprint" style="padding:16px; gap:12px">
+            <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+            <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px">
+              <h2 style="font-size:18px">部門列表 <span style="font-size:13px; font-family:var(--font-body); color:color-mix(in srgb, var(--color-text) 55%, transparent)">共 {{ departments.length }} 個部門</span></h2>
+              <button class="btn btn-primary blueprint" @click="openCreateDept">
+                <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+                ＋ 新增部門
+              </button>
+            </div>
+            <div class="table-wrap">
+            <table class="table" style="min-width:760px">
+              <thead><tr><th>部門名稱</th><th>識別碼</th><th>狀態</th><th></th></tr></thead>
+              <tbody>
+                <tr v-for="d in departments" :key="d.id">
+                  <td style="font-size:16px; font-weight:600; white-space:nowrap">{{ d.name }}</td>
+                  <td style="font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace; font-size:13px; letter-spacing:0.06em">{{ d.id }}</td>
+                  <td style="white-space:nowrap">
+                    <span style="display:inline-flex; align-items:center; gap:7px">
+                      <span class="status-dot" :style="{background: d.active ? '#5b9e6f' : '#9a9893'}"></span>
+                      <span style="font-size:13px">{{ d.active ? '啟用中' : '已停用' }}</span>
+                    </span>
+                  </td>
+                  <td style="text-align:right; white-space:nowrap">
+                    <button class="btn btn-ghost" @click="openResetPw(d)">重設密碼</button>
+                    <button class="btn btn-ghost" @click="openToggleActive(d)">{{ d.active ? '停用' : '啟用' }}</button>
+                    <button v-if="d.purgeable" class="btn btn-ghost btn-danger" @click="openDeleteDept(d)">刪除</button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            </div>
+            <p v-if="!departments.length" style="font-size:13px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">尚無部門資料</p>
+            <p style="margin:0; font-size:13px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">部門識別碼建立後不可更改，它是所有資料表的隔離鍵。</p>
           </section>
         </div>
 
@@ -552,6 +673,149 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
     </div>
   </div>
 
+  <!-- 新增部門 Dialog -->
+  <div class="dialog-backdrop" v-if="deptDialog === 'create'" @click.self="closeDeptDialog">
+    <div class="dialog blueprint" style="width:min(520px,100%)">
+      <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+      <div class="dialog-title">新增部門</div>
+      <div class="field">
+        <label>部門識別碼</label>
+        <input class="input" v-model="deptCreateDraft.id" placeholder="line4" style="font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace" />
+        <span style="font-size:13px; color:color-mix(in srgb, var(--color-text) 60%, transparent); line-height:1.5; display:block; margin-top:4px">建立後不可更改。所有機種、警報、掃描紀錄都用它綁定部門。只能用小寫英數字與底線。</span>
+      </div>
+      <div class="field">
+        <label>顯示名稱</label>
+        <input class="input" v-model="deptCreateDraft.name" placeholder="4線" />
+        <span style="font-size:13px; color:color-mix(in srgb, var(--color-text) 60%, transparent); display:block; margin-top:4px">現場人員在登入頁看到的名稱，之後可以改。</span>
+      </div>
+      <div class="fgrid">
+        <div class="field"><label>使用者密碼</label><input class="input" v-model="deptCreateDraft.password" /></div>
+        <div class="field"><label>管理員密碼</label><input class="input" v-model="deptCreateDraft.admin_password" /></div>
+      </div>
+      <p v-if="deptError" style="color:#a23b3b; font-size:13px; margin:0">{{ deptError }}</p>
+      <div class="dialog-actions">
+        <div></div>
+        <div style="display:flex; gap:8px">
+          <button class="btn btn-secondary" @click="closeDeptDialog">取消</button>
+          <button class="btn btn-primary" @click="createDept">建立部門</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 重設密碼 Dialog -->
+  <div class="dialog-backdrop" v-if="deptDialog === 'reset'" @click.self="closeDeptDialog">
+    <div class="dialog blueprint" style="width:min(500px,100%)">
+      <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+      <div class="dialog-title">重設 {{ deptTarget.name }} 的密碼</div>
+      <div style="border:1px solid rgba(92,74,46,0.35); background:#efece3; padding:14px; display:flex; gap:10px; align-items:flex-start">
+        <span class="status-dot" style="background:#d08b1f; margin-top:6px"></span>
+        <span style="font-size:14px; line-height:1.6; color:#4a3d28">{{ deptTarget.name }} 目前所有登入中的裝置都會被登出，包含正在查警報的人。產線停機時段請避免執行。</span>
+      </div>
+      <div class="fgrid">
+        <div class="field"><label>新使用者密碼</label><input class="input" v-model="deptResetDraft.password" /></div>
+        <div class="field"><label>新管理員密碼（留空不改）</label><input class="input" v-model="deptResetDraft.admin_password" /></div>
+      </div>
+      <p v-if="deptError" style="color:#a23b3b; font-size:13px; margin:0">{{ deptError }}</p>
+      <div class="dialog-actions">
+        <div></div>
+        <div style="display:flex; gap:8px">
+          <button class="btn btn-secondary" @click="closeDeptDialog">取消</button>
+          <button class="btn btn-primary" @click="resetDeptPassword">重設並登出所有人</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 停用／啟用 Dialog -->
+  <div class="dialog-backdrop" v-if="deptDialog === 'toggle'" @click.self="closeDeptDialog">
+    <div class="dialog blueprint" style="width:min(480px,100%)">
+      <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+      <div class="dialog-title">{{ deptTarget.active ? '停用' : '啟用' }} {{ deptTarget.name }}</div>
+      <p style="margin:0; font-size:15px; line-height:1.65">
+        {{ deptTarget.active
+          ? deptTarget.name + ' 會從登入頁的部門清單消失，目前登入中的裝置會在一分鐘內被登出。後台資料仍然保留。'
+          : deptTarget.name + ' 會重新出現在登入頁的部門清單，使用者可以用原本的密碼登入。' }}
+      </p>
+      <p style="margin:0; font-size:14px; color:color-mix(in srgb, var(--color-text) 60%, transparent); line-height:1.6">停用是可逆的，機種、警報與掃描紀錄都保留，隨時可以再啟用。</p>
+      <div class="dialog-actions">
+        <div></div>
+        <div style="display:flex; gap:8px">
+          <button class="btn btn-secondary" @click="closeDeptDialog">取消</button>
+          <button class="btn btn-primary" @click="toggleDeptActive">確定{{ deptTarget.active ? '停用' : '啟用' }}</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 刪除部門：影響範圍 → 手動輸入識別碼 → 結果 -->
+  <div class="dialog-backdrop" v-if="deptDialog === 'delete'" @click.self="delStep === 3 && closeDeptDialog()">
+    <div class="dialog blueprint" style="width:min(560px,100%)">
+      <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+
+      <template v-if="delStep === 1">
+        <div class="dialog-title" style="display:flex; align-items:center; gap:10px">
+          <span class="status-dot" style="background:#a23b3b"></span>
+          刪除部門 {{ deptTarget.name }}
+        </div>
+        <p style="margin:0; font-size:15px; line-height:1.65">以下資料會被永久刪除，無法復原，也不會進回收桶。</p>
+        <div v-if="deptImpactLoading" style="font-size:13px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">載入影響範圍中…</div>
+        <p v-else-if="deptImpactError" style="color:#a23b3b; font-size:13px; margin:0">{{ deptImpactError }}——無法取得影響範圍，請重試。</p>
+        <div v-else class="impact-list">
+          <div v-for="i in deptImpactRows" :key="i.table" class="impact-row">
+            <span class="n">{{ i.n }}</span>
+            <span class="label">{{ i.label }}</span>
+            <span class="table-name">{{ i.table }}</span>
+          </div>
+        </div>
+        <p style="margin:0; font-size:14px; color:color-mix(in srgb, var(--color-text) 60%, transparent); line-height:1.6">掃描紀錄是 GMP 稽核軌跡的一部分。如果只是這個部門暫時不用，請改用「停用」。</p>
+        <div class="dialog-actions">
+          <button class="btn btn-secondary" @click="closeDeptDialog">取消</button>
+          <button class="btn" style="border-color:#a23b3b; color:#8c3333" :disabled="deptImpactLoading || deptImpactError" @click="delStep = 2">我了解，繼續刪除</button>
+        </div>
+      </template>
+
+      <template v-if="delStep === 2">
+        <div class="dialog-title">輸入識別碼以確認</div>
+        <p style="margin:0; font-size:15px; line-height:1.65">請手動輸入要刪除部門的識別碼。這一步是為了確認你刪的是這個部門，而不是列表上相鄰的另一個。</p>
+        <div style="border:1px solid var(--color-divider); padding:12px 16px; display:flex; align-items:center; gap:12px">
+          <span style="font-size:13px; color:color-mix(in srgb, var(--color-text) 60%, transparent)">要刪除的部門</span>
+          <span style="font-size:17px; font-weight:600">{{ deptTarget.name }}</span>
+          <span style="font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace; font-size:17px; font-weight:700; letter-spacing:0.1em">{{ deptTarget.id }}</span>
+        </div>
+        <input class="input confirm-input" v-model="delConfirmText" :placeholder="deptTarget.id"
+          :class="{matched: delConfirmMatched, mismatched: delConfirmText && !delConfirmMatched}" />
+        <div class="dialog-actions">
+          <button class="btn btn-secondary" @click="closeDeptDialog">取消</button>
+          <button class="btn" :disabled="!delConfirmMatched"
+            :style="delConfirmMatched ? 'background:#a23b3b; border-color:#a23b3b; color:#f7f2ef' : ''"
+            @click="doDeleteDept">永久刪除 {{ deptTarget.name }}</button>
+        </div>
+      </template>
+
+      <template v-if="delStep === 3">
+        <div class="dialog-title" style="display:flex; align-items:center; gap:10px">
+          <span class="status-dot" style="background:var(--color-accent)"></span>
+          {{ deptTarget.name }} 已刪除
+        </div>
+        <p style="margin:0; font-size:15px; line-height:1.65">各資料表實際刪除筆數：</p>
+        <div class="impact-list done">
+          <div v-for="i in deptDeletedRows" :key="i.table" class="impact-row">
+            <span class="n">{{ i.n }}</span>
+            <span class="label">{{ i.label }}</span>
+            <span class="table-name">{{ i.table }}</span>
+          </div>
+        </div>
+        <p style="margin:0; font-size:14px; color:color-mix(in srgb, var(--color-text) 55%, transparent); line-height:1.6">此操作已記入稽核軌跡。目前檢視部門已切回全部部門。</p>
+        <div class="dialog-actions">
+          <div></div>
+          <button class="btn btn-primary" @click="closeDeptDialog">回到部門列表</button>
+        </div>
+      </template>
+
+    </div>
+  </div>
+
   <div class="toast" v-if="toast">{{ toast }}</div>
 </div>
 
@@ -567,15 +831,23 @@ createApp({
         { key: 'scans', label: '掃描紀錄管理', code: 'S' },
         { key: 'alarms', label: '警報管理', code: 'A' },
         { key: 'models', label: '機種管理', code: 'M' },
+        { key: 'depts', label: '部門管理', code: 'X', superOnly: true },
       ],
       pageTitles: {
         dashboard: ['總覽', 'Dashboard 統計'],
         scans: ['紀錄', '掃描紀錄管理'],
         alarms: ['主檔', '警報管理'],
         models: ['主檔', '機種管理'],
+        depts: ['系統', '部門管理'],
       },
       nowLabel: '',
       cleaningUp: false,
+
+      // ── 多部門狀態（PLAN 5.2/5.2.1 節）──
+      whoami: { auth: false, admin: false, superadmin: false, department: null, department_name: null },
+      whoamiLoaded: false,
+      viewDept: '__all__',   // URL query ?dept= 為唯一權威，見 mounted()
+      departments: [],       // 超管專用：部門清單（含 active 狀態）
 
       alarms: [], devices: [], feedbackStatsList: [], viewStatsList: [],
       scanStats: { today_count: 0, week_count: 0, total_count: 0, fail_count: 0, fail_rate: 0 },
@@ -588,9 +860,49 @@ createApp({
       alarmDraft: null, isNewAlarm: false, alarmKeywordsText: '', alarmError: '',
       deviceDraft: null, deviceError: '',
       toast: '',
+
+      // ── 部門管理 dialog 狀態 ──
+      deptDialog: null, deptTargetId: null, deptError: '',
+      deptCreateDraft: { id: '', name: '', password: '', admin_password: '' },
+      deptResetDraft: { password: '', admin_password: '' },
+      delStep: 1, delConfirmText: '',
+      deptImpactLoading: false, deptImpactError: '', deptImpactCounts: null, deptDeletedCounts: null,
     };
   },
   computed: {
+    isSuper() { return !!this.whoami.superadmin; },
+    isAll() { return this.isSuper && this.viewDept === '__all__'; },
+    visibleNavItems() { return this.navItems.filter(n => !n.superOnly || this.isSuper); },
+    currentDeptName() {
+      if (this.isAll) return null;
+      const d = this.departments.find(x => x.id === this.viewDept);
+      return d ? d.name : (this.whoami.department_name || this.viewDept);
+    },
+    deptTarget() {
+      return this.departments.find(d => d.id === this.deptTargetId) || { id: '', name: '', active: true, purgeable: false };
+    },
+    deptImpactRows() {
+      const c = this.deptImpactCounts;
+      if (!c) return [];
+      return [
+        { n: c.devices, label: '台機種', table: 'devices' },
+        { n: c.alarms, label: '筆警報代碼', table: 'alarms' },
+        { n: c.ai_scans, label: '筆掃描紀錄', table: 'ai_scans' },
+        { n: '—', label: '所有登入中的裝置會立即失效', table: '' },
+      ];
+    },
+    deptDeletedRows() {
+      const c = this.deptDeletedCounts;
+      if (!c) return [];
+      return [
+        { n: c.devices ?? 0, label: '台機種', table: 'devices' },
+        { n: c.alarms ?? 0, label: '筆警報代碼', table: 'alarms' },
+        { n: c.ai_scans ?? 0, label: '筆掃描紀錄', table: 'ai_scans' },
+      ];
+    },
+    delConfirmMatched() {
+      return this.delConfirmText.trim() === this.deptTarget.id;
+    },
     feedbackStats() {
       return Object.fromEntries(this.feedbackStatsList.map(s => [s.device_model + '|' + s.code, s]));
     },
@@ -660,22 +972,79 @@ createApp({
   watch: {
     filteredScans() { this.scanPageIdx = 0; },
   },
-  mounted() {
-    this.load();
+  async mounted() {
+    // 超管的檢視部門：URL query 為唯一權威，sessionStorage 只是重載後的
+    // 補位（PLAN 5.2.1 節）。分頁獨立、關閉分頁即消失，避免多分頁互相
+    // 污染、也避免共用平板上下一個超管沿用前一個人的選擇。
+    const qsDept = new URLSearchParams(location.search).get('dept');
+    if (qsDept) {
+      this.viewDept = qsDept;
+    } else {
+      try {
+        const saved = sessionStorage.getItem('adm.viewDept');
+        if (saved) this.viewDept = saved;
+      } catch (e) {}
+    }
+
+    await this.loadWhoami();
+    if (this.isSuper) {
+      this.syncViewDeptUrl();
+      await this.loadDepartments();
+    } else {
+      // 部門管理員固定看自己的部門，不受 viewDept 影響
+      this.viewDept = this.whoami.department;
+    }
+    await this.load();
+
     const d = new Date();
     this.nowLabel = '資料更新於 ' + String(d.getMonth()+1).padStart(2,'0') + '/' + String(d.getDate()).padStart(2,'0') + ' ' + String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
   },
   methods: {
+    async loadWhoami() {
+      const data = await AlarmApi.whoami();
+      this.whoami = data;
+      this.whoamiLoaded = true;
+    },
+    async loadDepartments() {
+      const r = await AlarmApi.get('/api/admin/departments');
+      if (r.ok) this.departments = await r.json();
+    },
+    deptName(id) {
+      const d = this.departments.find(x => x.id === id);
+      return d ? d.name : (id || '—');
+    },
+    setViewDept(id) {
+      this.viewDept = id;
+      try { sessionStorage.setItem('adm.viewDept', id); } catch (e) {}
+      this.syncViewDeptUrl();
+      this.load();
+    },
+    syncViewDeptUrl() {
+      const url = new URL(location.href);
+      url.searchParams.set('dept', this.viewDept);
+      window.history.replaceState({}, '', url);
+    },
+    // 讀取端點：超管帶 ?dept=，一般帳號完全不需要（後端只認 session）
+    deptQuery() {
+      return this.isSuper ? `?dept=${encodeURIComponent(this.viewDept)}` : '';
+    },
     async load() {
       this.loading = true;
       try {
+        const dq = this.deptQuery();
+        const amp = dq ? '&' : '?';
         const endpoints = [
-          '/api/alarms', '/api/devices', '/api/feedback/stats', '/api/view/stats',
-          '/api/admin/scan-stats', '/api/admin/scan-recent?limit=100', '/api/admin/scan-ranking', '/api/audit',
+          '/api/alarms' + dq, '/api/devices' + dq, '/api/feedback/stats' + dq, '/api/view/stats' + dq,
+          '/api/admin/scan-stats' + dq, '/api/admin/scan-recent' + dq + amp + 'limit=100',
+          '/api/admin/scan-ranking' + dq, '/api/audit' + dq,
         ];
-        const results = await Promise.all(endpoints.map(u => fetch(u)));
-        if (results.some(r => r.status === 401)) { location.href = '/login'; return; }
+        const results = await Promise.all(endpoints.map(u => AlarmApi.get(u)));
         if (results.some(r => r.status === 403)) { location.href = '/admin/login'; return; }
+        if (results.some(r => r.status === 404)) {
+          // 超管帶了不存在的部門（打錯字／被刪除），回退到「全部部門」
+          this.setViewDept('__all__');
+          return;
+        }
         const [alarms, devices, fbStats, viewStats, scanStats, scanRecent, scanRanking, audit] = await Promise.all(results.map(r => r.ok ? r.json() : (Array.isArray([]) ? [] : {})));
         this.alarms = alarms;
         this.devices = devices;
@@ -709,7 +1078,7 @@ createApp({
       if (!confirm('確定清理過期的 AI 掃描紀錄？依分級保留天數刪除，此動作無法復原。')) return;
       this.cleaningUp = true;
       try {
-        const r = await fetch('/api/admin/cleanup-expired', { method: 'POST' });
+        const r = await AlarmApi.post('/api/admin/cleanup-expired');
         if (r.status === 403) { location.href = '/admin/login'; return; }
         if (!r.ok) { this.showToast('清理失敗'); return; }
         const data = await r.json();
@@ -720,6 +1089,14 @@ createApp({
       } finally {
         this.cleaningUp = false;
       }
+    },
+
+    // 寫入端點一律走 /api/<resource>/<department>/...，目標部門是「當前
+    // 檢視部門」，不是另外選——切換檢視部門模式下這個值天然就是寫入目標
+    // （PLAN 4.1 節：resolve_target_department() 只讀 URL path）。
+    // isAll 時 UI 已經把新增按鈕停用，這裡的 writeDept() 是最後一道防線。
+    writeDept() {
+      return this.isSuper ? this.viewDept : this.whoami.department;
     },
 
     newAlarm() {
@@ -737,9 +1114,11 @@ createApp({
       this.alarmError = '';
       try {
         const payload = { ...this.alarmDraft, keywords: this.alarmKeywordsText.split(',').map(s=>s.trim()).filter(Boolean) };
-        const url = this.isNewAlarm ? '/api/alarms' : `/api/alarms/${encodeURIComponent(this.alarmDraft.device_model)}/${encodeURIComponent(this.alarmDraft.code)}`;
-        const method = this.isNewAlarm ? 'POST' : 'PUT';
-        const r = await fetch(url, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+        const dept = this.writeDept();
+        const url = this.isNewAlarm
+          ? `/api/alarms/${encodeURIComponent(dept)}`
+          : `/api/alarms/${encodeURIComponent(dept)}/${encodeURIComponent(this.alarmDraft.device_model)}/${encodeURIComponent(this.alarmDraft.code)}`;
+        const r = this.isNewAlarm ? await AlarmApi.post(url, payload) : await AlarmApi.put(url, payload);
         if (r.status === 403) { location.href = '/admin/login'; return; }
         if (!r.ok) { this.alarmError = (await r.json()).error || '儲存失敗'; return; }
         const msg = this.isNewAlarm ? `已新增 ${payload.code}` : `${payload.code} 儲存成功`;
@@ -751,7 +1130,8 @@ createApp({
     async removeAlarm() {
       if (!confirm(`確定刪除 ${this.alarmDraft.code}？`)) return;
       const code = this.alarmDraft.code;
-      const r = await fetch(`/api/alarms/${encodeURIComponent(this.alarmDraft.device_model)}/${encodeURIComponent(code)}`, { method: 'DELETE' });
+      const dept = this.writeDept();
+      const r = await AlarmApi.delete(`/api/alarms/${encodeURIComponent(dept)}/${encodeURIComponent(this.alarmDraft.device_model)}/${encodeURIComponent(code)}`);
       if (!r.ok) { this.alarmError = '刪除失敗'; return; }
       await this.load();
       this.alarmDraft = null;
@@ -765,7 +1145,8 @@ createApp({
     async saveDevice() {
       this.deviceError = '';
       if (!this.deviceDraft.model.trim()) { this.deviceError = '機種代號為必填'; return; }
-      const r = await fetch('/api/devices', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(this.deviceDraft) });
+      const dept = this.writeDept();
+      const r = await AlarmApi.post(`/api/devices/${encodeURIComponent(dept)}`, this.deviceDraft);
       if (r.status === 403) { location.href = '/admin/login'; return; }
       if (!r.ok) { this.deviceError = (await r.json()).error || '建立失敗'; return; }
       const model = this.deviceDraft.model;
@@ -775,10 +1156,88 @@ createApp({
     },
     async removeDevice(d) {
       if (!confirm(`確定刪除機種 ${d.model}？`)) return;
-      const r = await fetch(`/api/devices/${encodeURIComponent(d.model)}`, { method: 'DELETE' });
+      const dept = this.isSuper ? (d.department || this.viewDept) : this.whoami.department;
+      const r = await AlarmApi.delete(`/api/devices/${encodeURIComponent(dept)}/${encodeURIComponent(d.model)}`);
       if (!r.ok) { this.showToast('刪除失敗'); return; }
       await this.load();
       this.showToast(`已刪除 ${d.model}`);
+    },
+
+    // ── 部門管理（超管專用）──
+    closeDeptDialog() {
+      this.deptDialog = null; this.deptTargetId = null; this.deptError = '';
+      this.delStep = 1; this.delConfirmText = '';
+      this.deptImpactCounts = null; this.deptImpactError = ''; this.deptDeletedCounts = null;
+    },
+    openCreateDept() {
+      this.deptCreateDraft = { id: '', name: '', password: '', admin_password: '' };
+      this.deptError = '';
+      this.deptDialog = 'create';
+    },
+    async createDept() {
+      this.deptError = '';
+      const r = await AlarmApi.post('/api/admin/departments', this.deptCreateDraft);
+      if (!r.ok) { this.deptError = (await r.json()).error || '建立失敗'; return; }
+      const name = this.deptCreateDraft.name;
+      await this.loadDepartments();
+      this.closeDeptDialog();
+      this.showToast(`已建立部門 ${name}`);
+    },
+    openResetPw(d) {
+      this.deptTargetId = d.id;
+      this.deptResetDraft = { password: '', admin_password: '' };
+      this.deptError = '';
+      this.deptDialog = 'reset';
+    },
+    async resetDeptPassword() {
+      this.deptError = '';
+      const body = {};
+      if (this.deptResetDraft.password) body.password = this.deptResetDraft.password;
+      if (this.deptResetDraft.admin_password) body.admin_password = this.deptResetDraft.admin_password;
+      const r = await AlarmApi.put(`/api/admin/departments/${encodeURIComponent(this.deptTargetId)}/reset-password`, body);
+      if (!r.ok) { this.deptError = (await r.json()).error || '重設失敗'; return; }
+      this.closeDeptDialog();
+      this.showToast('密碼已重設，該部門所有裝置已登出');
+    },
+    openToggleActive(d) {
+      this.deptTargetId = d.id;
+      this.deptError = '';
+      this.deptDialog = 'toggle';
+    },
+    async toggleDeptActive() {
+      const target = this.deptTarget;
+      const r = await AlarmApi.put(`/api/admin/departments/${encodeURIComponent(target.id)}/active`, { active: !target.active });
+      if (!r.ok) { this.showToast('操作失敗'); return; }
+      await this.loadDepartments();
+      this.closeDeptDialog();
+      this.showToast(`已${target.active ? '停用' : '啟用'} ${target.name}`);
+    },
+    async openDeleteDept(d) {
+      this.deptTargetId = d.id;
+      this.delStep = 1; this.delConfirmText = '';
+      this.deptImpactLoading = true; this.deptImpactError = ''; this.deptImpactCounts = null;
+      this.deptDialog = 'delete';
+      try {
+        const r = await AlarmApi.get(`/api/admin/departments/${encodeURIComponent(d.id)}/impact`);
+        if (!r.ok) { this.deptImpactError = '查詢失敗'; return; }
+        const data = await r.json();
+        this.deptImpactCounts = data.counts;
+      } catch (e) {
+        this.deptImpactError = '查詢失敗';
+      } finally {
+        this.deptImpactLoading = false;
+      }
+    },
+    async doDeleteDept() {
+      if (!this.delConfirmMatched) return;
+      const target = this.deptTarget;
+      const r = await AlarmApi.delete(`/api/admin/departments/${encodeURIComponent(target.id)}`, { confirm_id: target.id });
+      if (!r.ok) { this.showToast((await r.json()).error || '刪除失敗'); return; }
+      const data = await r.json();
+      this.deptDeletedCounts = data.removed;
+      this.delStep = 3;
+      await this.loadDepartments();
+      if (this.viewDept === target.id) this.setViewDept('__all__');
     },
   },
 }).mount('#app');
@@ -788,6 +1247,12 @@ if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(() => {});
   });
 }
+
+// 登出時主動清快取（縱深防禦，PLAN 5.4 節）
+document.addEventListener('click', e => {
+  const a = e.target.closest('a[href="/admin/logout"]');
+  if (a && 'caches' in window) caches.delete('alarm-query-v11').catch(() => {});
+});
 </script>
 </body>
 </html>

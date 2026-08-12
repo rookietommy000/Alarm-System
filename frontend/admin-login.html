@@ -78,9 +78,74 @@
       box-shadow: 0 0 0 3px rgba(77,219,196,0.2);
     }
     .form-control::placeholder { color: #64748b; }
+    .form-control:disabled { opacity: 0.5; }
     .btn-dark { background: #4ddbc4; border-color: #4ddbc4; color: #0a1118; font-weight: 600; }
     .btn-dark:hover { background: #3cc9b0; border-color: #3cc9b0; color: #0a1118; }
+    .btn-dark:disabled { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.1); color: #64748b; }
     .small.text-muted { color: #64748b !important; }
+
+    .dept-select-wrap { display: flex; flex-direction: column; gap: 6px; }
+    .dept-option {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      width: 100%;
+      min-height: 46px;
+      padding: 8px 14px;
+      cursor: pointer;
+      text-align: left;
+      border: 1.5px solid rgba(255,255,255,0.14);
+      border-radius: 8px;
+      background: #0f1923;
+      color: #e2e8f0;
+      font-family: inherit;
+      font-size: 14px;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .dept-option:hover { border-color: rgba(77,219,196,0.4); }
+    .dept-option.selected { border-color: #4ddbc4; background: rgba(77,219,196,0.08); }
+    .dept-option .code {
+      font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+      font-size: 11px;
+      color: #64748b;
+    }
+    .dept-option.system-option {
+      border-style: dashed;
+    }
+    .dept-option.system-option .name-group { display: flex; flex-direction: column; }
+    .dept-option.system-option .hint { font-size: 11px; color: #94a3b8; }
+    .dept-divider {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 4px 0 2px;
+    }
+    .dept-divider::before, .dept-divider::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: rgba(255,255,255,0.08);
+    }
+    .dept-divider span {
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #64748b;
+      white-space: nowrap;
+    }
+    .notice-msg {
+      background: rgba(251,191,36,0.1);
+      color: #fbbf24;
+      font-size: 13px;
+      padding: 10px 14px;
+      border-radius: 8px;
+      margin-bottom: 12px;
+      text-align: center;
+      border: 1px solid rgba(251,191,36,0.25);
+      line-height: 1.6;
+    }
+    .notice-msg .count { font-variant-numeric: tabular-nums; font-weight: 700; }
   </style>
 </head>
 <body>
@@ -109,10 +174,23 @@
           </div>
 
           <div id="errMsg" class="alert alert-danger py-2 text-center small" hidden>
-            密碼錯誤，請再試一次
+            密碼錯誤，請確認選擇的部門與密碼是否正確
           </div>
 
-          <form method="post" action="/admin/login">
+          <div id="throttleHint" class="notice-msg" style="display:none">
+            若剛才輸入太多次密碼，系統會暫時暫停登入約 1 分鐘，請稍候再送出一次。
+          </div>
+
+          <form method="post" action="/admin/login" id="adminLoginForm">
+            <input type="hidden" name="department" id="deptField" value="" />
+
+            <div class="mb-3">
+              <label class="form-label fw-semibold">部門</label>
+              <div class="dept-select-wrap" id="deptList">
+                <div class="text-muted small">載入部門清單中…</div>
+              </div>
+            </div>
+
             <div class="mb-3">
               <label for="pw" class="form-label fw-semibold">管理員密碼</label>
               <input
@@ -122,19 +200,18 @@
                 class="form-control form-control-lg"
                 autocomplete="current-password"
                 placeholder="輸入管理員密碼"
-                autofocus
                 required
               />
             </div>
             <div class="d-grid mb-2">
-              <button type="submit" class="btn btn-dark btn-lg">進入後台</button>
+              <button type="submit" id="submitBtn" class="btn btn-dark btn-lg">進入後台</button>
             </div>
           </form>
         </div>
 
         <div class="modal-footer justify-content-between border-top pt-2 pb-3">
           <a href="/app" class="back-btn">← 返回查詢介面</a>
-          <span class="text-muted small">製造四部 · 內部使用系統</span>
+          <span class="text-muted small">內部使用系統</span>
         </div>
 
       </div>
@@ -152,6 +229,81 @@
       document.getElementById('pw').focus();
     });
     modal.show();
+
+    // ── 部門清單載入：真實部門 + 系統管理員（__super__）分岔選項 ──────
+    const deptField = document.getElementById('deptField');
+    const deptList = document.getElementById('deptList');
+
+    function selectDept(code, el) {
+      deptField.value = code;
+      deptList.querySelectorAll('.dept-option').forEach(n => n.classList.remove('selected'));
+      el.classList.add('selected');
+    }
+
+    fetch('/api/departments/public').then(r => r.ok ? r.json() : []).then(depts => {
+      deptList.innerHTML = '';
+      depts.forEach((d, i) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'dept-option';
+        btn.innerHTML = `<span>${d.name}</span><span class="code">${d.id}</span>`;
+        btn.addEventListener('click', () => selectDept(d.id, btn));
+        deptList.appendChild(btn);
+        if (i === 0) selectDept(d.id, btn);
+      });
+
+      const divider = document.createElement('div');
+      divider.className = 'dept-divider';
+      divider.innerHTML = '<span>不同的驗證路徑</span>';
+      deptList.appendChild(divider);
+
+      const sysBtn = document.createElement('button');
+      sysBtn.type = 'button';
+      sysBtn.className = 'dept-option system-option';
+      sysBtn.innerHTML = `
+        <span class="name-group">
+          <span>系統管理員</span>
+          <span class="hint">跨部門，不屬於任何部門</span>
+        </span>
+        <span class="code">SYSTEM</span>`;
+      sysBtn.addEventListener('click', () => selectDept('__super__', sysBtn));
+      deptList.appendChild(sysBtn);
+
+      if (!depts.length) selectDept('__super__', sysBtn);
+    }).catch(() => {
+      deptList.innerHTML = '<div class="text-muted small">部門清單載入失敗，請重新整理頁面</div>';
+    });
+
+    // ── 429 節流倒數（同 login.html 的漸進增強邏輯）──────────────────
+    const throttled = parseInt(p.get('throttled') || '0', 10);
+    if (throttled > 0) {
+      const hint = document.getElementById('throttleHint');
+      const pw = document.getElementById('pw');
+      const btn = document.getElementById('submitBtn');
+      hint.style.display = 'block';
+      pw.disabled = true;
+      btn.disabled = true;
+      let remain = throttled;
+      const render = () => {
+        hint.innerHTML = `密碼錯誤次數過多，已暫停登入。剩餘 <span class="count">${remain}</span> 秒後可再試一次。`;
+      };
+      render();
+      const timer = setInterval(() => {
+        remain -= 1;
+        if (remain <= 0) {
+          clearInterval(timer);
+          hint.style.display = 'none';
+          pw.disabled = false;
+          btn.disabled = false;
+        } else {
+          render();
+        }
+      }, 1000);
+
+      const cleanUrl = new URL(window.location.href);
+      cleanUrl.searchParams.delete('throttled');
+      window.history.replaceState({}, '', cleanUrl);
+    }
   </script>
 </body>
 </html>

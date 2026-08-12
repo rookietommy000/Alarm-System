@@ -40,8 +40,14 @@
       font-weight: 600;
       color: #e2e8f0;
       letter-spacing: -0.3px;
-      margin-bottom: 32px;
+      margin-bottom: 6px;
       text-align: center;
+    }
+    .subtitle {
+      font-size: 13px;
+      color: #64748b;
+      text-align: center;
+      margin-bottom: 28px;
     }
 
     .error-msg {
@@ -53,6 +59,73 @@
       margin-bottom: 16px;
       text-align: center;
       border: 1px solid rgba(248,113,113,0.25);
+    }
+    .notice-msg {
+      background: rgba(251,191,36,0.1);
+      color: #fbbf24;
+      font-size: 13px;
+      padding: 12px 14px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      text-align: center;
+      border: 1px solid rgba(251,191,36,0.25);
+      line-height: 1.6;
+    }
+    .notice-msg .count {
+      font-variant-numeric: tabular-nums;
+      font-weight: 700;
+      font-size: 15px;
+    }
+
+    .field-label {
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #64748b;
+      margin-bottom: 8px;
+      display: block;
+    }
+
+    .dept-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 20px;
+    }
+    .dept-option {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      width: 100%;
+      min-height: 52px;
+      padding: 10px 16px;
+      cursor: pointer;
+      text-align: left;
+      border: 1.5px solid rgba(255,255,255,0.14);
+      border-radius: 10px;
+      background: #0f1923;
+      color: #e2e8f0;
+      font-family: inherit;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .dept-option:hover { border-color: rgba(77,219,196,0.4); }
+    .dept-option.selected {
+      border-color: #4ddbc4;
+      background: rgba(77,219,196,0.08);
+    }
+    .dept-option .name { font-size: 16px; font-weight: 600; }
+    .dept-option .code {
+      font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      color: #64748b;
+    }
+    .dept-empty {
+      font-size: 13px;
+      color: #64748b;
+      padding: 12px 0;
+      text-align: center;
     }
 
     .input-wrap {
@@ -74,6 +147,7 @@
     }
     input[type=password]:focus { border-color: #4ddbc4; }
     input[type=password]::placeholder { color: #64748b; }
+    input[type=password]:disabled { opacity: 0.5; cursor: not-allowed; }
 
     button[type=submit] {
       width: 100%;
@@ -91,6 +165,11 @@
     }
     button[type=submit]:hover { background: #3cc9b0; }
     button[type=submit]:active { background: #2bb8a0; }
+    button[type=submit]:disabled {
+      background: rgba(255,255,255,0.1);
+      color: #64748b;
+      cursor: not-allowed;
+    }
 
     .back-btn {
       font-size: 13px;
@@ -143,27 +222,44 @@
 <body>
   <div class="card">
     <p class="title">設備警報查詢系統</p>
+    <p class="subtitle">共用平板 · 請確認選擇的是你所在的部門</p>
+
+    <div class="error-msg" id="errMsg" style="display:none">
+      密碼錯誤，請確認選擇的部門與密碼是否正確
+    </div>
+
+    <!--
+      節流提示：預設可見的靜態說明，JS 掛掉時留在原地不會消失。
+      JS 正常時會被 startThrottleCountdown() 換成即時倒數文字。
+      伺服器每次表單提交都會重新驗證節流狀態，這段文字只是說明，
+      不是攔截本身——沒有它，節流一樣生效，只是使用者看不懂發生了什麼事。
+    -->
+    <div class="notice-msg" id="throttleHint" style="display:none">
+      若剛才輸入太多次密碼，系統會暫時暫停登入約 1 分鐘，請稍候再送出一次。
+    </div>
 
     <form method="post" action="/login" id="loginForm">
       <input type="hidden" name="next" id="nextField" value="" />
+      <input type="hidden" name="department" id="deptField" value="" />
 
-      <div class="error-msg" id="errMsg" style="display:none">
-        密碼錯誤，請再試一次
+      <span class="field-label">部門</span>
+      <div class="dept-list" id="deptList">
+        <div class="dept-empty" id="deptLoading">載入部門清單中…</div>
       </div>
 
+      <span class="field-label">密碼</span>
       <div class="input-wrap">
         <input
           type="password"
           name="password"
           id="pw"
           autocomplete="current-password"
-          placeholder="輸入密碼"
-          autofocus
+          placeholder="輸入部門密碼"
           required
         />
       </div>
 
-      <button type="submit">進入系統</button>
+      <button type="submit" id="submitBtn">進入系統</button>
     </form>
 
     <div style="text-align:center; margin-top:16px;">
@@ -187,6 +283,70 @@
       width: 148, margin: 1,
       color: { dark: '#111111', light: '#ffffff' }
     }, () => {});
+
+    // ── 部門清單載入 ──────────────────────────────────────────────
+    let selectedDept = '';
+    const deptField = document.getElementById('deptField');
+    const deptList = document.getElementById('deptList');
+
+    function selectDept(code, el) {
+      selectedDept = code;
+      deptField.value = code;
+      deptList.querySelectorAll('.dept-option').forEach(n => n.classList.remove('selected'));
+      el.classList.add('selected');
+    }
+
+    fetch('/api/departments/public').then(r => r.ok ? r.json() : []).then(depts => {
+      deptList.innerHTML = '';
+      if (!depts.length) {
+        deptList.innerHTML = '<div class="dept-empty">目前沒有可用的部門，請聯絡系統管理員</div>';
+        return;
+      }
+      depts.forEach((d, i) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'dept-option';
+        btn.innerHTML = `<span class="name">${d.name}</span><span class="code">${d.id}</span>`;
+        btn.addEventListener('click', () => selectDept(d.id, btn));
+        deptList.appendChild(btn);
+        if (i === 0) selectDept(d.id, btn);
+      });
+    }).catch(() => {
+      deptList.innerHTML = '<div class="dept-empty">部門清單載入失敗，請重新整理頁面</div>';
+    });
+
+    // ── 429 節流倒數（漸進增強：JS 掛掉時上面的靜態說明留著不動）───────
+    const throttled = parseInt(p.get('throttled') || '0', 10);
+    if (throttled > 0) {
+      const hint = document.getElementById('throttleHint');
+      const pw = document.getElementById('pw');
+      const btn = document.getElementById('submitBtn');
+      hint.style.display = 'block';
+      pw.disabled = true;
+      btn.disabled = true;
+      let remain = throttled;
+      const render = () => {
+        hint.innerHTML = `密碼錯誤次數過多，已暫停登入。剩餘 <span class="count">${remain}</span> 秒後可再試一次。`;
+      };
+      render();
+      const timer = setInterval(() => {
+        remain -= 1;
+        if (remain <= 0) {
+          clearInterval(timer);
+          hint.style.display = 'none';
+          pw.disabled = false;
+          btn.disabled = false;
+          // 倒數結束不自動送出——使用者可能已離開，或密碼欄是別人剛才留下的內容
+        } else {
+          render();
+        }
+      }, 1000);
+
+      // 避免使用者之後因 session 失效被導回登入頁時，殘留舊的倒數參數
+      const cleanUrl = new URL(window.location.href);
+      cleanUrl.searchParams.delete('throttled');
+      window.history.replaceState({}, '', cleanUrl);
+    }
   </script>
 </body>
 </html>

@@ -17,6 +17,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;700&display=swap" rel="stylesheet">
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script src="/js/api.js"></script>
   <link rel="stylesheet" href="style.css" />
   <style>
     /* Topbar nav links */
@@ -659,14 +660,25 @@
 <body class="has-bottom-nav">
   <div id="app">
     <header class="topbar">
-      <h1>警報查找系統</h1>
-      <nav class="topbar-nav-wide">
-        <button class="nav-btn" :class="{ active: page === 'camera' }" @click="page = 'camera'">📷 拍照分析</button>
-        <button class="nav-btn" :class="{ active: page === 'search' }" @click="page = 'search'">🔍 搜尋代碼</button>
-        <span class="nav-divider"></span>
-        <a href="/admin" class="nav-link-muted">後台</a>
-        <a href="/logout" class="nav-link-muted">登出</a>
-      </nav>
+      <div class="topbar-main">
+        <h1>警報查找系統</h1>
+        <nav class="topbar-nav-wide">
+          <button class="nav-btn" :class="{ active: page === 'camera' }" @click="page = 'camera'">📷 拍照分析</button>
+          <button class="nav-btn" :class="{ active: page === 'search' }" @click="page = 'search'">🔍 搜尋代碼</button>
+          <span class="nav-divider"></span>
+          <a href="/admin" class="nav-link-muted">後台</a>
+          <a href="/logout" class="nav-link-muted">登出</a>
+        </nav>
+      </div>
+      <!-- 目前部門顯示（PLAN 5.3 節）：共用平板場景下，交班換人操作時唯一能
+           讓操作者一眼確認「我現在是哪個部門身份」的地方，避免誤在別的
+           部門底下拍照分析/查詢。超管不綁部門所以不顯示這一列。 -->
+      <div v-if="currentDeptName" class="topbar-dept">
+        <span class="dot"></span>
+        <span>目前部門</span>
+        <span class="name">{{ currentDeptName }}</span>
+        <span class="code">{{ currentDeptCode }}</span>
+      </div>
     </header>
 
     <!-- ═══ 拍照頁 ═══ -->
@@ -1081,6 +1093,7 @@
           selectedCorrectModel: '',
           showCorrectionPicker: false,
           isDesktopDev: !/iPhone|iPad|Android/i.test(navigator.userAgent),
+          whoami: { department: null, department_name: null },
         };
       },
       computed: {
@@ -1096,8 +1109,18 @@
         allDevices() {
           return this.devices;
         },
+        // PLAN 5.3 節：前台顯示目前登入部門（共用平板防呆）。
+        // 超管不會走前台一般操作流程（analyze/confirm/correct 一律 400），
+        // department 為 None 時不顯示這一列。
+        currentDeptName() {
+          return this.whoami.department_name || this.whoami.department;
+        },
+        currentDeptCode() {
+          return this.whoami.department || '';
+        },
       },
       mounted() {
+        AlarmApi.whoami().then(w => { this.whoami = w; });
         fetch('/api/devices').then(r => r.json()).then(d => { this.devices = d; });
         fetch('/api/feedback/stats').then(r => r.json()).then(stats => {
           this.feedbackStats = Object.fromEntries(stats.map(s => [s.device_model + '|' + s.code, s]));
@@ -1401,7 +1424,6 @@
                 scan_id, model,
                 alarms: alarms.map(a => ({ code: a.code, conf: a.conf ?? null })),
                 model_conf: modelConf, original_model, original_analyzer,
-                confirmed_by: 'operator',
               }),
             }).catch(() => {});
           }
@@ -1422,7 +1444,6 @@
                 model_conf: modelConf,
                 original_model,
                 original_analyzer,
-                confirmed_by: 'operator',
               }),
             }).catch(() => {});
           }
@@ -1447,7 +1468,6 @@
                 corrected_codes: alarms.map(a => ({ code: a.code, conf: a.conf ?? null })),
                 model_conf: modelConf,
                 original_analyzer,
-                confirmed_by: 'operator',
               }),
             }).catch(() => {});
           }
@@ -1466,7 +1486,6 @@
               model_conf: modelConf,
               original_model,
               original_analyzer,
-              confirmed_by: 'operator',
             }),
           }).catch(() => {});
         },
@@ -1513,6 +1532,13 @@
         navigator.serviceWorker.register('/sw.js').catch(() => {});
       });
     }
+
+    // 登出時主動清快取（縱深防禦，PLAN 5.4 節）：/api/* 雖已排除快取，
+    // 但仍額外做一次，避免共用平板下一個人登入時看到任何殘留。
+    document.addEventListener('click', e => {
+      const a = e.target.closest('a[href="/logout"]');
+      if (a && 'caches' in window) caches.delete('alarm-query-v11').catch(() => {});
+    });
   </script>
 </body>
 </html>

@@ -224,7 +224,7 @@ def create_app() -> Flask:
         if _use_supabase():
             if not form_department:
                 return redirect(url_for("login_page", error=1))
-            throttled = _check_login_throttle(form_department)
+            throttled = _check_login_throttle(form_department, login_page_endpoint="login_page")
             if throttled is not None:
                 return throttled
             role = _do_login(form_department, pw, admin=False)
@@ -269,11 +269,20 @@ def create_app() -> Flask:
         remaining = full_delay - elapsed
         return max(0, int(remaining) + (1 if remaining % 1 else 0))
 
-    def _check_login_throttle(form_department: str):
-        """PLAN 2.2/2.2.3 節：伺服器不等待，還在延遲窗口內直接回 429 +
-        Retry-After。細網（ip, department）與粗網（ip）取延遲最大值。
-        回傳 None 代表不節流，可以繼續走 _do_login()；否則回傳要直接
-        return 的 Flask response。"""
+    def _check_login_throttle(form_department: str, *, login_page_endpoint: str):
+        """PLAN 2.2/2.2.3 節：伺服器不等待，還在延遲窗口內直接回應。細網
+        （ip, department）與粗網（ip）取延遲最大值。回傳 None 代表不節流，
+        可以繼續走 _do_login()；否則回傳要直接 return 的 Flask response。
+
+        表單提交（/login、/admin/login）不是 /api/*，若這裡回 JSON+429，
+        使用者送出表單後會直接看到一個裸的 JSON 頁面、沒有路可以回去，
+        且 Retry-After 在 header 裡使用者根本看不到剩餘秒數（外部審查
+        發現）。改為重導回登入頁並把秒數帶在 query string，倒數 UI 由
+        登入頁自己用 setInterval 算，伺服器端不依賴 JS 才能完成節流——
+        沒有 JS 時使用者看到的是「請等 N 秒」的靜態文字加 disabled 按鈕，
+        是漸進增強而非依賴。login_page_endpoint 由呼叫端指定要重導回
+        /login 還是 /admin/login。
+        """
         ip = _client_ip()
         n_fine, last_fine = login_attempt_store.count_fine(ip, form_department)
         n_coarse, last_coarse = login_attempt_store.count_coarse(ip)
@@ -281,10 +290,7 @@ def create_app() -> Flask:
         delay_coarse = _remaining_delay(n_coarse, last_coarse, n_threshold=20, n_offset=19)
         delay = max(delay_fine, delay_coarse)
         if delay > 0:
-            resp = jsonify({"error": "登入嘗試過於頻繁，請稍後再試"})
-            resp.status_code = 429
-            resp.headers["Retry-After"] = str(delay)
-            return resp
+            return redirect(url_for(login_page_endpoint, throttled=delay))
         return None
 
     def _do_login(form_department: str, password: str, admin: bool) -> Optional[str]:
@@ -349,7 +355,7 @@ def create_app() -> Flask:
         if _use_supabase():
             if not form_department:
                 return redirect(url_for("admin_login_page", error=1))
-            throttled = _check_login_throttle(form_department)
+            throttled = _check_login_throttle(form_department, login_page_endpoint="admin_login_page")
             if throttled is not None:
                 return throttled
             role = _do_login(form_department, pw, admin=True)

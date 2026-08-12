@@ -224,17 +224,22 @@
 - [ ] **補充驗證**（若 `sentinel_pack` 尚未涵蓋）：一般帳號帶 `?dept=別的部門` 打 `/api/alarms`，回應必須仍只有自己部門資料
 - [ ] **補充驗證**：超管登入路徑分岔——用等於部門管理員密碼的字串打 `__super__` 選項應失敗，反之亦然（確認無 fallthrough）
 
-## 階段 13：前端改動（對應計畫第 5 節）— 維護窗口內
+## 階段 13：前端改動（對應計畫第 5 節）— 【第三十一輪調整】提前於維護窗口前完成
 
-- [ ] 撰寫 `frontend/js/api.js`：`apiFetch()` 統一封裝、401 全域攔截導回登入、429 讀 `Retry-After` 倒數、`whoami` 結果快取；寫入呼叫時自動把當前部門值放進 URL path（不進 body/query）
-- [ ] `login.html`、`admin-login.html` 新增部門下拉選單（串接 `/api/departments/public`，含 `__super__` 選項），改用 `api.js`
-- [ ] `dashboard.html` 新增超管部門切換器：URL query param `?dept=` 為唯一權威，`sessionStorage` 僅重載補位，`__all__` 為明確選項非預設值
-- [ ] `dashboard.html`：`?dept=__all__` 時「新增機種／新增警報」按鈕停用並提示「請先選擇部門」
-- [ ] `dashboard.html` 新增部門管理頁籤（`isSuperadmin` 條件顯示，含新增/重設密碼/停用/purge 對話框）
-- [ ] **確認移除**「超管新增機種/警報時加部門選擇欄位」這類舊構想——已被切換檢視部門模式取代，不應出現在既有畫面裡
-- [ ] `index.html` 移除四處 `confirmed_by: 'operator'` 字面值，topbar 加上目前登入部門名稱顯示（共用平板防呆）
-- [ ] `sw.js`：`STATIC_SHELL` 加入 `js/api.js`；`activate` 事件清除舊版 cache＋當前 cache 裡殘留的 `/api/*` 回應；`skipWaiting()`+`clients.claim()`；`/api/*` 排除快取；登出流程主動 `caches.delete(CACHE)`；快取版本號遞增
-- [ ] 確認 `<script src="/js/api.js">` 對應的 Flask static 路由能正確載入（非 404）
+**原計畫此階段排在維護窗口內（階段 11 之後），但實作時發現前端程式碼本身可以獨立撰寫並用真實 Supabase 連線驗證，不需要等到 `storage.py`/`app.py` 部署上線才動工——只有「部署上線讓一般使用者看到新版」這件事才需要在維護窗口內做。已將撰寫＋驗證階段提前，維護窗口屆時只需要「部署」這個動作本身。**
+
+- [x] 撰寫 `frontend/js/api.js`：`apiFetch()` 統一封裝、401 全域攔截導回登入、429 讀 `Retry-After` 倒數、`whoami` 結果快取
+- [x] `login.html`、`admin-login.html` 新增部門下拉選單（串接 `/api/departments/public`，含 `__super__` 選項），保留既有深色卡片/Bootstrap modal 視覺風格
+- [x] **登入節流 UI 的架構決定（外部專家建議，第三十一輪）**：登入表單維持原生 POST 提交（不改用 fetch 攔截），因為登入是系統入口，不能依賴 JS 才能運作。`_check_login_throttle()` 改為表單提交情境下重導回登入頁並帶 `?throttled=N`（而非回 429 JSON），倒數 UI 由前端 JS 讀 query string 渲染，JS 掛掉時退化成一段預設可見的靜態說明文字（漸進增強，不影響節流本身——節流永遠在伺服器端執行）
+- [x] `dashboard.html` 新增超管部門切換器：URL query param `?dept=` 為唯一權威，`sessionStorage` 僅重載補位，`__all__` 為明確選項非預設值
+- [x] `dashboard.html`：`?dept=__all__` 時「新增機種／新增警報」按鈕停用並提示「請先選擇部門」
+- [x] `dashboard.html` 新增部門管理頁籤（`isSuperadmin` 條件顯示，含新增/重設密碼/停用/刪除三步驟對話框，刪除流程串接第二十八輪新增的 `/impact` 端點）
+- [x] 確認未出現「超管新增機種/警報時加部門選擇欄位」這類舊構想——已被切換檢視部門模式取代
+- [x] `index.html` 移除四處 `confirmed_by: 'operator'` 字面值，topbar 加上目前登入部門名稱顯示（共用平板防呆，串接 `whoami.department_name`）
+- [x] `sw.js`：`STATIC_SHELL` 加入 `js/api.js`；`activate` 事件清除舊版 cache＋當前 cache 裡殘留的 `/api/*` 回應；`skipWaiting()`+`clients.claim()`；`/api/*` 改為 network only（不讀寫快取）；登出流程（`index.html`/`dashboard.html` 的登出連結點擊時）主動 `caches.delete(CACHE)`；快取版本號 v10→v11
+- [x] 確認 `<script src="/js/api.js">` 對應的 Flask static 路由能正確載入（真實 server 驗證 200）
+
+**驗證方式**：59 個既有 pytest 全數通過；啟動本機 Flask server 連真實 Supabase，端到端驗證：一般帳號登入 `mf4d`→`whoami` 正確回傳 `department_name`→前台頁面含部門顯示邏輯→`/api/alarms` 正確過濾（1759 筆）；超管登入 `__super__`→`whoami` 正確回傳 `superadmin:true, department:null`→dashboard 含部門切換器/部門管理 UI→`/api/admin/departments`→`/api/admin/departments/mf4d/impact` 正確回傳筆數統計（與正式資料吻合）→`?dept=mf4d` 正確過濾→`?dept=不存在部門` 正確回 404（驗證第三十輪修正的超管部門存在性檢查在真實環境生效）。測試產生的 `login_attempts` 記錄已清除，正式資料全程未受影響。
 
 ## 階段 14：SW 快取行為手動驗證（對應計畫 5.5，無法自動化，必須人工執行）— **維護窗口結束點**
 
