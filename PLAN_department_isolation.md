@@ -1560,3 +1560,18 @@ def test_resolve_target_department_does_not_read_request_args():
 7. **交易語意**：`append`/`upsert` 模式逐筆呼叫 `upsert_one()`（PostgREST 單筆請求已具備原子性）；`replace` 模式呼叫既有的 `save()`（PLAN 3.1 節已修正的部門過濾版本），沿用其既有的「先 upsert 全部、再刪除掃描」語意，未額外包一層應用層交易——這與 `storage.py` 現有其他呼叫端（如 `create_app()` 的機種管理）的一致性做法相同，不是這次新增的風險
 
 **影響範圍**：新增 `backend/import_alarms.py`（CLI 工具，`argparse` 介面，不依賴 Flask app context）；59 個既有 pytest 全數通過（此工具未被 pytest 覆蓋，因為它是獨立 CLI 而非 `app.py` 路由，改用手動建立臨時 `ALARM_DATA_DIR` 資料夾＋CSV 直接執行驗證，涵蓋：正常匯入、機種缺失擋下、CSV 內部重複值擋下、`replace` 模式安全閥），驗證用臨時檔案已清除；尚未對真實 Supabase 連線測試（因為目前沒有第二個真實部門可匯入，且 `devices_store`/`alarms_store` 走 `SupabaseStore` 的路徑與 `JsonStore` 共用同一組公開方法簽名，已在階段 5/6 分別驗證過，這裡不必重複驗證底層 store 行為，只需驗證這支工具本身的參數解析與流程控制邏輯）。實際使用時機：PLAN 第 7 節部署順序步驟 8（建立第一個真實第二部門的機種與警報），屆時才會第一次對正式 Supabase 執行。
+
+---
+
+第二十六輪審查（整理程式碼交專家審查前的自我覆核，發現並修正一個 `--create-missing-devices` 失效的 bug）：
+
+**背景**：使用者提出要把這批已完成的核心後端程式碼（`storage.py`/`app.py`/`ai_memory.py`/`ai_pipeline.py`/`import_alarms.py`/`test_route_auth_registry.py`）交給外部專家做一次完整審查——這是第一次針對「實際寫出來的程式碼」而非設計文件本身的審查。整理審查包的過程中重新逐檔通讀，在 `import_alarms.py` 發現一個先前手動測試沒有覆蓋到的邏輯錯誤。
+
+**🔴 `--create-missing-devices` 實際上完全不會建立機種（已修正，實作 bug 非設計缺陷）**
+1. **`_validate_devices_exist(rows, department, create_missing)` 原本的邏輯是：算出 `missing` 之後，若 `missing` 非空且 `create_missing=True`，直接 `return {}, csv_models`**——把 `missing` 清空後才回傳給呼叫端。但呼叫端 `main()` 判斷「要不要自動建立機種」的依據正是這個回傳值是否非空（`to_create = sorted(missing.keys()) if (missing and args.create_missing_devices) else []`）。兩段邏輯疊加的結果是：只要 `create_missing=True` 且真的有缺少的機種，函式回傳的 `missing` 必為空字典，導致呼叫端算出的 `to_create` 永遠是空列表——**`--create-missing-devices` 這個旗標形同虛設，帶了也不會建立任何機種**，然後程式會直接往下拿著不存在的機種寫入警報，變成 PLAN 6.1 節本來要防的「安靜產生孤兒警報」，且是這支工具自己的 opt-in 功能造成的。
+
+   **為何先前的手動驗證沒抓到**：階段 15 完成時測試過三種情境（正常匯入、機種缺失被擋下、CSV 重複值被擋下），但沒有實際帶 `--create-missing-devices` 跑過一次「機種缺失且允許自動建立」的路徑——只驗證了「不給旗標時會被擋下」，沒有驗證「給了旗標後真的會建立」，這是測試覆蓋的缺口，不是邏輯本身難以發現。
+
+   **修正**：`_validate_devices_exist()` 拿掉 `create_missing` 參數，單純回報缺什麼，不在函式內部因為旗標值改變回傳語意；是否自動建立完全交給 `main()` 依旗標判斷。修正後重新測試「機種缺失＋`--create-missing-devices`」情境：機種正確建立（`devices.json` 新增一筆）、警報正確寫入，不再產生孤兒資料。
+
+**影響範圍**：`backend/import_alarms.py` 的 `_validate_devices_exist()` 簽名與內部邏輯；59 個既有 pytest 不受影響；此修正在把程式碼交給專家審查之前完成，屬於一次額外的自我覆核收穫，說明「回頭準備審查材料」這個動作本身也有除錯價值——重新以「別人要看」的心態通讀程式碼，跟寫完當下的心態不同，容易抓到當時漏掉的路徑組合。

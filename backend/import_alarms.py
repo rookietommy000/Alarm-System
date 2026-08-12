@@ -84,10 +84,12 @@ def _load_csv(path: Path) -> list:
     return rows
 
 
-def _validate_devices_exist(rows: list, department: str, create_missing: bool) -> tuple:
+def _validate_devices_exist(rows: list, department: str) -> tuple:
     """PLAN 6.1 節：整批比對機種存在性，缺任何一個就整批中止並列出清單。
 
-    回傳 (missing_models, model_alarm_counts)。
+    回傳 (missing_models, model_alarm_counts)。是否自動建立缺少的機種由
+    呼叫端（main()）依 --create-missing-devices 旗標決定，這裡只負責回報
+    缺什麼，不在這裡分支——避免「missing 是否為空」的語意隨旗標值改變。
     """
     existing = {d["model"] for d in devices_store.load(department=department)}
     csv_models = {}
@@ -95,8 +97,6 @@ def _validate_devices_exist(rows: list, department: str, create_missing: bool) -
         csv_models[r["device_model"]] = csv_models.get(r["device_model"], 0) + 1
 
     missing = {m: n for m, n in csv_models.items() if m not in existing}
-    if missing and create_missing:
-        return {}, csv_models
     return missing, csv_models
 
 
@@ -169,7 +169,7 @@ def main():
             print(f"  - {d[0]} / {d[1]}", file=sys.stderr)
         sys.exit(1)
 
-    missing, csv_models = _validate_devices_exist(rows, args.department, args.create_missing_devices)
+    missing, csv_models = _validate_devices_exist(rows, args.department)
     if missing and not args.create_missing_devices:
         print(f"錯誤：以下機種在部門 {args.department!r} 的機種表中不存在，整批中止，未寫入任何一筆：",
               file=sys.stderr)
