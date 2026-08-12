@@ -19,7 +19,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 from storage import (
     ai_scan_store, alarms_store, audit_logger, department_store,
-    devices_store, feedback_store, view_store, _use_supabase,
+    devices_store, feedback_store, login_attempt_store, view_store, _use_supabase,
 )
 
 BASE = Path(__file__).resolve().parent.parent
@@ -210,6 +210,9 @@ def create_app() -> Flask:
         form_department = (request.form.get("department") or "").strip()
 
         if _use_supabase() and form_department:
+            throttled = _check_login_throttle(form_department)
+            if throttled is not None:
+                return throttled
             role = _do_login(form_department, pw, admin=False)
             if role is None:
                 return redirect(url_for("login_page", error=1))
@@ -233,28 +236,79 @@ def create_app() -> Flask:
 
     # ── Admin login / logout ────────────────────────────────────────
 
+    def _client_ip() -> str:
+        return request.headers.get("X-Forwarded-For", request.remote_addr or "unknown").split(",")[0].strip()
+
+    def _remaining_delay(n: int, last_failure_at: Optional[str], n_threshold: int, n_offset: int) -> int:
+        """delay 是相對「最後一次失敗時間」的倒數計時，不是「N>=門檻就永久節流」——
+        過了 2**effective_n 秒窗口，同一個 N 不再節流，直到下一次失敗才會觸發下一輪
+        （且下一輪的 N 會遞增，delay 也隨之變長）。"""
+        if n < n_threshold or last_failure_at is None:
+            return 0
+        effective_n = n if n_offset == 0 else (n - n_offset)
+        full_delay = min(2 ** effective_n, 60)
+        try:
+            last_dt = datetime.fromisoformat(last_failure_at.replace("Z", "+00:00"))
+        except Exception:
+            return full_delay
+        elapsed = (datetime.now(timezone.utc) - last_dt).total_seconds()
+        remaining = full_delay - elapsed
+        return max(0, int(remaining) + (1 if remaining % 1 else 0))
+
+    def _check_login_throttle(form_department: str):
+        """PLAN 2.2/2.2.3 節：伺服器不等待，還在延遲窗口內直接回 429 +
+        Retry-After。細網（ip, department）與粗網（ip）取延遲最大值。
+        回傳 None 代表不節流，可以繼續走 _do_login()；否則回傳要直接
+        return 的 Flask response。"""
+        ip = _client_ip()
+        n_fine, last_fine = login_attempt_store.count_fine(ip, form_department)
+        n_coarse, last_coarse = login_attempt_store.count_coarse(ip)
+        delay_fine = _remaining_delay(n_fine, last_fine, n_threshold=1, n_offset=0)
+        delay_coarse = _remaining_delay(n_coarse, last_coarse, n_threshold=20, n_offset=19)
+        delay = max(delay_fine, delay_coarse)
+        if delay > 0:
+            resp = jsonify({"error": "登入嘗試過於頻繁，請稍後再試"})
+            resp.status_code = 429
+            resp.headers["Retry-After"] = str(delay)
+            return resp
+        return None
+
     def _do_login(form_department: str, password: str, admin: bool) -> Optional[str]:
         """PLAN 第 2 節：登入路徑在入口就分岔，不做 fallthrough。
         admin=False 時用於一般部門登入（僅走部門 pw_hash）；
-        admin=True 時用於管理員登入（含 __super__ 分岔）。"""
+        admin=True 時用於管理員登入（含 __super__ 分岔）。
+
+        呼叫前提：_check_login_throttle() 已確認不在節流窗口內
+        （2.2.4 節第 3 種情況由呼叫端在呼叫這個函式之前攔截，這裡
+        面只處理「格式不合法」與「部門不存在」兩種情況的記錄）。
+        """
+        ip = _client_ip()
+
         if admin and form_department == SUPER_DEPT_SENTINEL:
-            if not hmac.compare_digest(password, os.environ.get("SUPERADMIN_PASSWORD", "")):
+            ok = hmac.compare_digest(password, os.environ.get("SUPERADMIN_PASSWORD", ""))
+            login_attempt_store.record(ip, SUPER_DEPT_SENTINEL, ok)
+            if not ok:
                 return None  # 不 fallthrough 到部門密碼
             session.clear()
             session.update(auth=True, admin=True, superadmin=True, department=None)
             return "superadmin"
 
         if not DEPT_ID_RE.match(form_department):
-            # 2.2.4 節：格式不合法，不查 DB、不寫入 login_attempts
+            # 2.2.4 節情況 1：格式不合法，不查 DB、不寫入 login_attempts
             check_password_hash(_DUMMY_HASH, password)
             return None
 
         dept = department_store.get_by_id(form_department)
         if dept is None or not dept.get("active"):
+            # 2.2.4 節情況 2：格式合法但部門不存在（或已停用），仍要記錄，
+            # 且必須計入 N_ip（粗網），這是有價值的稽核訊號
             check_password_hash(_DUMMY_HASH, password)  # 2.2.2 節：枚舉防護，消耗相同時間
+            login_attempt_store.record(ip, form_department, False)
             return None
         pw_field = "admin_pw_hash" if admin else "pw_hash"
-        if not check_password_hash(dept[pw_field], password):
+        ok = check_password_hash(dept[pw_field], password)
+        login_attempt_store.record(ip, form_department, ok)
+        if not ok:
             return None
         session.clear()
         session.update(
@@ -278,6 +332,9 @@ def create_app() -> Flask:
         form_department = (request.form.get("department") or "").strip()
 
         if _use_supabase() and form_department:
+            throttled = _check_login_throttle(form_department)
+            if throttled is not None:
+                return throttled
             role = _do_login(form_department, pw, admin=True)
             if role is None:
                 return redirect(url_for("admin_login_page", error=1))
@@ -716,7 +773,12 @@ def create_app() -> Flask:
             abort(503, f"AI 模組未安裝：{e}")
         removed = ai_scan_store.cleanup_expired(RETENTION)
         total = sum(n for n in removed.values() if n > 0)
-        return jsonify({"removed_by_tier": removed, "total_removed": total})
+        login_attempts_removed = login_attempt_store.cleanup_expired(days=90)
+        return jsonify({
+            "removed_by_tier": removed,
+            "total_removed": total,
+            "login_attempts_removed": login_attempts_removed,
+        })
 
     # ── 4.5 節：部門管理端點（superadmin_required）───────────────────
 

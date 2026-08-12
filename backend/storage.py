@@ -689,6 +689,106 @@ class AiScanStore:
         return removed
 
 
+class LoginAttemptStore:
+    """login_attempts 表的讀寫（PLAN 2.2.1~2.2.4 節）。以資料庫為唯一真實
+    來源，不使用行程內狀態——多 worker/重啟/擴容下退避次數才不會被稀釋。
+
+    本機/測試模式（非 Supabase）不記錄，節流形同不啟用（與正式環境的
+    JsonStore 單租戶定位一致，PLAN 3.2 節）。
+    """
+
+    _TABLE = "login_attempts"
+
+    def _base_key(self):
+        base = os.environ.get("SUPABASE_URL", "").rstrip("/")
+        key = os.environ.get("SUPABASE_KEY", "")
+        return base, key
+
+    def _req(self, method: str, path: str, body=None, extra_headers: Optional[dict] = None):
+        base, key = self._base_key()
+        headers = {
+            "apikey": key,
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+        }
+        if extra_headers:
+            headers.update(extra_headers)
+        data = json.dumps(body).encode() if body is not None else None
+        req = urllib.request.Request(f"{base}/rest/v1/{path}", data=data,
+                                     headers=headers, method=method)
+        with urllib.request.urlopen(req) as r:
+            raw = r.read().decode()
+            return json.loads(raw) if raw.strip() else []
+
+    def record(self, ip: str, department: Optional[str], success: bool) -> None:
+        """2.2.4 節第 2、3 情況：格式合法但部門不存在時仍要記錄；已在節流窗口
+        內的請求由呼叫端在呼叫這個方法之前就攔截掉，不會走到這裡。"""
+        if not _use_supabase():
+            return
+        try:
+            self._req("POST", self._TABLE,
+                      {"ip": ip, "department": department, "success": success},
+                      extra_headers={"Prefer": "return=minimal"})
+        except Exception:
+            pass  # 節流記錄失敗不可影響登入主流程
+
+    def _count_since_last_success(self, ip: str, department: Optional[str] = None,
+                                   scope_by_department: bool = True) -> tuple:
+        """該 (ip[, department]) 組合在最近一次成功登入之後、15 分鐘窗口內的
+        連續失敗次數（PLAN 2.2.1/2.2.3 節的 N 定義），以及最後一次失敗的時間。
+
+        回傳 (N, last_failure_at)：delay 是相對 last_failure_at 算的倒數計時，
+        不是「只要 N>=1 就永久節流」——過了 2**N 秒窗口，同一個 N 就不再節流，
+        直到下一次失敗才會再次觸發（且 N 會遞增）。
+        """
+        if not _use_supabase():
+            return (0, None)
+        window_start = (datetime.now(timezone.utc) - timedelta(minutes=15)).isoformat()
+        dept_qs = f"&department=eq.{urllib.parse.quote(department, safe='')}" if (scope_by_department and department is not None) else ""
+        try:
+            success_rows = self._req(
+                "GET",
+                f"{self._TABLE}?select=attempted_at&ip=eq.{urllib.parse.quote(ip, safe='')}{dept_qs}"
+                f"&success=eq.true&order=attempted_at.desc&limit=1",
+            )
+            since = success_rows[0]["attempted_at"] if success_rows else None
+            lower_bound = max(since, window_start) if since else window_start
+            count_rows = self._req(
+                "GET",
+                f"{self._TABLE}?select=attempted_at&ip=eq.{urllib.parse.quote(ip, safe='')}{dept_qs}"
+                f"&success=eq.false&attempted_at=gt.{urllib.parse.quote(lower_bound, safe='')}"
+                f"&order=attempted_at.desc",
+            )
+            n = len(count_rows)
+            last_failure_at = count_rows[0]["attempted_at"] if count_rows else None
+            return (n, last_failure_at)
+        except Exception:
+            return (0, None)
+
+    def count_fine(self, ip: str, department: str) -> tuple:
+        """細網：(ip, department) 組合的連續失敗數 N_ip_dept 與最後失敗時間。"""
+        return self._count_since_last_success(ip, department, scope_by_department=True)
+
+    def count_coarse(self, ip: str) -> tuple:
+        """粗網：只看 ip 的連續失敗數 N_ip 與最後失敗時間（PLAN 2.2.3 節，防止換部門繞過細網）。"""
+        return self._count_since_last_success(ip, None, scope_by_department=False)
+
+    def cleanup_expired(self, days: int = 90) -> int:
+        """PLAN 2.2.1 節：併入 cleanup-expired 端點，90 天保留期。"""
+        if not _use_supabase():
+            return 0
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        try:
+            deleted = self._req(
+                "DELETE",
+                f"{self._TABLE}?attempted_at=lt.{urllib.parse.quote(cutoff, safe='')}",
+                extra_headers={"Prefer": "return=representation"},
+            )
+            return len(deleted) if isinstance(deleted, list) else 0
+        except Exception:
+            return -1
+
+
 if _use_supabase():
     alarms_store = SupabaseStore("alarms", pk="code", pk_fields=["department", "device_model", "code"])
     devices_store = SupabaseStore("devices", pk="id", pk_fields=["department", "model"], is_devices=True)
@@ -697,6 +797,7 @@ else:
     devices_store = JsonStore("devices.json", is_devices=True)
 
 department_store = DepartmentStore()
+login_attempt_store = LoginAttemptStore()
 feedback_store = FeedbackStore()
 view_store = ViewStore()
 audit_logger = AuditLogger()

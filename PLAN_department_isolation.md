@@ -1494,3 +1494,25 @@ def test_resolve_target_department_does_not_read_request_args():
 7. **PLAN 8.1 節要求「`resolve_target_department()` 不得讀取 `request.args`」的原始碼檢查，若直接用 `"request.args" not in source` 這種簡單字串比對，會被函式自己的 docstring 誤判**——`resolve_target_department()` 的說明文字寫著「不讀 `request.args`」，這行註解本身就含有 `request.args` 字串，導致簡單比對會誤報「含有 request.args」而失敗，即使函式本體完全沒有真正存取它。用 `ast` 解析、排除 docstring 後只檢查函式本體，才能得到正確結果 → 記錄此陷阱，階段 9 撰寫 `tests/test_route_auth_registry.py` 內的 `test_resolve_target_department_does_not_read_request_args` 時，要用 AST 解析排除 docstring，不能用naive 字串比對
 
 **影響範圍**：`backend/app.py` 完整改寫（登入、權限框架、全部端點）；`tests/test_api.py` 同步更新路由路徑反映新結構，57 個測試全數通過；`backend/storage.py` 補上 `JsonStore.upsert_one()`/`delete_one()`；本輪所有驗證測試建立的臨時部門（`zztest2`~`zztest6`）皆已清除，正式資料（`mf4d`：`alarms` 1759、`devices` 14）全程未受影響；`tests/test_route_auth_registry.py`（階段 9）與登入節流機制（`login_attempts`，階段 4）仍未實作，為下一步工作。
+
+---
+
+第二十二輪審查（登入節流機制實作，發現並修正一個會導致永久鎖死的邏輯缺陷）：
+
+**背景**：依 PLAN 2.2~2.2.4 節實作登入節流機制——`storage.py` 新增 `LoginAttemptStore`（`record()`/`count_fine()`/`count_coarse()`/`cleanup_expired()`），`app.py` 新增 `_check_login_throttle()`／`_remaining_delay()`，串進 `login_submit()`/`admin_login_submit()`，並在 `_do_login()` 內按 2.2.4 節三段式判斷寫入記錄。
+
+**🔴 實作中發現並當場修正的邏輯缺陷：delay 未定義「相對哪個時間點倒數」，導致永久鎖死（已修正，非 PLAN 文件疏漏，是實作階段的自我糾正）**
+1. **第一版實作把「`delay = min(2**N, 60)`」直接理解成「只要 N 達到門檻，這次請求就回 429」，沒有考慮 delay 是一個會隨時間流逝而過期的倒數視窗**。用真實 Supabase 連線測試時發現：第一次失敗後，任何後續嘗試（包含用正確密碼）永遠回 429——因為 `N`（連續失敗數）只有「成功登入」才會歸零，但要成功登入又得先通過節流檢查，形成無法打破的死鎖，等於把使用者永久鎖在門外，比原本要避免的「硬鎖」問題更嚴重。
+
+   **判斷是否需要問專家**：這不是需要外部經驗判斷的設計取捨（不像「兩種做法都合理」的情境），而是實作邏輯本身的正確性問題——「節流視窗會過期」是 2.2/2.2.1 節「延遲窗口」「還在窗口內」這些用詞已經隱含的意思，只有一種修法是對的，不構成需要問專家的分歧點。
+
+   **修正**：`LoginAttemptStore.count_fine()`/`count_coarse()` 改為同時回傳 `(N, 最後一次失敗的時間戳)`；新增 `_remaining_delay(n, last_failure_at, n_threshold, n_offset)`，用「目前時間 - 最後失敗時間」算出剩餘等待秒數，delay 歸零後即可再次嘗試（不論成功失敗），失敗會產生新的 `N` 與新的倒數視窗。修正後用真實連線驗證：立即重試被 429 擋下 → 等待 delay 秒後可重試 → 成功登入後計數確實歸零、下次錯誤不會立即被節流。
+
+**🟢 三段式判斷、清理機制皆驗證通過**
+2. **格式不合法**（如 `INVALID-DEPT!`）：確認完全不寫入 `login_attempts`，不查 DB
+3. **格式合法但部門不存在**：確認正確寫入 `success=false` 記錄（稽核訊號保留）
+4. **已在節流窗口內的請求**：確認不重複寫入新記錄（避免表被拿來當放大攻擊目標）
+5. **細網/粗網取最大值**：粗網門檻 20 次、`n_offset=19` 的位移邏輯正確接上 `_remaining_delay()`
+6. `cleanup_expired(days=90)` 驗證不會誤刪 90 天內的記錄；`POST /api/admin/cleanup-expired` 端點回應新增 `login_attempts_removed` 欄位
+
+**影響範圍**：`backend/storage.py` 新增 `LoginAttemptStore` 類別與 `login_attempt_store` singleton；`backend/app.py` 新增 `_client_ip()`/`_check_login_throttle()`/`_remaining_delay()`，`_do_login()` 內建三段式記錄邏輯，`login_submit()`/`admin_login_submit()` 加上節流檢查，`cleanup_expired()` 端點回應格式擴充；驗證過程建立的臨時部門 `zztest7` 與測試期間產生的 `login_attempts` 記錄皆已清除，正式資料未受影響；57 個既有 pytest 全數通過（本機/測試模式因 `_use_supabase()` 為 False，節流邏輯完全不啟用，符合單租戶測試環境的定位）。

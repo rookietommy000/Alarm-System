@@ -105,12 +105,14 @@
 - [x] `set_active()`／`update_password()`／`purge()` 成功後主動 pop 快取，讓操作者所在 worker 立即生效——已實測確認同一 process 內立即生效
 - [x] 實作部門不存在時的 dummy hash 比對（`_DUMMY_HASH` 模組載入時算好），回應與密碼錯誤完全一致（枚舉防護）——已寫入程式碼（`_do_login()` 內），格式不合法與部門不存在兩種情況皆會消耗 dummy hash 比對時間
 - [ ] **【尚未實作】登入節流細網**：`(ip, department)` 組合，15 分鐘窗口內最近成功登入之後的連續失敗數 `N_ip_dept`
-- [ ] **【尚未實作】登入節流粗網**：只看 `ip`（不看 department），門檻 20 次，`N_ip`
-- [ ] **【尚未實作】** `delay = min(max(2**N_ip_dept if N_ip_dept>=1 else 0, 2**(N_ip-19) if N_ip>=20 else 0), 60)`，429 + `Retry-After`，**不用 `sleep()`**
-- [ ] **【尚未實作】** `login_attempts` 寫入三段式判斷：格式不合法（不符 `DEPT_ID_RE`）不查 DB 不寫入；格式合法但部門不存在照常寫入 `success=false`；已在節流窗口內的請求只回 429 不再寫入
-- [ ] **【尚未實作】** `cleanup-expired` 端點新增 `delete from login_attempts where attempted_at < now() - interval '90 days'`
+- [x] 實作登入節流粗網：只看 `ip`（不看 department），門檻 20 次，`N_ip`（`LoginAttemptStore.count_coarse()`）
+- [x] `delay = min(max(2**N_ip_dept, 2**(N_ip-19)), 60)`，429 + `Retry-After`，**不用 `sleep()`**——已用真實 Supabase 連線實測：立即重試回 429、等待 delay 秒後可重試、成功登入後計數歸零
+- [x] `login_attempts` 寫入三段式判斷：格式不合法（不符 `DEPT_ID_RE`）不查 DB 不寫入；格式合法但部門不存在照常寫入 `success=false`；已在節流窗口內的請求只回 429 不再寫入——三種情況皆已實測驗證
+- [x] `cleanup-expired` 端點新增 90 天清理（`login_attempt_store.cleanup_expired(days=90)`），回應含 `login_attempts_removed` 欄位
 
-**⚠️ 上線前提醒**：`SUPERADMIN_PASSWORD` 目前本機測試值為弱密碼（純數字），節流機制完成前不可對外開放，正式上線前需要換成高強度密碼並確認上方節流機制已完成。
+**【第二十二輪重要發現】第一版實作有邏輯缺陷，已修正**：最初把 `delay` 理解成「N 達門檻就永久節流」，導致成功登入前必須先通過節流檢查、節流又必須靠成功登入才能歸零，形成死鎖（任何人一旦觸發一次失敗就永久被鎖）。修正為 `delay` 是相對「最後一次失敗時間」的倒數計時，過了窗口即可重試。詳見 PLAN 第二十二輪。
+
+**⚠️ 上線前提醒**：`SUPERADMIN_PASSWORD` 目前本機測試值為弱密碼（純數字），節流機制已完成，但正式上線前仍需要換成高強度密碼。
 
 ## 階段 5：後端 — `storage.py`（對應計畫第 3 節）— 【核心改寫已完成，第二十輪】
 
