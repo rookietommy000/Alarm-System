@@ -40,6 +40,11 @@ class JsonStore:
     def _match_fields(self) -> list:
         return ["model"] if self.is_devices else ["device_model", "code"]
 
+    def probe(self) -> None:
+        """健康檢查專用，介面對齊 SupabaseStore.probe()。JsonStore 是本機檔案，
+        沒有網路往返成本，直接確認檔案路徑存在即可，不需要真的讀取內容。"""
+        _ = self.path.exists()
+
     def load(self, department: Optional[str] = None) -> list:
         if not self.path.exists():
             return []
@@ -189,6 +194,20 @@ class SupabaseStore:
                 break
             offset += page_size
         return result
+
+    def probe(self) -> None:
+        """健康檢查專用：只確認連得到資料庫，不搬任何資料列（外部審查發現：
+        /ping 原本呼叫 load(department=None)，department=None 代表不過濾，
+        等於整張表 1759 筆都撈下來，Render cron 每 10 分鐘打一次，白白浪費
+        兩次分頁 HTTP 往返）。用 Range: 0-0 只要拿到回應就代表連線正常，
+        不判斷回傳筆數，出錯就讓例外往上拋（呼叫端 /ping 自行接住）。"""
+        req = urllib.request.Request(
+            f"{self._base}/rest/v1/{self.table}?select={self.pk_fields[0]}",
+            headers=self._headers({"Range-Unit": "items", "Range": "0-0"}),
+            method="GET",
+        )
+        with urllib.request.urlopen(req) as r:
+            r.read()
 
     def load(self, department: Optional[str]) -> list:
         """department=None 是 DeptScope.ALL 的明確選擇（總管不過濾），

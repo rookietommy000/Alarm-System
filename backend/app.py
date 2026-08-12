@@ -942,8 +942,9 @@ def create_app() -> Flask:
     @public_endpoint
     def ping():
         try:
-            # department=None：健康檢查只確認資料庫連得到，不關心特定部門的資料
-            alarms_store.load(department=None)
+            # 只確認連得到資料庫，不搬資料列——department=None 的 load() 會撈
+            # 整張表（外部審查發現：Render cron 每 10 分鐘打一次，白白浪費）
+            alarms_store.probe()
             return {"status": "ok"}, 200
         except Exception as e:
             return {"status": "db_error", "msg": str(e)}, 200
