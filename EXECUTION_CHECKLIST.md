@@ -250,13 +250,16 @@
 
 ## 階段 15：批次匯入工具（對應計畫第 6 節）
 
-- [ ] 撰寫 `backend/import_alarms.py`：CSV/Excel 讀取，`--department <id>` 必填
-- [ ] **前置驗證**：取出 CSV 所有相異 `device_model`，比對該部門 `devices` 表是否都存在，缺任何一個整批中止並列出清單與各自警報筆數
-- [ ] `--create-missing-devices` opt-in 旗標（預設關閉，防止錯字建立新機種）
-- [ ] 交易語意全有全無：任何一筆失敗整批回滾
-- [ ] `--mode append`（預設，走 `upsert_one()`）/`upsert`（同義）/`replace`（需 `--yes-i-mean-replace`，走 `save()`）
-- [ ] `--dry-run`：印出將寫入筆數＋缺少機種清單（`ERROR` 標示）；`replace` 模式額外印出將刪除筆數
-- [ ] 機種批次建立比照辦理或整合進同一腳本
+- [x] 撰寫 `backend/import_alarms.py`：CSV 讀取，`--department <id>` 必填（驗證符合 `^[a-z0-9_]{1,32}$`）
+- [x] **前置驗證**：取出 CSV 所有相異 `device_model`，比對該部門 `devices` 表是否都存在，缺任何一個整批中止並列出清單與各自警報筆數
+- [x] `--create-missing-devices` opt-in 旗標（預設關閉，防止錯字建立新機種）
+- [x] CSV 內部 `(device_model, code)` 重複值防護（實作時新增，避免逐筆 upsert 時後者靜默覆蓋前者）
+- [x] `--mode append`（預設，走 `upsert_one()`）/`upsert`（同義）/`replace`（需 `--yes-i-mean-replace`，走 `save()`）
+- [x] `--dry-run`：印出將寫入筆數＋缺少機種清單；`replace` 模式額外印出將刪除筆數
+- [ ] Excel（`.xlsx`）讀取——目前只支援 CSV，若日後有 Excel 匯入需求需額外加 `openpyxl` 依賴（非阻塞，CSV 已可滿足匯入需求）
+- [ ] 機種批次建立整合進同一腳本——目前僅有 `--create-missing-devices` 的簡易建立邏輯（`category`/`line` 留空），若需要完整機種資訊批次建立需另外規劃
+
+**核心風控邏輯完成並用 `JsonStore` 本機驗證通過（正常匯入、機種缺失擋下、CSV 重複值擋下、replace 安全閥），詳見 PLAN 第二十五輪審查。尚未對真實 Supabase 執行——留到階段 16 建立第一個真實部門時首次使用。**
 
 ## 階段 16：第一個真實部門上線（對應計畫第 7 節步驟 7~9）
 

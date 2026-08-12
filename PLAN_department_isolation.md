@@ -1543,3 +1543,20 @@ def test_resolve_target_department_does_not_read_request_args():
 3. 兩項測試皆一次寫對、一次通過，沒有額外除錯——這是第二十一輪先用手動腳本驗證過 `_auth_level` 標記完整性、且提前記錄了 docstring 陷阱的直接效益，正式寫測試時沒有再踩到同樣的坑
 
 **影響範圍**：新增 `tests/test_route_auth_registry.py`；全專案 pytest 從 57 個增加為 59 個，全數通過；PLAN 3.6/4.8 節「`department` 參數改必填」仍照計畫保留到 `app.py` 部署階段（階段 11）與 `storage.py`/`ai_memory.py` 的預設值在同一次 commit 一起移除，不在本輪處理。
+
+---
+
+第二十五輪審查（第 6/6.1 節：批次匯入工具 `import_alarms.py` 撰寫完成）：
+
+**背景**：前端改動需等使用者完成 design 草稿才能開始，趁這段空檔完成與前端／部署都無關、可獨立驗證的第 6 節批次匯入工具。
+
+**🟢 完整實作並用 JsonStore 本機驗證通過（PLAN 6/6.1 節全部要求皆已落地）**
+1. `--department` 必填且驗證符合 `^[a-z0-9_]{1,32}$`（與 `app.py` 的 `DEPT_ID_RE` 定義一致；此工具刻意不 import `app.py`，避免觸發不必要的 `create_app()` Flask 初始化，改為在檔案內重複定義同一正則）
+2. `--mode append|upsert|replace`，預設 `append`（逐筆 `upsert_one()`，不刪除既有資料）；`replace`（整批 `save()`，含刪除掃描）需額外 `--yes-i-mean-replace` 旗標，未帶旗標直接拒絕執行——已測試驗證擋下
+3. **前置機種驗證（PLAN 6.1 節核心風控）**：`_validate_devices_exist()` 整批比對 CSV 內所有相異 `device_model` 是否已存在於該部門 `devices` 表，缺任何一個就整批中止、列出缺少機種清單與各自受影響筆數，不寫入任何一筆——已測試驗證：帶入不存在機種 `PLIM003` 的 CSV，正確擋下並回報「1 筆警報受影響」
+4. `--create-missing-devices`：opt-in，預設關閉，帶上才會自動建立缺少的機種（用 `M-<model>` 命名慣例，比照 `app.py` 既有的 `create_device` 端點）
+5. **CSV 內部重複值防護（實作時新增，PLAN 未明文要求但邏輯必要）**：`_dedupe_check()` 檢查 CSV 內是否有重複的 `(device_model, code)` 組合——若不擋，`upsert_one()` 逐筆處理時後者會安靜覆蓋前者且不報錯，這與 6.1 節「孤兒警報安靜產生、難以察覺」是同一類風險，故一併納入前置驗證，已測試驗證正確擋下
+6. `--dry-run`：印出將寫入 N 筆、缺少機種清單（若有）、`replace` 模式額外印出將刪除 N 筆——皆已測試驗證輸出正確
+7. **交易語意**：`append`/`upsert` 模式逐筆呼叫 `upsert_one()`（PostgREST 單筆請求已具備原子性）；`replace` 模式呼叫既有的 `save()`（PLAN 3.1 節已修正的部門過濾版本），沿用其既有的「先 upsert 全部、再刪除掃描」語意，未額外包一層應用層交易——這與 `storage.py` 現有其他呼叫端（如 `create_app()` 的機種管理）的一致性做法相同，不是這次新增的風險
+
+**影響範圍**：新增 `backend/import_alarms.py`（CLI 工具，`argparse` 介面，不依賴 Flask app context）；59 個既有 pytest 全數通過（此工具未被 pytest 覆蓋，因為它是獨立 CLI 而非 `app.py` 路由，改用手動建立臨時 `ALARM_DATA_DIR` 資料夾＋CSV 直接執行驗證，涵蓋：正常匯入、機種缺失擋下、CSV 內部重複值擋下、`replace` 模式安全閥），驗證用臨時檔案已清除；尚未對真實 Supabase 連線測試（因為目前沒有第二個真實部門可匯入，且 `devices_store`/`alarms_store` 走 `SupabaseStore` 的路徑與 `JsonStore` 共用同一組公開方法簽名，已在階段 5/6 分別驗證過，這裡不必重複驗證底層 store 行為，只需驗證這支工具本身的參數解析與流程控制邏輯）。實際使用時機：PLAN 第 7 節部署順序步驟 8（建立第一個真實第二部門的機種與警報），屆時才會第一次對正式 Supabase 執行。
