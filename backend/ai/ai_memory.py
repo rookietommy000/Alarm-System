@@ -90,7 +90,8 @@ def record_scan(
     confirmed_by: Optional[str] = None,
     original_model: Optional[str] = None,
     scan_id: Optional[str] = None,
-    department: Optional[str] = None,
+    *,
+    department: Optional[str],
 ) -> dict:
     """
     [MEM-001] 記錄一次拍照辨識結果。
@@ -105,8 +106,8 @@ def record_scan(
       confirmed_by    操作者身分（GMP 稽核用，source!=ai 時必填）
       original_model  AI 原始辨識值（source=confirmed/corrected 時帶入，供錯誤率計算）
       scan_id         外部傳入 scan_id（省略時自動產生）
-      department      寫入的部門（PLAN 3.5/3.6 節：過渡期暫留 None，
-                       app.py 全面改必填時同一次 commit 移除此預設值）
+      department      寫入的部門，None 是明確選擇（無部門情境），不是預設值——
+                       呼叫端必須每次主動決定（PLAN 3.6 節）
 
     回傳寫入的紀錄 dict（含 scan_id，供後續確認/修正帶回）。
     """
@@ -167,7 +168,8 @@ def record_confirmation(
     original_model: Optional[str],
     original_analyzer: Optional[dict],
     confirmed_by: str,
-    department: Optional[str] = None,
+    *,
+    department: Optional[str],
 ) -> dict:
     """
     [MEM-001] 操作員確認 AI 結果正確（未修改），補寫一筆 source="confirmed"。
@@ -175,7 +177,7 @@ def record_confirmation(
     scan_id: 原始 AI scan 的 id，確認頁帶回來
     alarms:  [{"code": str, "conf": int | None}, ...]（含 conf，從原始 scan 帶回）
     original_model: AI 原始辨識的機種（供機種層錯誤率計算用）
-    department: 見 record_scan() 的說明（過渡期暫留 None）
+    department: 見 record_scan() 的說明（None 為明確選擇，非預設值）
     """
     return record_scan(
         model=model,
@@ -202,7 +204,8 @@ def record_correction(
     model_conf: Optional[int],
     original_analyzer: Optional[dict] = None,
     confirmed_by: Optional[str] = None,
-    department: Optional[str] = None,
+    *,
+    department: Optional[str],
 ) -> dict:
     """
     [MEM-002] 記錄使用者的修正行為。
@@ -216,7 +219,7 @@ def record_correction(
     model_conf:      AI 原始的機種信心度
     original_analyzer: 原判斷的 analyzer 資訊（計算 per-model 錯誤率用）
     confirmed_by:    操作者身分（GMP 稽核用）
-    department:      見 record_scan() 的說明（過渡期暫留 None）
+    department:      見 record_scan() 的說明（None 為明確選擇，非預設值）
     """
     now = datetime.now(timezone.utc)
     record = {
@@ -251,13 +254,13 @@ def record_correction(
     )
 
 
-def load_corrections(model: str, department: Optional[str] = None) -> list:
+def load_corrections(model: str, *, department: Optional[str]) -> list:
     """[MEM-002] 讀取某機種的所有修正記錄，限縮在呼叫者的部門範圍內
     （PLAN 3.5 節：不限縮會讓 A 部門的辨識歷史混進 B 部門候選建議清單）。"""
     return _load_records("corrections", model, department=department)
 
 
-def load_confirmed_history(model: str, department: Optional[str] = None) -> list:
+def load_confirmed_history(model: str, *, department: Optional[str]) -> list:
     """
     [MEM-001] 只回傳人工確認過的歷史（source in confirmed/corrected），
     且限縮在呼叫者的部門範圍內（PLAN 3.5 節）。
@@ -340,7 +343,7 @@ def _sb_query(table: str, filters: dict) -> list:
 
 # ── 內部工具 ─────────────────────────────────────────────────────────────────
 
-def _append_record(subdir: str, key: str, record: dict, department: Optional[str] = None):
+def _append_record(subdir: str, key: str, record: dict, department: Optional[str]):
     if _use_supabase():
         if subdir == "history":
             _sb_insert("ai_scans", {
@@ -380,7 +383,7 @@ def _append_record(subdir: str, key: str, record: dict, department: Optional[str
         _write_file_unlocked(path, records)
 
 
-def _load_records(subdir: str, key: str, department: Optional[str] = None) -> list:
+def _load_records(subdir: str, key: str, department: Optional[str]) -> list:
     """department=None 時不加過濾條件（PLAN 3.7 節：DeptScope.ALL 不得加任何
     department 相關過濾，含看似無害的 .not.is.null；_sb_query() 的 filters
     已在 None 值時自動跳過該欄位，天然滿足這個約束）。"""

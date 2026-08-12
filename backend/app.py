@@ -942,7 +942,8 @@ def create_app() -> Flask:
     @public_endpoint
     def ping():
         try:
-            alarms_store.load()
+            # department=None：健康檢查只確認資料庫連得到，不關心特定部門的資料
+            alarms_store.load(department=None)
             return {"status": "ok"}, 200
         except Exception as e:
             return {"status": "db_error", "msg": str(e)}, 200

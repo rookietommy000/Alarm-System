@@ -190,7 +190,9 @@ class SupabaseStore:
             offset += page_size
         return result
 
-    def load(self, department: Optional[str] = None) -> list:
+    def load(self, department: Optional[str]) -> list:
+        """department=None 是 DeptScope.ALL 的明確選擇（總管不過濾），
+        不是「忘記傳」的預設值——呼叫端必須每次主動決定（PLAN 3.6 節）。"""
         qs = "select=*"
         if department is not None:
             qs += f"&department=eq.{urllib.parse.quote(department, safe='')}"
@@ -202,8 +204,9 @@ class SupabaseStore:
     def _row_key(self, row: dict) -> tuple:
         return tuple(str(row.get(f, "")) for f in self.pk_fields)
 
-    def save(self, items: list, department: Optional[str] = None, on_conflict: Optional[str] = None) -> None:
-        """整批取代語意。若 department 有值，刪除掃描比對只在該部門範圍內進行
+    def save(self, items: list, department: Optional[str], on_conflict: Optional[str] = None) -> None:
+        """整批取代語意。department=None 是明確選擇（不限定部門範圍），不是預設值
+        （PLAN 3.6 節）。若 department 有值，刪除掃描比對只在該部門範圍內進行
         （PLAN 3.1 節：避免存 A 部門資料時把 B 部門資料誤刪）。
 
         用於 devices_store 的批次匯入／管理頁全量儲存，以及 alarms 的批次匯入
@@ -438,7 +441,7 @@ class AuditLogger:
     def __init__(self):
         self._lock = Lock()
 
-    def log(self, operation: str, department: Optional[str] = None,
+    def log(self, operation: str, department: Optional[str],
             new_data: dict = None, old_data: dict = None) -> None:
         entry = {
             "operation": operation,
@@ -454,7 +457,9 @@ class AuditLogger:
         else:
             self._log_json(entry)
 
-    def load(self, limit: int = 100, department: Optional[str] = None) -> list:
+    def load(self, limit: int, department: Optional[str]) -> list:
+        # department=None 是明確選擇（DeptScope.ALL），呼叫端一律主動傳入
+        # （PLAN 3.6 節）。JsonStore fallback（本機/測試）內部不使用這個值。
         if _use_supabase():
             return self._load_supabase(limit, department)
         return self._load_json(limit)
@@ -527,7 +532,7 @@ class AuditLogger:
 class FeedbackStore:
     """Append-only store for user feedback entries."""
 
-    def append(self, entry: dict, department: Optional[str] = None) -> None:
+    def append(self, entry: dict, department: Optional[str]) -> None:
         if department is not None:
             entry = {**entry, "department": department}
         if _use_supabase():
@@ -535,12 +540,12 @@ class FeedbackStore:
         else:
             self._append_json(entry)
 
-    def load(self, department: Optional[str] = None) -> list:
+    def load(self, department: Optional[str]) -> list:
         if _use_supabase():
             return self._load_supabase(department)
         return self._load_json()
 
-    def stats(self, department: Optional[str] = None) -> list:
+    def stats(self, department: Optional[str]) -> list:
         records = self.load(department)
         stats: dict = {}
         for r in records:
@@ -614,7 +619,7 @@ class FeedbackStore:
 class ViewStore:
     """Append-only store for alarm view events."""
 
-    def append(self, entry: dict, department: Optional[str] = None) -> None:
+    def append(self, entry: dict, department: Optional[str]) -> None:
         if department is not None:
             entry = {**entry, "department": department}
         if _use_supabase():
@@ -622,12 +627,12 @@ class ViewStore:
         else:
             self._append_json(entry)
 
-    def load(self, department: Optional[str] = None) -> list:
+    def load(self, department: Optional[str]) -> list:
         if _use_supabase():
             return self._load_supabase(department)
         return self._load_json()
 
-    def top(self, limit: int = 10, department: Optional[str] = None) -> list:
+    def top(self, department: Optional[str], limit: int = 10) -> list:
         records = self.load(department)
         counts: dict = {}
         for r in records:
@@ -637,8 +642,8 @@ class ViewStore:
                   for k, v in sorted(counts.items(), key=lambda x: -x[1])]
         return result[:limit]
 
-    def stats(self, department: Optional[str] = None) -> list:
-        return self.top(limit=len(self.load(department)) or 1, department=department)
+    def stats(self, department: Optional[str]) -> list:
+        return self.top(department, limit=len(self.load(department)) or 1)
 
     def _append_json(self, entry: dict) -> None:
         path = _data_dir() / "views.json"
@@ -719,15 +724,15 @@ class AiScanStore:
             return ""
         return f"&department=eq.{urllib.parse.quote(department, safe='')}"
 
-    def load_scans(self, limit: int = 5000, department: Optional[str] = None) -> list:
+    def load_scans(self, department: Optional[str], limit: int = 5000) -> list:
         return self._get("ai_scans",
                          f"select=*&order=created_at.desc&limit={limit}{self._dept_qs(department)}")
 
-    def load_corrections(self, limit: int = 5000, department: Optional[str] = None) -> list:
+    def load_corrections(self, department: Optional[str], limit: int = 5000) -> list:
         return self._get("ai_corrections",
                          f"select=*&order=created_at.desc&limit={limit}{self._dept_qs(department)}")
 
-    def load_logs(self, limit: int = 5000, department: Optional[str] = None) -> list:
+    def load_logs(self, department: Optional[str], limit: int = 5000) -> list:
         return self._get("ai_logs",
                          f"select=*&order=created_at.desc&limit={limit}{self._dept_qs(department)}")
 

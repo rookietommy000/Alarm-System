@@ -40,14 +40,14 @@ def _codes_only(items: list) -> list:
 
 
 def run_pipeline(image_b64: str, mime_type: str = "image/jpeg", known_model: str = None,
-                  department: Optional[str] = None) -> dict:
+                  *, department: Optional[str]) -> dict:
     """
     執行完整 AI 分析流程。
 
     department: 寫入 ai_scans.department，且 MEM 層的歷史/候選查詢限縮在此
     部門範圍內（PLAN 3.5 節：不限縮會讓 A 部門的辨識歷史混進 B 部門候選建議
-    清單，同時是正確性問題與資料洩漏問題）。過渡期暫留 None，app.py 全面
-    改必填時同一次 commit 移除此預設值（PLAN 4.8 節）。
+    清單，同時是正確性問題與資料洩漏問題）。None 為明確選擇，非預設值
+    （PLAN 3.6/4.8 節）。
 
     回傳：
       {
@@ -161,7 +161,8 @@ def run_confirmation(
     original_model: Optional[str],
     original_analyzer: Optional[dict],
     confirmed_by: str,
-    department: Optional[str] = None,
+    *,
+    department: Optional[str],
 ) -> dict:
     """
     操作員確認 AI 結果正確（未修改），補寫 source="confirmed" 記錄。
@@ -173,7 +174,7 @@ def run_confirmation(
     original_model:  AI 原始辨識的機種（供機種層錯誤率計算）
     original_analyzer: 原始 analyzer metadata
     confirmed_by:    操作者身分（GMP 稽核用）
-    department:      見 run_pipeline() 的說明（過渡期暫留 None）
+    department:      見 run_pipeline() 的說明（None 為明確選擇，非預設值）
     """
     rec = mem_record_confirmation(
         scan_id=scan_id,
@@ -205,7 +206,8 @@ def run_correction(
     model_conf: Optional[int],
     original_analyzer: Optional[dict] = None,
     confirmed_by: Optional[str] = None,
-    department: Optional[str] = None,
+    *,
+    department: Optional[str],
 ) -> dict:
     """
     操作員修正 AI 辨識錯誤，補寫 source="corrected" 記錄（MEM-002 + LOG）。
@@ -217,7 +219,7 @@ def run_correction(
     corrected_codes: [{"code": str, "conf": int | None}, ...]（操作員確認，含 conf）
     original_analyzer: 原始 analyzer metadata（計算 per-model 錯誤率用）
     confirmed_by:    操作者身分（GMP 稽核用）
-    department:      見 run_pipeline() 的說明（過渡期暫留 None）
+    department:      見 run_pipeline() 的說明（None 為明確選擇，非預設值）
     """
     rec = mem_record_correction(
         scan_id=scan_id,

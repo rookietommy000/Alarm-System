@@ -111,20 +111,20 @@ class TestRecordScanFormat:
     def test_scan_id_generated(self, mem):
         """每次 record_scan 都應產生非空 scan_id。"""
         _, m = mem
-        rec = m.record_scan("PILM004", 90, [], [])
+        rec = m.record_scan("PILM004", 90, [], [], department="test_dept")
         assert rec.get("scan_id") and len(rec["scan_id"]) > 0
 
     def test_scan_id_stable_when_provided(self, mem):
         """外部傳入 scan_id 時原樣保留。"""
         _, m = mem
-        rec = m.record_scan("PILM004", 90, [], [], scan_id="abc123")
+        rec = m.record_scan("PILM004", 90, [], [], scan_id="abc123", department="test_dept")
         assert rec["scan_id"] == "abc123"
 
     def test_alarms_keep_conf(self, mem):
         """alarms 欄位一律保留 conf（含 None）。"""
         _, m = mem
         alarms = [{"code": "0001", "conf": None}, {"code": "0002", "conf": 85}]
-        rec = m.record_scan("PILM004", 90, alarms, [])
+        rec = m.record_scan("PILM004", 90, alarms, [], department="test_dept")
         assert rec["alarms"][0] == {"code": "0001", "conf": None}
         assert rec["alarms"][1] == {"code": "0002", "conf": 85}
 
@@ -132,18 +132,18 @@ class TestRecordScanFormat:
         """rejected 欄位一律保留 conf 和 error。"""
         _, m = mem
         rejected = [{"code": "0001", "conf": 50, "error": "ERR_LOW_CONF"}]
-        rec = m.record_scan("PILM004", 90, [], rejected)
+        rec = m.record_scan("PILM004", 90, [], rejected, department="test_dept")
         assert rec["rejected"][0] == {"code": "0001", "conf": 50, "error": "ERR_LOW_CONF"}
 
     def test_original_model_stored(self, mem):
         """original_model 欄位寫入記錄，供錯誤率計算。"""
         _, m = mem
-        rec = m.record_scan("PILM004", 90, [], [], original_model="PILM003")
+        rec = m.record_scan("PILM004", 90, [], [], original_model="PILM003", department="test_dept")
         assert rec["original_model"] == "PILM003"
 
     def test_source_ai_by_default(self, mem):
         _, m = mem
-        rec = m.record_scan("PILM004", 90, [], [])
+        rec = m.record_scan("PILM004", 90, [], [], department="test_dept")
         assert rec["source"] == "ai"
 
 
@@ -191,18 +191,19 @@ class TestRecordScanTier:
         rec = m.record_scan(
             "PILM004", 85, [],
             [{"code": "0001", "conf": 50, "error": "ERR_LOW_CONF"}],
+            department="test_dept",
         )
         assert rec["tier"] == "low_confidence"
 
     def test_no_alarms_no_rejected_gives_no_alarm(self, mem):
         _, m = mem
-        rec = m.record_scan("PILM004", 90, [], [])
+        rec = m.record_scan("PILM004", 90, [], [], department="test_dept")
         assert rec["tier"] == "no_alarm"
 
     def test_alarms_all_conf_none_gives_success(self, mem):
         """avg_conf=None 不 crash，tier=success。"""
         _, m = mem
-        rec = m.record_scan("PILM004", 90, [{"code": "0001", "conf": None}], [])
+        rec = m.record_scan("PILM004", 90, [{"code": "0001", "conf": None}], [], department="test_dept")
         assert rec["tier"] == "success"
 
     def test_high_conf_gives_success_high(self, mem):
@@ -212,24 +213,25 @@ class TestRecordScanTier:
         rec = m.record_scan(
             "PILM004", high, [{"code": "0001", "conf": high}], [],
             analyzer={"name": "gemini", "model": "gemini-2.0-flash", "prompt_version": "v1"},
+            department="test_dept",
         )
         assert rec["tier"] == "success_high"
 
     def test_model_none_gives_failure(self, mem):
         _, m = mem
-        rec = m.record_scan(None, None, [], [])
+        rec = m.record_scan(None, None, [], [], department="test_dept")
         assert rec["tier"] == "failure"
 
     def test_confirmed_source_gives_confirmed_tier(self, mem):
         """source=confirmed 直接走 confirmed tier，不走 AI 邏輯。"""
         _, m = mem
-        rec = m.record_scan("PILM004", 90, [], [], source="confirmed", confirmed_by="op01")
+        rec = m.record_scan("PILM004", 90, [], [], source="confirmed", confirmed_by="op01", department="test_dept")
         assert rec["tier"] == "confirmed"
         assert rec["source"] == "confirmed"
 
     def test_corrected_source_gives_corrected_tier(self, mem):
         _, m = mem
-        rec = m.record_scan("PILM004", 90, [], [], source="corrected", confirmed_by="op01")
+        rec = m.record_scan("PILM004", 90, [], [], source="corrected", confirmed_by="op01", department="test_dept")
         assert rec["tier"] == "corrected"
 
 
@@ -245,6 +247,7 @@ class TestRecordConfirmation:
             original_model="PILM004",
             original_analyzer=None,
             confirmed_by="op01",
+            department="test_dept",
         )
         assert rec["tier"] == "confirmed"
         assert rec["scan_id"] == "orig001"
@@ -260,6 +263,7 @@ class TestRecordConfirmation:
             original_model=None,
             original_analyzer=None,
             confirmed_by="op01",
+            department="test_dept",
         )
         assert rec["alarms"][0]["conf"] is None
 
@@ -272,7 +276,7 @@ class TestLoadRecordsSafety:
         folder = tmp_path / "history"
         folder.mkdir(parents=True, exist_ok=True)
         (folder / "PILM004.json").write_text(json.dumps([bad]), encoding="utf-8")
-        assert m._load_records("history", "PILM004") == [bad]
+        assert m._load_records("history", "PILM004", department=None) == [bad]
 
     def test_invalid_expires_at_does_not_raise(self, mem):
         tmp_path, m = mem
@@ -280,7 +284,7 @@ class TestLoadRecordsSafety:
         folder = tmp_path / "history"
         folder.mkdir(parents=True, exist_ok=True)
         (folder / "PILM004.json").write_text(json.dumps([bad]), encoding="utf-8")
-        assert m._load_records("history", "PILM004") == [bad]
+        assert m._load_records("history", "PILM004", department=None) == [bad]
 
     def test_expired_record_filtered(self, mem):
         tmp_path, m = mem
@@ -289,24 +293,43 @@ class TestLoadRecordsSafety:
         folder = tmp_path / "history"
         folder.mkdir(parents=True, exist_ok=True)
         (folder / "PILM004.json").write_text(json.dumps([record]), encoding="utf-8")
-        assert m._load_records("history", "PILM004") == []
+        assert m._load_records("history", "PILM004", department=None) == []
 
 
 class TestLoadConfirmedHistory:
     def test_only_confirmed_and_corrected_returned(self, mem):
         """load_confirmed_history 只回傳 source in (confirmed, corrected)。"""
         _, m = mem
-        m.record_scan("PILM004", 90, [], [], source="ai")
-        m.record_scan("PILM004", 90, [], [], source="confirmed", confirmed_by="op01")
-        m.record_scan("PILM004", 90, [], [], source="corrected", confirmed_by="op01")
-        confirmed = m.load_confirmed_history("PILM004")
+        m.record_scan("PILM004", 90, [], [], source="ai", department="test_dept")
+        m.record_scan("PILM004", 90, [], [], source="confirmed", confirmed_by="op01", department="test_dept")
+        m.record_scan("PILM004", 90, [], [], source="corrected", confirmed_by="op01", department="test_dept")
+        confirmed = m.load_confirmed_history("PILM004", department="test_dept")
         assert len(confirmed) == 2
         assert all(r["source"] in ("confirmed", "corrected") for r in confirmed)
 
     def test_ai_source_excluded(self, mem):
         _, m = mem
-        m.record_scan("PILM004", 90, [], [], source="ai")
-        assert m.load_confirmed_history("PILM004") == []
+        m.record_scan("PILM004", 90, [], [], source="ai", department="test_dept")
+        assert m.load_confirmed_history("PILM004", department="test_dept") == []
+
+    def test_department_value_correctly_threaded_into_record(self, mem):
+        """department 參數確實被寫入記錄的 department 欄位，不會在傳遞過程中
+        被吃掉或搞混（PLAN 3.5 節跨部門隔離的前提：值本身要先傳對）。
+
+        誠實的範圍聲明：這條測試驗證不到「查詢時是否真的按部門過濾」，因為
+        JsonStore fallback（本機/測試，PLAN 3.2 節）刻意不實作多部門查詢過濾，
+        `_load_records()` 在非 Supabase 分支完全不使用 department 參數做篩選。
+        真正的查詢隔離只發生在 Supabase 路徑（_sb_query 依 department 過濾），
+        這裡測不到、也不該假裝測到——那樣的斷言反而會製造「有測試守著」的
+        錯覺，比沒有斷言更危險。這條測試能守住的，是「department 有沒有從
+        record_scan() 一路正確傳進最終寫入的記錄」這個更小、但仍然重要的環節：
+        少了它，日後有人在 record_scan() 內部改動時，就算把 department 從
+        record dict 裡漏寫掉，也不會被任何測試抓到。"""
+        _, m = mem
+        rec_a = m.record_scan("PILM004", 90, [], [], source="confirmed", confirmed_by="op_a", department="dept_a")
+        rec_b = m.record_scan("PILM004", 90, [], [], source="confirmed", confirmed_by="op_b", department="dept_b")
+        assert rec_a["department"] == "dept_a"
+        assert rec_b["department"] == "dept_b"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -438,6 +461,7 @@ class TestRunConfirmation:
             original_model="PILM004",
             original_analyzer=None,
             confirmed_by="op01",
+            department="test_dept",
         )
         assert result["ok"] is True
         assert result["scan_id"] == "scan001"
@@ -455,8 +479,9 @@ class TestRunConfirmation:
             original_model=None,
             original_analyzer=None,
             confirmed_by="op02",
+            department="test_dept",
         )
-        history = m.load_confirmed_history("PILM004")
+        history = m.load_confirmed_history("PILM004", department="test_dept")
         assert any(r["scan_id"] == "scan002" for r in history)
 
 
@@ -471,6 +496,7 @@ class TestRunCorrection:
             corrected_codes=[{"code": "0002", "conf": 90}],
             model_conf=75,
             confirmed_by="op03",
+            department="test_dept",
         )
         assert result["ok"] is True
         assert result["scan_id"] == "scan010"
@@ -488,6 +514,7 @@ class TestRunCorrection:
             corrected_codes=[{"code": "0002", "conf": 90}],
             model_conf=75,
             confirmed_by="op03",
+            department="test_dept",
         )
-        corrections = m.load_corrections("PILM004")
+        corrections = m.load_corrections("PILM004", department="test_dept")
         assert any(r.get("scan_id") == "scan011" for r in corrections)
