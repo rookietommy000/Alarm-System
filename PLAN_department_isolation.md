@@ -205,6 +205,7 @@ PostgREST 的 `department=eq.X` 不會匹配 NULL，任何回填失敗的資料�
    pg_restore -l pre_migration_*.dump | head   # 確認讀得出來，非空、非損毀
    ```
 4. **到 Supabase Dashboard 確認內建備份能力**——當作額外保險，**不當主力**。確認免費/付費方案的自動備份保留天數與還原操作方式，記錄下來備查，但不依賴它作為第一時間的回復手段
+   **【第十六輪查證結果】免費方案完全沒有內建備份**——Dashboard「Scheduled backups」頁面明確顯示 "Free Plan does not include project backups. Upgrade to the Pro Plan for up to 7 days of scheduled backups."，Point in Time Restore、Restore to new project 這些功能同樣是付費方案才有。這代表本節開頭「兩層安全網」的第二層（Dashboard 備份）目前**實際上不存在**，唯一的安全網是第 2、3、5 項（`rollback_stage3.sql`＋交易包裹＋`pg_dump`）。這三項因此從「雙保險的第一線」變成「唯一防線」，執行遷移前必須格外確認這三項都確實到位、`pg_dump` 檔案確實可還原，不能有僥倖心態
 5. **正向腳本全部包在 `BEGIN`/`COMMIT` 裡執行**——`migrate_add_departments.py`（1.7 節）與階段 3 的約束切換 SQL，凡是會修改資料/結構的敘述都包在單一交易內，任何一步失敗即整體 `ROLLBACK`，不會留下「改了一半」的中間態
 6. **執行後跑一次 `00_preflight_check.sql`**——確認新狀態符合預期（無 NULL、無重複、約束正確生效），這一步是遷移完成的驗收動作，不是可略過的多餘檢查
 
@@ -1332,3 +1333,18 @@ def test_resolve_target_department_does_not_read_request_args():
 3. **兩層安全網有明確的優先順序，但不代表次要的那層可以省略**——`rollback_stage3.sql`＋交易包裹（步驟 2、5）是處理「這一步做錯了」的第一線，日常操作出錯走這裡；`pg_dump`＋Dashboard 備份（步驟 3、4）是「整個專案出事」時的最後保險，只有前者失效或問題超出遷移範圍才會用到。專家特別追加澄清：這個排序不是「備份可有可無」的意思，六個步驟仍要全部做完才能進入下一階段（見 1.6 節「兩層安全網的定位」）
 
 **影響範圍**：階段 0 的執行清單需要把原本的「Dashboard 快照或 CSV 匯出」單一勾選項，展開成六個獨立步驟；階段 2（`migrate_add_departments.py`）與階段 3（主鍵/約束切換）都必須包在同一組 `BEGIN`/`COMMIT` 交易語意下執行（原本兩者是否需要交易包裹沒有明確規定，這輪定案為必須）；新增 `rollback_stage3.sql` 作為版本控制內的新檔案，需在階段 3 動手前就寫好並 commit。
+
+---
+
+第十六輪審查（Supabase 免費方案無內建備份，兩層安全網的第二層實際不存在）：
+
+**背景**：完成 1.6 節六步驟中的步驟 1~3（查證約束名稱、`rollback_stage3.sql`、`pg_dump` 完整備份並驗證可還原）後，執行步驟 4（到 Dashboard 確認內建備份能力）。
+
+**🔴 發現：免費方案完全沒有內建備份能力（已記錄，尚未決定是否需要再問一次專家）**
+1. **Supabase Dashboard 的「Scheduled backups」頁面明確顯示**：`Free Plan does not include project backups. Upgrade to the Pro Plan for up to 7 days of scheduled backups.`——不只排程備份，`Point in Time Restore`、`Restore to new project` 這兩個功能同樣要付費方案才有。也就是說，這個專案目前的 Supabase 免費方案**沒有任何官方託管的還原路徑**。
+
+   **這件事動搖了什麼**：第十五輪整合的專家方案，其「兩層安全網」設計是「`rollback_stage3.sql`＋交易包裹」處理日常出錯、「`pg_dump`＋Dashboard 備份」處理災難情境。第二層原本預期是兩個獨立、互補的保險（一個是我們自己做的邏輯備份，一個是 Supabase 官方的自動快照）。查證後發現第二層裡的「Dashboard 備份」這個子項**實際上不存在**，第二層目前只剩 `pg_dump` 單獨扛著。換句話說，整個遷移工程現在只有「`rollback_stage3.sql`＋交易包裹」與「`pg_dump`」兩道防線，而不是原本設想的三道（rollback、交易、Dashboard 快照）。
+
+   **目前判斷**：不視為阻塞項——`pg_dump` 本身已驗證可完整還原全部 8 張目標表，加上 `rollback_stage3.sql`＋交易包裹是精準對應「這次遷移」的第一線防護，兩者對階段 1~3（加欄位、遷移腳本、約束切換）這種規模的操作應屬足夠。但這是原方案的一個前提假設落空，記錄下來，是否要讓最初給出六步驟方案的專家知道這個落差、請他確認「少了 Dashboard 備份這層是否仍可接受目前的兩道防線」，留給使用者決定。
+
+**影響範圍**：1.6 節步驟 4 的敘述需要補充查證結果（免費方案無此功能），提醒往後任何人重讀這份計畫時不要誤以為 Dashboard 備份真的有在運作。若日後帳號升級到 Pro 方案，這一項的結論會需要重新確認。

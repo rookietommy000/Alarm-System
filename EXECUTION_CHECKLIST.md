@@ -56,7 +56,7 @@
   - [x] 1. 查清 `alarms`/`devices` 主鍵與約束實際名稱——`alarms_pkey PRIMARY KEY (device_model, code)`、`devices_pkey PRIMARY KEY (id)`、`devices_model_key UNIQUE (model)`（用 `\d alarms`/`\d devices` 實查確認）
   - [x] 2. 撰寫 `rollback_stage3.sql`（DROP COLUMN 新欄位、還原 1.3 節主鍵切換，用上面查到的真實約束名稱），已 commit（`9ade50b`）
   - [x] 3. `pg_dump -Fc --no-owner --no-privileges` 完整備份，並用 `pg_restore -l` 驗證可讀——已執行，415 TOC entries，`alarms`/`devices`/`feedback`/`ai_scans`/`ai_corrections`/`ai_logs`/`alarm_history`/`alarm_views` 8 張目標表均涵蓋 TABLE+DATA+約束+索引（**此步驟已取代 CSV 匯出，不需另外再做**）。檔案存於 `data/backup/`（已在 `.gitignore` 排除，不進版控）
-  - [ ] 4. Supabase Dashboard 確認內建備份/保留天數（額外保險，不當主力）——待使用者操作
+  - [x] 4. Supabase Dashboard 確認內建備份/保留天數——**【第十六輪查證】免費方案完全沒有備份功能**（Scheduled backups/Point in Time Restore/Restore to new project 皆需 Pro 方案），兩層安全網的第二層實際只剩 `pg_dump`；不視為阻塞項，但已記錄此落差，見 PLAN 1.6/第十六輪
   - [ ] 5. 確認 `migrate_add_departments.py`（階段 2）與主鍵/約束切換（階段 3）的 SQL 全部包在 `BEGIN`/`COMMIT` 交易內
   - [ ] 6. 遷移執行後重跑 `00_preflight_check.sql` 驗收
 - [x] 執行重複值預檢：`00_preflight_check.sql` 已含此檢查，結果 **0 筆重複**，`alarms`/`devices` 均可安全繼續
