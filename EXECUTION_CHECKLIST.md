@@ -128,10 +128,12 @@
 
 **驗證方式**：未透過 pytest（Supabase 連線非測試環境覆蓋範圍），改用 `.venv/bin/python3` 直接呼叫 real Supabase 逐項手動驗證（`load()`、`upsert_one()`/`delete_one()`、`save()` 部門過濾、`DepartmentStore` 讀取/`purge()`），過程中建立的所有臨時測試資料（`zztest` 部門、`TEST-UPSERT-*`/`TEST-MODEL`/`TEST-CODE`）皆已清除，最終確認 `alarms` 1759 筆、`devices` 14 筆、`departments` 僅 `mf4d` 一筆，與階段 3 完成時一致。
 
-## 階段 6：後端 — AI 管線部門隔離（對應計畫 3.5）
+## 階段 6：後端 — AI 管線部門隔離（對應計畫 3.5）— 【已完成並實測，第二十三輪】
 
-- [ ] `ai_memory.py` 所有查詢函式（歷史記錄、候選建議）加 `department` 參數並套用於查詢條件，不可省略
-- [ ] `ai_pipeline.py` 把 `session["department"]` 一路往下傳，不遺漏
+- [x] `ai_memory.py` 所有查詢函式（歷史記錄、候選建議）加 `department` 參數並套用於查詢條件——`record_scan()`/`record_confirmation()`/`record_correction()`/`load_corrections()`/`load_confirmed_history()`/`_load_records()`/`_sb_query()` 皆已改動；過渡期預設值 `None`（PLAN 4.8 節）
+- [x] `ai_pipeline.py` 把 `session["department"]` 一路往下傳——`run_pipeline()`/`run_confirmation()`/`run_correction()` 新增 `department` 參數，`app.py` 的 `/api/analyze`、`/api/confirm`、`/api/correct` 已傳入 `session.get("department")`
+- [x] **附帶驗證 PLAN 3.7 節約束**：`_sb_query()` 的 filters 自動跳過 `None` 值欄位，`department=None`（`DeptScope.ALL`／總管視角）天然不會加上任何過濾條件，已用真實 Supabase 連線驗證：寫入 `mf4d` 部門記錄後，用 `mf4d` 查詢能找到、用其他部門查詢查不到、用 `department=None` 查詢能看到全部
+- [ ] `ai_logger.py`（LOG 層）尚未加 `department` 欄位寫入——`ai_logs` 表已有欄位與過濾支援（`AiScanStore.load_logs()`），但 `log_scan()`/`log_confirmation()`/`log_correction()` 尚未實際傳入，非本輪必要項（LOG 層主要用於除錯追蹤，非跨部門資料洩漏的主要風險點），留待後續視需要補上
 
 ## 階段 7：後端 — `app.py` 權限框架（對應計畫第 4 節）— 【已完成並實測，第二十一輪】
 

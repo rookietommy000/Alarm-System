@@ -90,6 +90,7 @@ def record_scan(
     confirmed_by: Optional[str] = None,
     original_model: Optional[str] = None,
     scan_id: Optional[str] = None,
+    department: Optional[str] = None,
 ) -> dict:
     """
     [MEM-001] 記錄一次拍照辨識結果。
@@ -104,6 +105,8 @@ def record_scan(
       confirmed_by    操作者身分（GMP 稽核用，source!=ai 時必填）
       original_model  AI 原始辨識值（source=confirmed/corrected 時帶入，供錯誤率計算）
       scan_id         外部傳入 scan_id（省略時自動產生）
+      department      寫入的部門（PLAN 3.5/3.6 節：過渡期暫留 None，
+                       app.py 全面改必填時同一次 commit 移除此預設值）
 
     回傳寫入的紀錄 dict（含 scan_id，供後續確認/修正帶回）。
     """
@@ -149,9 +152,10 @@ def record_scan(
         "confirmed_by":   confirmed_by,
         "scanned_at":     now.isoformat(),
         "expires_at":     (now + timedelta(days=retention_days)).isoformat(),
+        "department":     department,
     }
 
-    _append_record("history", model or "_unknown", record)
+    _append_record("history", model or "_unknown", record, department=department)
     return record
 
 
@@ -163,6 +167,7 @@ def record_confirmation(
     original_model: Optional[str],
     original_analyzer: Optional[dict],
     confirmed_by: str,
+    department: Optional[str] = None,
 ) -> dict:
     """
     [MEM-001] 操作員確認 AI 結果正確（未修改），補寫一筆 source="confirmed"。
@@ -170,6 +175,7 @@ def record_confirmation(
     scan_id: 原始 AI scan 的 id，確認頁帶回來
     alarms:  [{"code": str, "conf": int | None}, ...]（含 conf，從原始 scan 帶回）
     original_model: AI 原始辨識的機種（供機種層錯誤率計算用）
+    department: 見 record_scan() 的說明（過渡期暫留 None）
     """
     return record_scan(
         model=model,
@@ -181,6 +187,7 @@ def record_confirmation(
         confirmed_by=confirmed_by,
         original_model=original_model,
         scan_id=scan_id,
+        department=department,
     )
 
 
@@ -195,6 +202,7 @@ def record_correction(
     model_conf: Optional[int],
     original_analyzer: Optional[dict] = None,
     confirmed_by: Optional[str] = None,
+    department: Optional[str] = None,
 ) -> dict:
     """
     [MEM-002] 記錄使用者的修正行為。
@@ -208,6 +216,7 @@ def record_correction(
     model_conf:      AI 原始的機種信心度
     original_analyzer: 原判斷的 analyzer 資訊（計算 per-model 錯誤率用）
     confirmed_by:    操作者身分（GMP 稽核用）
+    department:      見 record_scan() 的說明（過渡期暫留 None）
     """
     now = datetime.now(timezone.utc)
     record = {
@@ -222,9 +231,10 @@ def record_correction(
         "model_conf":      model_conf,
         "original_analyzer": original_analyzer,
         "confirmed_by":    confirmed_by,
+        "department":      department,
     }
 
-    _append_record("corrections", corrected_model, record)
+    _append_record("corrections", corrected_model, record, department=department)
 
     # 同時在歷史裡補一筆 corrected 記錄（帶 scan_id 和 original_model 追溯）
     return record_scan(
@@ -237,24 +247,27 @@ def record_correction(
         confirmed_by=confirmed_by,
         original_model=original_model,
         scan_id=scan_id,
+        department=department,
     )
 
 
-def load_corrections(model: str) -> list:
-    """[MEM-002] 讀取某機種的所有修正記錄。"""
-    return _load_records("corrections", model)
+def load_corrections(model: str, department: Optional[str] = None) -> list:
+    """[MEM-002] 讀取某機種的所有修正記錄，限縮在呼叫者的部門範圍內
+    （PLAN 3.5 節：不限縮會讓 A 部門的辨識歷史混進 B 部門候選建議清單）。"""
+    return _load_records("corrections", model, department=department)
 
 
-def load_confirmed_history(model: str) -> list:
+def load_confirmed_history(model: str, department: Optional[str] = None) -> list:
     """
-    [MEM-001] 只回傳人工確認過的歷史（source in confirmed/corrected）。
+    [MEM-001] 只回傳人工確認過的歷史（source in confirmed/corrected），
+    且限縮在呼叫者的部門範圍內（PLAN 3.5 節）。
 
     用於任何「以歷史回饋 AI」的邏輯（錯誤率計算、比對建議…）。
     直接用 _load_records 會把未確認的 AI 猜測一起帶入，讓 AI 拿
     自己的推測當依據造成偏移。需要用確認資料的邏輯一律呼叫這裡。
     """
     return [
-        r for r in _load_records("history", model)
+        r for r in _load_records("history", model, department=department)
         if r.get("source") in ("confirmed", "corrected")
     ]
 
@@ -313,7 +326,7 @@ def _sb_query(table: str, filters: dict) -> list:
         import urllib.request, urllib.parse
         base = os.environ["SUPABASE_URL"].rstrip("/")
         key = os.environ["SUPABASE_KEY"]
-        qs = "&".join(f"{k}=eq.{urllib.parse.quote(str(v))}" for k, v in filters.items())
+        qs = "&".join(f"{k}=eq.{urllib.parse.quote(str(v))}" for k, v in filters.items() if v is not None)
         req = urllib.request.Request(
             f"{base}/rest/v1/{table}?select=*&{qs}&limit=1000",
             headers={"apikey": key, "Authorization": f"Bearer {key}"},
@@ -327,7 +340,7 @@ def _sb_query(table: str, filters: dict) -> list:
 
 # ── 內部工具 ─────────────────────────────────────────────────────────────────
 
-def _append_record(subdir: str, key: str, record: dict):
+def _append_record(subdir: str, key: str, record: dict, department: Optional[str] = None):
     if _use_supabase():
         if subdir == "history":
             _sb_insert("ai_scans", {
@@ -341,6 +354,7 @@ def _append_record(subdir: str, key: str, record: dict):
                 "analyzer":       json.dumps(record.get("analyzer")),
                 "confirmed_by":   record.get("confirmed_by"),
                 "original_model": record.get("original_model"),
+                "department":     department,
             })
         elif subdir == "corrections":
             _sb_insert("ai_corrections", {
@@ -352,6 +366,7 @@ def _append_record(subdir: str, key: str, record: dict):
                 "model_conf":       record.get("model_conf"),
                 "original_analyzer": json.dumps(record.get("original_analyzer")),
                 "confirmed_by":     record.get("confirmed_by"),
+                "department":       department,
             })
         return
 
@@ -365,12 +380,15 @@ def _append_record(subdir: str, key: str, record: dict):
         _write_file_unlocked(path, records)
 
 
-def _load_records(subdir: str, key: str) -> list:
+def _load_records(subdir: str, key: str, department: Optional[str] = None) -> list:
+    """department=None 時不加過濾條件（PLAN 3.7 節：DeptScope.ALL 不得加任何
+    department 相關過濾，含看似無害的 .not.is.null；_sb_query() 的 filters
+    已在 None 值時自動跳過該欄位，天然滿足這個約束）。"""
     if _use_supabase():
         if subdir == "history":
-            return _sb_query("ai_scans", {"model": key})
+            return _sb_query("ai_scans", {"model": key, "department": department})
         elif subdir == "corrections":
-            return _sb_query("ai_corrections", {"corrected_model": key})
+            return _sb_query("ai_corrections", {"corrected_model": key, "department": department})
         return []
 
     safe_key = (_SAFE_KEY_RE.sub("_", key) or "_unknown")[:64]

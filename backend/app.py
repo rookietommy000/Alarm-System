@@ -595,7 +595,8 @@ def create_app() -> Flask:
             abort(400, "image (base64) 為必填")
         try:
             from ai import run_pipeline
-            return jsonify(run_pipeline(image_b64, mime_type, known_model=known_model))
+            return jsonify(run_pipeline(image_b64, mime_type, known_model=known_model,
+                                        department=session.get("department")))
         except ImportError as e:
             abort(503, f"AI 模組未安裝：{e}")
         except KeyError as e:
@@ -632,6 +633,7 @@ def create_app() -> Flask:
                 original_model=body.get("original_model"),
                 original_analyzer=body.get("original_analyzer"),
                 confirmed_by=_confirmed_by(),
+                department=session.get("department"),
             )
             return jsonify(result), 201
         except Exception as e:
@@ -660,6 +662,7 @@ def create_app() -> Flask:
                 model_conf=int(raw_conf) if raw_conf is not None else None,
                 original_analyzer=body.get("original_analyzer"),
                 confirmed_by=_confirmed_by(),
+                department=session.get("department"),
             )
             return jsonify(result), 201
         except Exception as e:

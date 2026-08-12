@@ -1516,3 +1516,17 @@ def test_resolve_target_department_does_not_read_request_args():
 6. `cleanup_expired(days=90)` 驗證不會誤刪 90 天內的記錄；`POST /api/admin/cleanup-expired` 端點回應新增 `login_attempts_removed` 欄位
 
 **影響範圍**：`backend/storage.py` 新增 `LoginAttemptStore` 類別與 `login_attempt_store` singleton；`backend/app.py` 新增 `_client_ip()`/`_check_login_throttle()`/`_remaining_delay()`，`_do_login()` 內建三段式記錄邏輯，`login_submit()`/`admin_login_submit()` 加上節流檢查，`cleanup_expired()` 端點回應格式擴充；驗證過程建立的臨時部門 `zztest7` 與測試期間產生的 `login_attempts` 記錄皆已清除，正式資料未受影響；57 個既有 pytest 全數通過（本機/測試模式因 `_use_supabase()` 為 False，節流邏輯完全不啟用，符合單租戶測試環境的定位）。
+
+---
+
+第二十三輪審查（階段 6：`ai_memory.py`/`ai_pipeline.py` 部門隔離實作與驗證）：
+
+**背景**：依 PLAN 3.5 節，將 `department` 參數往下傳進 AI 記憶層（`ai_memory.py`）與管線層（`ai_pipeline.py`），確保拍照歷史/候選建議查詢限縮在呼叫者的部門範圍內，避免 A 部門的辨識歷史混進 B 部門候選建議清單（同時是正確性問題與資料洩漏問題）。
+
+**🟢 完整改動並用真實 Supabase 連線驗證通過**
+1. `ai_memory.py`：`record_scan()`/`record_confirmation()`/`record_correction()` 新增 `department` 參數（過渡期預設 `None`，符合 PLAN 4.8 節）並寫入 `ai_scans.department`/`ai_corrections.department`；`load_corrections()`/`load_confirmed_history()`/`_load_records()` 新增 `department` 參數，套用查詢過濾
+2. `_sb_query()` 的 filters 改為自動跳過值為 `None` 的欄位（`{k: v for ... if v is not None}` 邏輯），這個小改動同時滿足了 PLAN 3.7 節「`department=None`（`DeptScope.ALL`）時不得加任何 `department` 相關過濾條件」的約束——不需要另外寫 if/else 分支，`None` 天然不會產生 `department=eq.` 這段查詢字串
+3. `ai_pipeline.py`：`run_pipeline()`/`run_confirmation()`/`run_correction()` 新增 `department` 參數並一路傳給 `ai_memory` 的對應函式；`app.py` 的 `/api/analyze`、`/api/confirm`、`/api/correct` 三個端點改為傳入 `session.get("department")`
+4. **實測驗證**：用真實 Supabase 連線寫入一筆帶 `department='mf4d'` 的 scan 記錄，確認用 `department='mf4d'` 查詢能找到、用其他部門查詢查不到、用 `department=None` 查詢（模擬總管視角）能看到全部——三種情境皆符合 PLAN 3.5/3.7 節的設計要求
+
+**影響範圍**：`backend/ai/ai_memory.py`、`backend/ai/ai_pipeline.py`、`backend/app.py`（三個 AI 相關端點）；驗證過程建立的測試記錄（`ZZTEST-MODEL` scan）已清除；57 個既有 pytest 全數通過；`ai_logger.py`（LOG 層）目前未加 `department` 欄位——`ai_logs` 表雖已在階段 1 加上 `department` 欄位並有 `AiScanStore.load_logs()` 支援過濾，但 `log_scan()`/`log_confirmation()`/`log_correction()` 尚未實際寫入這個值，留待需要時再補（不影響本輪 MEM 層的核心隔離目標，LOG 層主要用途是除錯追蹤而非跨部門資料洩漏的主要風險點）。
