@@ -52,13 +52,14 @@
 
 - [x] 確認 `devices` 現行主鍵/唯一約束的實際型態：**已確認為混合型**——主鍵 `id`（獨立代理鍵，如 `M-201`）不動，另有獨立 `UNIQUE(model)` 約束（注意：型號欄位實際叫 `model`，不是 `device_model`，見 PLAN 1.2 節命名決策）需切換為 `(department, model)`
 - [x] 確認 `alarms` 現行主鍵是否確實是 `(device_model, code)`：**已確認**，`alarms_pkey` 就是 `PRIMARY KEY (device_model, code)`，欄位命名與 PLAN 假設一致
-- [ ] **【第十五輪：展開為六步驟，取代原「快照或CSV擇一」】Supabase 遷移前備份**，詳見 PLAN 1.6 節：
+- [ ] **【第十五輪：展開為七步驟，第十七輪再加第7步】Supabase 遷移前備份**，詳見 PLAN 1.6 節：
   - [x] 1. 查清 `alarms`/`devices` 主鍵與約束實際名稱——`alarms_pkey PRIMARY KEY (device_model, code)`、`devices_pkey PRIMARY KEY (id)`、`devices_model_key UNIQUE (model)`（用 `\d alarms`/`\d devices` 實查確認）
   - [x] 2. 撰寫 `rollback_stage3.sql`（DROP COLUMN 新欄位、還原 1.3 節主鍵切換，用上面查到的真實約束名稱），已 commit（`9ade50b`）
-  - [x] 3. `pg_dump -Fc --no-owner --no-privileges` 完整備份，並用 `pg_restore -l` 驗證可讀——已執行，415 TOC entries，`alarms`/`devices`/`feedback`/`ai_scans`/`ai_corrections`/`ai_logs`/`alarm_history`/`alarm_views` 8 張目標表均涵蓋 TABLE+DATA+約束+索引（**此步驟已取代 CSV 匯出，不需另外再做**）。檔案存於 `data/backup/`（已在 `.gitignore` 排除，不進版控）
-  - [x] 4. Supabase Dashboard 確認內建備份/保留天數——**【第十六輪查證】免費方案完全沒有備份功能**（Scheduled backups/Point in Time Restore/Restore to new project 皆需 Pro 方案），兩層安全網的第二層實際只剩 `pg_dump`；不視為阻塞項，但已記錄此落差，見 PLAN 1.6/第十六輪
+  - [x] 3. `pg_dump -Fc --no-owner --no-privileges` 完整備份，並用 `pg_restore -l` 驗證可讀——已執行，415 TOC entries，`alarms`/`devices`/`feedback`/`ai_scans`/`ai_corrections`/`ai_logs`/`alarm_history`/`alarm_views` 8 張目標表均涵蓋 TABLE+DATA+約束+索引（**此步驟已取代 CSV 匯出，不需另外再做**）。檔案存於 `data/backup/`（已在 `.gitignore` 排除，不進版控；**提醒：應再搬到 Supabase 帳號體系以外的地方，如外接硬碟/雲端硬碟，避免只留在本機專案目錄**）
+  - [x] 4. Supabase Dashboard 確認內建備份/保留天數——**【第十六輪查證，第十七輪校正解讀】免費方案沒有備份功能**（Scheduled backups/Point in Time Restore/Restore to new project 皆需 Pro 方案）。**這不是「兩層防護少一層」**——正確理解是：第一層＝交易包裹＋`rollback_stage3.sql`（防遷移失敗，已就緒），第二層＝`pg_dump`（防專案損毀，已就緒且已驗證），Dashboard 備份只是第二層的備援副本；專家確認「夠，可以往下走」，不需升級付費方案，見 PLAN 1.6/第十六~十七輪
   - [ ] 5. 確認 `migrate_add_departments.py`（階段 2）與主鍵/約束切換（階段 3）的 SQL 全部包在 `BEGIN`/`COMMIT` 交易內
   - [ ] 6. 遷移執行後重跑 `00_preflight_check.sql` 驗收
+  - [ ] 7. **【第十七輪新增】階段 2 回填完成、驗證無 NULL 之後，再執行一次 `pg_dump`**（`post_backfill_$(date +%Y%m%d_%H%M).dump`），作為比「遷移前」更近的還原點——回填是階段 1~3 唯一真正寫入資料的動作，`rollback_stage3.sql` 只還原 schema、救不了填錯的部門對應值
 - [x] 執行重複值預檢：`00_preflight_check.sql` 已含此檢查，結果 **0 筆重複**，`alarms`/`devices` 均可安全繼續
 - [x] **【第十一輪額外查明】無外鍵指向 `alarms`/`devices` 舊主鍵**（0 筆），主鍵切換不用擔心連動；基準筆數 `alarms` 1759、`devices` 14、`ai_scans` 5，與既有記錄一致
 - [x] **【第十一輪額外查明】`devices.id` 是否為型號本身**：已確認不是（`id` 與 `model` 完全脫鉤），新機種安全建立不需要額外設計 id 產生規則
