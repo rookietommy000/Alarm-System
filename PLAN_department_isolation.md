@@ -1676,3 +1676,19 @@ mf4d impact counts: {'alarms': 1759, 'ai_scans': 0, 'ai_corrections': 0,
 `alarms: 1759`、`devices: 14` 與正式資料完全吻合。同步在 `tests/test_route_auth_registry.py` 的白名單登記這個新路由（`superadmin` 層級）。
 
 **影響範圍**：`backend/storage.py`（`_paginated_get()` 簽名改為接受欄位列表、`load()`/`save()` 呼叫端更新、新增 `DepartmentStore._count()`/`count_impact()`）；`backend/app.py`（`whoami` 補 `department_name`、新增 `department_impact()` 路由）；`tests/test_route_auth_registry.py`（白名單新增一筆）；59 個既有 pytest 全數通過；三項修正皆用真實 Supabase 連線驗證（分頁去重、`whoami` 邏輯沿用既有快取未單獨測試但邏輯簡單、`count_impact()` 數字與正式資料吻合）。🟡6-10（`admin_logout` 未清 session、超管路徑未驗證部門存在性、`limit=5000` 統計扭曲、`/api/server-url` 公開、11 處異常吞噬）仍是待辦，尚未處理。
+
+---
+
+第二十九輪審查（外部專家第三輪審查：`_count()` 解析失敗時回 0 是危險的防禦性寫法，審查結束）：
+
+**背景**：v3 審查包送出後，專家確認第二十八輪的排序鍵修正、`whoami`、`/impact` 端點三項都正確，只指出 `DepartmentStore._count()` 內部一處防禦性寫法問題，之後明確表示「審查到此結束」，三輪下來問題級距從「三個 🔴」收斂到「一個 ⚪」，判斷可以開始進入部署階段。
+
+**⚪ `_count()` 解析失敗時回 0，在刪除確認畫面上比拋錯更危險（已修正）**
+
+原本的實作在兩種「拿不到筆數」的情況（`Content-Range` header 缺 `/`、或 `/` 後面的值不是數字）都 `return 0`，而 `_count()` 唯一的呼叫端 `count_impact()` 是 `/api/admin/departments/<id>/impact` 端點的核心邏輯，用途正是「刪除部門前顯示將刪除幾筆資料」。若查詢筆數這一步本身失敗卻回傳 0，畫面會顯示「將刪除 0 筆警報」，操作者會安心按下確認鍵，實際上資料完好無缺地留著、或者更糟的情況是解析邏輯本身有 bug 卻被 0 這個「看起來正常」的值掩蓋。這與這批程式碼先前抓到的另外幾個「安靜地錯」（登入節流鎖死、`--create-missing-devices` 失效、`save()` 排序鍵不唯一）是同一個模式：拿不到正確答案時，回傳一個表面正常的值，而不是讓錯誤發出聲音。
+
+修正：兩種解析失敗的情況都改成 `raise RuntimeError(...)`，不再 fallback 回 0。`count_impact()` 不攔截這個例外，讓它自然往上傳到 Flask 的預設錯誤處理變成 500——前端（尚未實作）屆時應該在收到非 200 回應時顯示「無法取得影響範圍，請重試」並停用刪除按鈕，而不是讓刪除操作在看不到真實影響範圍的情況下被允許執行。零列的正常情況（`Content-Range: */0`）不受影響，`"/" in content_range` 的判斷本身涵蓋得到這個格式。**用真實 Supabase 連線驗證**：正常路徑 `count_impact("mf4d")` 仍正確回傳 `{'alarms': 1759, ..., 'devices': 14}`；額外驗證零列的表（`ai_scans`，`Content-Range: */0`）能正確解析成 `0` 而不是被誤判成異常拋出。
+
+**三輪外部審查小結**：第一輪三個 🔴（會直接讓功能爆掉的問題：機種 id 跨部門衝突、登入節流可被繞過、`save()` 完全沒分頁）、第二輪一個 🔴（前一輪修了一半：分頁迴圈補上但排序鍵不唯一）、第三輪一個 ⚪（防禦性寫法的價值判斷：拿不到答案時該拋錯還是給預設值）。問題嚴重度逐輪收斂，跟先前 27 輪設計審查的收尾模式一致，是可以停止審查、進入部署階段的訊號。專家並確認 `js/api.js`、`sw.js` 不依賴這批端點，可以與部署階段平行進行。
+
+**影響範圍**：`backend/storage.py` 的 `DepartmentStore._count()`；59 個既有 pytest 全數通過；用真實 Supabase 連線驗證正常路徑與零列路徑皆正確。這是「核心後端程式碼交付外部審查」這條支線的最後一輪，接下來進入部署前置作業（`department` 參數改必填 → 部署 `storage.py`/`app.py` → `sentinel_pack` 驗證），與前端（等待使用者 design 稿轉換）可平行進行。

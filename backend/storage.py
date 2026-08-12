@@ -326,11 +326,17 @@ class DepartmentStore:
         )
         with urllib.request.urlopen(req) as r:
             content_range = r.headers.get("Content-Range", "")
-            # 格式："0-0/N"
-            if "/" in content_range:
-                total = content_range.rsplit("/", 1)[-1]
-                return int(total) if total.isdigit() else 0
-            return 0
+            # 格式："0-0/N"（零列時是 "*/0"，"/" in 判斷涵蓋得到）。
+            # 拿不到筆數時必須拋出而不是回 0——這支方法唯一的呼叫端是刪除前
+            # 確認畫面（外部審查發現：解析失敗回 0 會讓「將刪除 0 筆」這種
+            # 看起來安全的訊息顯示出來，實際上資料還在，使用者會放心按下
+            # 刪除鍵。拿不到影響範圍就不該讓人刪，寧可讓端點回 500。
+            if "/" not in content_range:
+                raise RuntimeError(f"{table} 筆數查詢未回傳 Content-Range")
+            total = content_range.rsplit("/", 1)[-1]
+            if not total.isdigit():
+                raise RuntimeError(f"{table} 筆數格式異常：{content_range}")
+            return int(total)
 
     _PUBLIC_FIELDS = "id,name,active,hidden,purgeable,session_version,created_at"
 
