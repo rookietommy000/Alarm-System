@@ -240,14 +240,23 @@
       el.classList.add('selected');
     }
 
+    // 事件委派：綁在容器上、不逐一綁在動態按鈕上。
+    // 避免按鈕在 Bootstrap modal 淡入動畫／focus trap 初始化期間才被插入時，
+    // 各自綁定的 click listener 可能落在動畫尚未完成定位的座標上而點擊不到。
+    deptList.addEventListener('click', (e) => {
+      const btn = e.target.closest('.dept-option');
+      if (!btn) return;
+      selectDept(btn.dataset.deptCode, btn);
+    });
+
     fetch('/api/departments/public').then(r => r.ok ? r.json() : []).then(depts => {
       deptList.innerHTML = '';
       depts.forEach((d, i) => {
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'dept-option';
+        btn.dataset.deptCode = d.id;
         btn.innerHTML = `<span>${d.name}</span><span class="code">${d.id}</span>`;
-        btn.addEventListener('click', () => selectDept(d.id, btn));
         deptList.appendChild(btn);
         if (i === 0) selectDept(d.id, btn);
       });
@@ -260,13 +269,13 @@
       const sysBtn = document.createElement('button');
       sysBtn.type = 'button';
       sysBtn.className = 'dept-option system-option';
+      sysBtn.dataset.deptCode = '__super__';
       sysBtn.innerHTML = `
         <span class="name-group">
           <span>系統管理員</span>
           <span class="hint">跨部門，不屬於任何部門</span>
         </span>
         <span class="code">SYSTEM</span>`;
-      sysBtn.addEventListener('click', () => selectDept('__super__', sysBtn));
       deptList.appendChild(sysBtn);
 
       if (!depts.length) selectDept('__super__', sysBtn);

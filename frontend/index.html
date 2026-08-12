@@ -1121,8 +1121,8 @@
       },
       mounted() {
         AlarmApi.whoami().then(w => { this.whoami = w; });
-        fetch('/api/devices').then(r => r.json()).then(d => { this.devices = d; });
-        fetch('/api/feedback/stats').then(r => r.json()).then(stats => {
+        AlarmApi.get('/api/devices').then(r => r.json()).then(d => { this.devices = d; });
+        AlarmApi.get('/api/feedback/stats').then(r => r.json()).then(stats => {
           this.feedbackStats = Object.fromEntries(stats.map(s => [s.device_model + '|' + s.code, s]));
         }).catch(() => {});
         this.refreshViewStats();
@@ -1136,7 +1136,7 @@
       methods: {
         async refreshViewStats() {
           try {
-            const r = await fetch('/api/view/stats');
+            const r = await AlarmApi.get('/api/view/stats');
             if (!r.ok) return;
             const stats = await r.json();
             const top = stats.slice(0, 10);
@@ -1148,11 +1148,7 @@
           this.feedbackSent = false;
           this.showOldSolution = false;
           try {
-            await fetch('/api/view', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ code: a.code, device_model: a.device_model }),
-            });
+            await AlarmApi.post('/api/view', { code: a.code, device_model: a.device_model });
             this.refreshViewStats();
           } catch {}
         },
@@ -1178,11 +1174,7 @@
           return pct >= 0.7 ? 'fb-front-high' : pct >= 0.4 ? 'fb-front-mid' : 'fb-front-low';
         },
         async submitFeedback(result) {
-          await fetch('/api/feedback', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ code: this.selected.code, device_model: this.selected.device_model, result }),
-          });
+          await AlarmApi.post('/api/feedback', { code: this.selected.code, device_model: this.selected.device_model, result });
           this.feedbackSent = true;
           setTimeout(() => { this.feedbackSent = false; }, 2000);
         },
@@ -1232,8 +1224,7 @@
           if (this.q) p.set('q', this.q);
           if (this.filterDevice) p.set('device', this.filterDevice);
           if (this.severity) p.set('severity', this.severity);
-          const r = await fetch('/api/alarms?' + p.toString());
-          if (r.status === 401) { location.href = '/login'; return; }
+          const r = await AlarmApi.get('/api/alarms?' + p.toString());
           this.items = await r.json();
           this.loading = false;
         },
@@ -1311,7 +1302,7 @@
 
           // 桌面開發模式：不送 Gemini，直接從 DB 抓前幾筆代碼當假資料
           const mockApiResult = async () => {
-            const res = await fetch(`/api/alarms?device=${encodeURIComponent(this.selectedCorrectModel)}`);
+            const res = await AlarmApi.get(`/api/alarms?device=${encodeURIComponent(this.selectedCorrectModel)}`);
             if (!res.ok) return null;
             const all = await res.json();
             const sample = all.slice(0, 3);
@@ -1330,14 +1321,10 @@
           const apiPromise = this.isDesktopDev
             ? mockApiResult()
             : (this.pendingImageB64
-                ? fetch('/api/analyze', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      image: this.pendingImageB64,
-                      mime_type: this.pendingMimeType,
-                      model: this.selectedCorrectModel,
-                    }),
+                ? AlarmApi.post('/api/analyze', {
+                    image: this.pendingImageB64,
+                    mime_type: this.pendingMimeType,
+                    model: this.selectedCorrectModel,
                   }).then(r => r.json()).catch(() => null)
                 : Promise.resolve(null));
 
@@ -1417,14 +1404,10 @@
         async doConfirmSingle(alarm) {
           const { scan_id, model, alarms, modelConf, original_model, original_analyzer } = this.aiResult;
           if (scan_id) {
-            fetch('/api/confirm', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                scan_id, model,
-                alarms: alarms.map(a => ({ code: a.code, conf: a.conf ?? null })),
-                model_conf: modelConf, original_model, original_analyzer,
-              }),
+            AlarmApi.post('/api/confirm', {
+              scan_id, model,
+              alarms: alarms.map(a => ({ code: a.code, conf: a.conf ?? null })),
+              model_conf: modelConf, original_model, original_analyzer,
             }).catch(() => {});
           }
           await this.lookupAndShowAlarms(model, [alarm]);
@@ -1434,17 +1417,13 @@
         async doConfirm() {
           const { scan_id, model, alarms, modelConf, original_model, original_analyzer } = this.aiResult;
           if (scan_id) {
-            await fetch('/api/confirm', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                scan_id,
-                model,
-                alarms: alarms.map(a => ({ code: a.code, conf: a.conf ?? null })),
-                model_conf: modelConf,
-                original_model,
-                original_analyzer,
-              }),
+            await AlarmApi.post('/api/confirm', {
+              scan_id,
+              model,
+              alarms: alarms.map(a => ({ code: a.code, conf: a.conf ?? null })),
+              model_conf: modelConf,
+              original_model,
+              original_analyzer,
             }).catch(() => {});
           }
           await this.lookupAndShowAlarms(model, alarms);
@@ -1457,18 +1436,14 @@
           if (!corrected_model) return;
 
           if (scan_id) {
-            await fetch('/api/correct', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                scan_id,
-                original_model,
-                corrected_model,
-                original_codes: alarms.map(a => ({ code: a.code, conf: a.conf ?? null })),
-                corrected_codes: alarms.map(a => ({ code: a.code, conf: a.conf ?? null })),
-                model_conf: modelConf,
-                original_analyzer,
-              }),
+            await AlarmApi.post('/api/correct', {
+              scan_id,
+              original_model,
+              corrected_model,
+              original_codes: alarms.map(a => ({ code: a.code, conf: a.conf ?? null })),
+              corrected_codes: alarms.map(a => ({ code: a.code, conf: a.conf ?? null })),
+              model_conf: modelConf,
+              original_analyzer,
             }).catch(() => {});
           }
           await this.lookupAndShowAlarms(corrected_model, alarms);
@@ -1476,17 +1451,13 @@
 
         // 靜默送 confirm（高信心度自動通過時）
         silentConfirm(scan_id, model, alarms, modelConf, original_model, original_analyzer) {
-          fetch('/api/confirm', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              scan_id,
-              model,
-              alarms: alarms.map(a => ({ code: a.code, conf: a.conf ?? null })),
-              model_conf: modelConf,
-              original_model,
-              original_analyzer,
-            }),
+          AlarmApi.post('/api/confirm', {
+            scan_id,
+            model,
+            alarms: alarms.map(a => ({ code: a.code, conf: a.conf ?? null })),
+            model_conf: modelConf,
+            original_model,
+            original_analyzer,
           }).catch(() => {});
         },
 
@@ -1500,7 +1471,7 @@
 
           let allAlarms = [];
           try {
-            const res = await fetch(`/api/alarms?device=${encodeURIComponent(model)}`);
+            const res = await AlarmApi.get(`/api/alarms?device=${encodeURIComponent(model)}`);
             if (res.ok) allAlarms = await res.json();
           } catch {}
 
