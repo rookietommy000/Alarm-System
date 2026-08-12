@@ -104,7 +104,8 @@
 ## 階段 5：後端 — `storage.py`（對應計畫第 3 節）
 
 - [ ] 修正 `SupabaseStore.save()` 刪除掃描地雷：`devices_store` 加 `department=eq.<dept>` 過濾
-- [ ] 新增 `upsert_one()`／`delete_one()`，**明確指定 `on_conflict`**（`alarms`: `department,device_model,code`；`devices`: `department,device_model`），`alarms`/`devices` 單筆 CRUD 改用這兩個方法
+- [ ] 新增 `upsert_one()`／`delete_one()`，**明確指定 `on_conflict`**（`alarms`: `department,device_model,code`；`devices`: `department,model`——注意 `devices` 表欄位實際叫 `model`，不是 `device_model`），`alarms`/`devices` 單筆 CRUD 改用這兩個方法
+- [ ] **【第十九輪定案】`_row_to_device()` 採永久雙 key**（不是過渡期）：回傳同時含 `model` 與 `device_model` 兩個 key 指向同一個值；前端 76 處（`index.html` 40、`dashboard.html` 36）維持讀 `model` 不動；寫入路徑（`POST`/`PUT /api/devices`）兩個 key 都要接受並統一轉成 `model` 寫入 DB；新程式碼（`js/api.js`、部門切換器等）一律用 `device_model`；轉換邏輯只能存在於 `_row_to_device()` 這一處，不得讓 `row["model"]` 漏到 `app.py`（見 PLAN 3.1.1 節）
 - [ ] `JsonStore.load()`/`save()` 加 `department=None` 參數（忽略，維持單租戶相容，僅服務 pytest）
 - [ ] 另建獨立 Supabase 開發專案（schema 相同），本機開發連線資訊放 `.env.local` 並加入 `.gitignore`——**不要**讓 `JsonStore` 支援多部門過濾
 - [ ] 新增 `DepartmentStore` 類別：`list()`（含 `hidden`/`purgeable`，絕不回傳密碼雜湊）、`get_by_id()`（含 `session_version`/`active`）、`check_login()`、`create()`、`update_name()`、`update_password()`（連帶 `session_version += 1`）、`set_active()`、`purge(dept_id, confirm_id)`
@@ -272,5 +273,8 @@
 - **【第十二輪新增】部署平台由 Railway 改回 Render**（成本考量；`git log` 顯示這本來就是專案原本的臨時方案，這次是轉正）——全文所有 Railway 字樣已置換為 Render，階段 -0.5 執行時需另外建立 Render 的部署設定（`render.yaml` 或後台手動設定），並確認是否要用免費層＋防休眠 cron（見 PLAN 第十二輪附錄）
 - **【第十三輪新增】`backend/requirements.txt` 的 `google-generativeai` 已改為 `google-genai`**（程式碼實際用新版 SDK 語法，本機 `.venv` 因新舊套件並存長期掩蓋此落差，Render 乾淨環境部署後才首次曝光）——修正後尚未部署驗證，見階段 -0.5 補充項
 - **【第十四輪定案】部門正式名稱**：`id="mf4d"`、`name="製造四部包裝組"`——待確認事項已全部解決，可正式進入階段 0/2
-- **【第十五輪定案】遷移前備份策略確定為六步驟流程**（查主鍵真名 → 寫 `rollback_stage3.sql` → `pg_dump -Fc` 並驗證可還原 → Dashboard 備份確認 → 遷移腳本全包 `BEGIN`/`COMMIT` → 事後重跑 `00_preflight_check.sql`）——取代原本「快照或CSV擇一」的簡化版本，CSV 匯出已被 `pg_dump` 完全取代不需另做；兩層安全網（`rollback_stage3.sql`+交易包裹 vs `pg_dump`+Dashboard）分工不同但六步驟都要做完，非可略過項目（見 PLAN 1.6 節、階段 0）
-- 完整審查對照見 `PLAN_department_isolation.md` 附錄（共十五輪審查）
+- **【第十五輪定案】遷移前備份策略確定為六步驟流程**（查主鍵真名 → 寫 `rollback_stage3.sql` → `pg_dump -Fc` 並驗證可還原 → Dashboard 備份確認 → 遷移腳本全包 `BEGIN`/`COMMIT` → 事後重跑 `00_preflight_check.sql`）——取代原本「快照或CSV擇一」的簡化版本，CSV 匯出已被 `pg_dump` 完全取代不需另做（見 PLAN 1.6 節、階段 0）
+- **【第十六~十七輪校正】免費方案無 Dashboard 備份，但專家確認現有防護足夠**——正確分層是「交易包裹+`rollback_stage3.sql`」（防遷移失敗）vs「`pg_dump`」（防專案損毀，Dashboard 備份只是這層的備援副本），階段1-3幾乎無資料遺失風險，不需升級付費方案；新增備份步驟7：階段2回填後再做一次 `pg_dump`（見 PLAN 1.6 節）
+- **【第十八輪新增】本機與 Render 皆為 Python 3.9，`hashlib` 無 `scrypt` 支援**——`generate_password_hash()` 一律要明確指定 `method="pbkdf2:sha256"`，不能用預設演算法，否則 `AttributeError`；`backend/migrations/001~003_*.sql`、`backend/gen_department_hashes.py` 已撰寫完成，001 已執行並驗證通過（9張表皆有 `department` 欄位，`departments`/`login_attempts` 結構與外鍵正確）（見 PLAN 第十八輪）
+- **【第十九輪定案，取代第十一輪過渡期構想】`_row_to_device()` 改為永久雙 key，前端 76 處不動**——`devices.line` 排除邏輯經專家確認合理（業務語意問題資料推不出答案，需問系統擁有者），並補上正式定義句；`_row_to_device()` 同時回傳 `model`/`device_model` 兩個 key，理由是階段13維護窗口已滿、混用錯誤是沉默的、收斂前端收益為零——三者皆非本次必要（見 PLAN 3.1.1、4.4 節）
+- 完整審查對照見 `PLAN_department_isolation.md` 附錄（共十九輪審查）

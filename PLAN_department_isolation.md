@@ -479,26 +479,44 @@ Prefer: resolution=merge-duplicates
 
 若改走直連 Postgres 下原生 SQL，一樣寫死 `ON CONFLICT (department, device_model, code)`（`alarms`）／`ON CONFLICT (department, model)`（`devices`）欄位組合，不使用 `ON CONFLICT ON CONSTRAINT <名稱>`（約束名稱會在主鍵切換時改變）。
 
-#### 3.1.1 【第十一輪新增】`devices` 讀取正規化：`_row_to_device()`，命名不一致的唯一轉換點
+#### 3.1.1 【第十九輪定案，取代第十一輪的過渡期構想】`devices` 讀取正規化：`_row_to_device()` 永久雙 key，不收斂前端
 
-**問題**：1.2 節決定 DB 欄位維持 `model`（不改資料庫），但 API／路由層對外一律使用 `device_model`（見 4.4 節路由設計）。若沒有一個集中的轉換點，`model` 這個名字會散落到 `app.py`、前端、`sentinel_pack` 驗證腳本等十幾個地方——一旦散布開，日後想統一命名（見 1.2 節「長期清理」選項）就會變成到處要改的麻煩事，而不是改一行。
+**問題**：1.2 節決定 DB 欄位維持 `model`（不改資料庫），但 API／路由層對外一律使用 `device_model`（見 4.4 節路由設計）。若沒有一個集中的轉換點，`model` 這個名字會散落到 `app.py`、前端、`sentinel_pack` 驗證腳本等十幾個地方——一旦散布開，日後想統一命名就會變成到處要改的麻煩事，而不是改一行。
 
-**修正**：整個系統只有 `storage.py` 裡的一個函式知道 `devices` 表的欄位實際叫 `model`：
+**【第十九輪實測與定案】** 第十一輪原本把「兩個 key 都給」寫成過渡期措施，暗示之後要收斂成只給 `device_model`。第十九輪實際掃描前端後推翻這個預設：`frontend/index.html` 40 處、`dashboard.html` 36 處讀取 `model`／`device_model` 相關字串，且 `.model`（機種物件的欄位）與 `.device_model`（警報物件的欄位）混雜出現，無法整批替換，必須逐處判斷物件類型。**改為永久雙 key 設計，不是過渡期，前端 76 處全部不動**：
+
 ```python
 def _row_to_device(row: dict) -> dict:
-    """DB 讀出來的 devices 列一律經過這裡，對外統一用 device_model 這個 key。
-    這是系統裡唯一知道 devices 表欄位實際叫 model 的地方（見 PLAN 1.2 節命名決策）。"""
+    """devices 表的欄位叫 model，但 API 對外同時提供兩個 key。
+
+    這不是過渡措施，是最終設計：
+    - `model`        既有前端使用中（index.html 40 處、dashboard.html 36 處）
+    - `device_model` 與 alarms 表的欄位名一致，新程式碼一律使用這個
+
+    兩者永遠指向同一個值，在此處統一產生，不會有不同步的可能。
+    """
+    model = row["model"]
     return {
-        "device_model": row["model"],
         "id":           row["id"],
+        "model":        model,          # 既有前端讀這個
+        "device_model": model,          # 新程式碼讀這個
         "category":     row["category"],
         "line":         row["line"],
         "department":   row["department"],
     }
 ```
-寫入方向同理：`devices_store` 的 create/update 方法接收 `device_model` 參數，內部組 SQL/PostgREST payload 時才轉成 `model` 欄位名，呼叫端全程看不到 `model`。
 
-**【重要，會改變現有行為，需要在階段 5 動手前確認】** 目前 `app.py` 的機種相關端點（`POST /api/devices` 等）是直接用 `body.get("model")` / 回應裡放 `"model": model` 這個 key（現有程式碼已如此，非本次改動引入），也就是說**現有 API 回應目前用的就是 `model`，不是 `device_model`**。導入 `_row_to_device()` 正規化後，`devices` 相關端點的回應格式會從 `model` 變成 `device_model`——這是一個**會影響現有前端的行為變更**，不是無痛的內部重構。階段 5 實作前，需要先確認目前 `frontend/index.html`/`dashboard.html` 有多少地方讀取 `model` 這個 key，一併同步修改，或在轉換函式裡過渡期兩個 key 都給（`{"device_model": ..., "model": ...}`）避免一次性破壞前端。
+**為什麼不收斂前端（三個理由，第十九輪定案依據）**：
+1. **改動時機最不該加碼**——這 76 處若要改會落在階段 13（前端改動），該階段已經很滿（`api.js`、401 全域攔截、429 倒數、部門切換器、部門管理頁籤、`sw.js` 三件事）。在動安全邊界的同一個維護窗口裡再塞一個需要逐處分辨物件類型的改動，是不必要放大風險
+2. **錯誤是沉默的**——`.model`／`.device_model` 混在同一批結果裡，判斷錯了的症狀是畫面顯示空白或 `undefined`，不會拋錯、不會被測試抓到、不會出現在 log 裡。76 次逐一判斷，錯一次就是一個難以發現的 bug
+3. **收益是零**——這個改動不修 bug、不加功能、不改善安全性，純粹是讓兩個名字看起來一致。與先前「不改 `devices.model` 資料庫欄位名」（見 1.2 節）是同一條原則的延伸：不為了外觀一致，在安全邊界工程的同一個窗口裡引入零收益、有風險的改動
+
+**三條配套規則（第十九輪新增，實作階段 5 必須遵守）**：
+1. **轉換只能在 `_row_to_device()` 這一個函式發生**——`app.py`、路由層、前端、驗證腳本全部只看得到轉換後的結果，只有 `storage.py` 這一處知道實際欄位叫 `model`。若讓 `row["model"]` 直接漏到 `app.py`，命名不一致會擴散到十幾個地方，之後真的收不回來
+2. **寫入路徑對稱處理**——`POST`/`PUT /api/devices` 的 body 兩個 key（`model`、`device_model`）都要接受，寫入時一律轉成 `model` 欄位名寫入 DB，避免「讀得到但寫不進去」這種難查的不對稱
+3. **新程式碼一律用 `device_model`**——接下來要寫的部門切換器、部門管理頁籤、`frontend/js/api.js`，全部採用 `device_model`。既有 76 處維持不動，讓不一致的範圍隨新舊程式碼交替自然縮小，不必靠一次性大改
+
+**未來若真的要收斂（非本次範圍，記錄供日後參考）**：需單獨排一次、不與任何其他改動綁在一起，時機是多部門完全穩定運作之後、且前端已抽出 `js/api.js`（屆時部分讀取可能已走統一介面，實際要改的處數會少於 76）。屆時收斂動作的後端部分就是把 `_row_to_device()` 裡 `"model": model` 那一行刪掉——這正是「轉換只能在一個函式發生」這條規則的價值所在。
 
 #### 3.2 【第四輪審查修正】`JsonStore` 維持單租戶，開發環境另闢，不讓 JsonStore 承擔多部門角色
 
@@ -626,6 +644,8 @@ GET/PUT/DELETE /api/devices/<department>/<device_model>
 POST   /api/alarms/<department>
 GET/PUT/DELETE /api/alarms/<department>/<device_model>/<code>
 ```
+**【第十九輪補充】路由參數名 `<device_model>` 維持不變，即使 `devices.model` 才是 DB 實際欄位名**——這個參數名是 API 層的邏輯命名，本來就不要求跟 DB 欄位名一致（`alarms` 表本身的欄位就叫 `device_model`），與 3.1.1 節的 `_row_to_device()` 雙 key 決策是同一條原則：只在 `storage.py` 一處做轉換，路由/前端層維持既有命名不變。8.1 節的 `ROUTE_AUTH_REGISTRY` 白名單同樣不用因此調整（路由字串本身沒變）。
+
 這樣 `resolve_target_department()` 的 `requested` 永遠來自路徑參數，沒有第二個來源，也就沒有「該從哪裡填」的問題。`?dept=` 從此純粹是讀取過濾的概念，跟寫入完全無關——三個函式的職責因此徹底分開：
 
 | 函式 | 讀哪裡 | 用在哪 |
@@ -1392,3 +1412,44 @@ def test_resolve_target_department_does_not_read_request_args():
 6. 415 個 TOC 項目、8 張表資料/約束/索引齊全的驗證方式本身正確，多數人執行 `pg_dump` 後就不再做 `pg_restore -l` 查驗，這次的做法值得保持
 
 **影響範圍**：1.6 節新增步驟 7（回填後二次備份），需在實際執行 `migrate_add_departments.py` 遷移腳本時排進流程；`.env.example`／README 或個人筆記層級（非本計畫範圍）應提醒把 `pg_dump` 檔案定期搬出本機/專案目錄。
+
+---
+
+第十八輪審查（階段 1/2/3 遷移腳本實作，`werkzeug` scrypt 環境限制）：
+
+**背景**：備份策略定案後，開始撰寫階段 1（加欄位/建表）、階段 2（遷移腳本）、階段 3（約束切換）的實際 SQL，過程中發現一個環境限制與一個前端影響範圍比預期大的問題。
+
+**🟡 環境限制：本機與 Render 皆為 Python 3.9，`hashlib` 無 `scrypt` 支援（已修正）**
+1. **`werkzeug.security.generate_password_hash()` 預設演算法是 `scrypt`**，但呼叫時直接噴 `AttributeError: module 'hashlib' has no attribute 'scrypt'`——查證 `.venv/bin/python3 --version` 與系統 `python3 --version` 皆為 3.9.6，這個 Python 版本的 `hashlib` 缺少 OpenSSL 的 scrypt 編譯支援，不是套件版本問題。由於本機與 Render 部署用的是同一份 `requirements.txt`／同一套 Python 版本策略，這個限制會持續存在，不只是本機一次性問題 → 修正為所有 `generate_password_hash()` 呼叫**明確指定 `method="pbkdf2:sha256"`**，不依賴預設值。已在新增的 `backend/gen_department_hashes.py` 套用，日後 `DepartmentStore.create()`／`update_password()`（階段 5 待實作）與任何呼叫 `generate_password_hash`/`check_password_hash` 的地方都要遵守同一約定，否則雜湊格式不一致會導致部分部門密碼比對失敗
+
+**🟢 階段 1/2/3 遷移腳本已撰寫完成（待使用者確認後執行）**
+2. 新增 `backend/migrations/001_add_department_columns.sql`——建立 `departments`／`login_attempts` 表，`devices`/`alarms`/其餘 6 張表加 `department` 欄位＋索引，全部 nullable，包在 `BEGIN`/`COMMIT`
+3. 新增 `backend/migrations/002_migrate_add_departments.sql`——建立第一筆部門（`id=mf4d`、`name=製造四部包裝組`，密碼雜湊沿用現有 `.env` 的 `LOGIN_PASSWORD`/`ADMIN_PASSWORD`），回填 `devices`/`alarms`/`feedback`/`alarm_views` 的 `department`，含驗收用的 NULL 計數查詢
+4. 新增 `backend/migrations/003_switch_constraints.sql`——收緊 `devices`/`alarms` 的 `department` 為 `NOT NULL`，切換 `devices_model_key` → `devices_dept_model_key unique (department, model)`、`alarms_pkey` → `primary key (department, device_model, code)`，約束命名與 `rollback_stage3.sql` 保持一致（已交叉核對）
+5. 新增 `backend/gen_department_hashes.py`——讀取現有 `.env` 密碼，用 `pbkdf2:sha256` 產生雜湊供貼入 002 腳本，僅印在終端機、不寫入任何檔案
+6. `backend/requirements.txt` 補上 `werkzeug>=3.0`（PLAN 第 2 節原已規劃，此輪正式加入依賴清單）
+
+**影響範圍**：三支遷移腳本尚未實際對正式庫執行，需使用者過目 SQL 內容後才動手；`gen_department_hashes.py` 產出的雜湊已手動貼入 002 腳本的插入語句，往後若密碼變更需重新產生並更新腳本（一次性遷移腳本，非長期運行程式碼）。
+
+**【執行更新】001 已於使用者確認後執行完成**：`BEGIN`~`COMMIT` 全部指令成功，驗證 9 張表皆已取得 `department` 欄位、`departments`／`login_attempts` 兩張新表結構與外鍵（`alarms_department_fkey`、`devices_department_fkey` 指向 `departments(id)`）皆符合預期。002、003 尚未執行。
+
+---
+
+第十九輪審查（`_row_to_device()` 從「過渡期」改為「永久雙 key」定案，`devices.line` 排除邏輯確認）：
+
+**背景**：使用者將第十八輪整理的兩個問題（`devices.line` 排除邏輯是否嚴謹、`_row_to_device()` 前端影響範圍的處理方式）連同實測數據（前端 76 處引用、`.model`/`.device_model` 混用）一併問給專家，得到完整定案回覆。
+
+**🟢 問題一：`devices.line` 排除邏輯確認合理，補上正式定義（已納入）**
+1. **7/7 對半分佈本身是中性證據，不能拿來判斷是否為部門邊界**——兩個部門各七台會呈現同樣的分佈，資料形狀推不出答案。真正的判準是三個業務問題：「是否同一群使用者」「是否互相查對方機種的警報」「未來是否會限制只能看其中一條線」，三者答案一致指向「不是部門邊界」，比任何資料推論可靠 → 1.2 節補上正式定義句：「`department` 是權限與資料隔離的邊界；`line`（2.1／2.2）是部門內部的產線分類，同一部門可有多條線。兩者是不同維度，`line` 不參與任何權限判斷」
+2. **「問系統擁有者」被專家確認為正確做法**——這類問題最終是業務語意問題，資料本身推不出正確答案；若當時問不到人，退而求其次的間接佐證是查警報代碼是否跨 `line` 重疊（重疊代表同一套設備體系），但已有直接答案時間接證據不必要
+3. **附帶收穫**：`line` 可作為階段 2 回填後的交叉驗證維度——`select department, line, count(*) from devices group by 1, 2 order by 1, 2` 預期每個 `department` 對應到 `2.1`／`2.2` 兩列、合計 14 筆，出現非預期組合即代表回填腳本有問題，比單純檢查 `department IS NULL` 多一個交叉維度、成本是零
+
+**🔴 問題二：`_row_to_device()` 從「過渡期雙 key」改為「永久雙 key」，前端 76 處確定不動（已修正第十一輪的預設方向）**
+4. **第十一輪的「過渡期兩個 key 都給」暗示之後要收斂成單一 key，第十九輪推翻這個預設**——原因：(a) 改動時機最不該加碼，76 處會落在已經很滿的階段 13（前端改動）維護窗口內；(b) 錯誤是沉默的，`.model`／`.device_model` 混用、判斷錯了只會顯示空白或 `undefined`，不拋錯不進 log；(c) 收益是零，純粹外觀一致不修 bug 不加功能，與「不改 `devices.model` 資料庫欄位名」是同一條原則的延伸 → 定案為永久雙 key 設計，`_row_to_device()` 同時回傳 `model` 與 `device_model` 兩個 key 指向同一個值（見 3.1.1 節）
+5. **新增三條配套規則**：轉換只能在 `_row_to_device()` 一處發生（不得讓 `row["model"]` 漏到 `app.py`）；寫入路徑對稱處理（`POST`/`PUT` body 兩個 key 都接受，寫入時統一轉成 `model`）；新程式碼一律用 `device_model`，既有 76 處不動，讓不一致範圍隨時間自然縮小（見 3.1.1 節）
+6. **路由參數名 `<device_model>` 確認維持不變**——這是 API 層邏輯命名，不要求與 DB 欄位名一致，8.1 節白名單不受影響（見 4.4 節新增註記）
+7. **未來若真要收斂，需單獨排一次**——時機是多部門穩定運作後、且 `js/api.js` 已抽出，屆時後端收斂動作只是刪掉 `_row_to_device()` 裡的 `"model": model` 一行，這正是「轉換只能在一個函式發生」這條規則的價值（非本次範圍，記錄供日後參考）
+
+**共同邏輯（專家原話，記錄供日後類似判斷參考）**：兩題本質是同一件事——要不要為了「外觀乾淨」去動已經在運作的東西。`line` 長得像部門不代表要改設計；`model`/`device_model` 名字不一致不代表要為了一致去動 76 處前端。兩題答案都是「不動」，理由相同：外觀問題與實質風險不對等，這與先前「PLAN 改用實際欄位名、不改資料庫」是同一條原則的延伸。
+
+**影響範圍**：1.2 節新增 `department`/`line` 定義句；3.1.1 節整段改寫為永久雙 key 設計＋三條配套規則；4.4 節新增路由參數命名說明；階段 12（`sentinel_pack` seed 腳本）與階段 3（devices 唯一約束切換）的內容原本就已對齊 `department, model` 複合鍵，此輪未發現需要額外修改之處，僅 3.1.1 節整段更新。
