@@ -166,14 +166,22 @@ class SupabaseStore:
             raw = r.read().decode()
             return json.loads(raw) if raw.strip() else []
 
-    def _paginated_get(self, qs: str, order_field: str) -> list:
+    def _paginated_get(self, qs: str, order_fields: list) -> list:
         """PostgREST 單次 GET 有列數上限（Supabase 預設 1000），任何可能掃到
         整張表的查詢都必須走這裡分頁，不能只發一次 GET（外部審查發現：save()
-        的刪除掃描先前沒分頁，資料表超過 1000 筆時 replace 模式會安靜少刪）。"""
+        的刪除掃描先前沒分頁，資料表超過 1000 筆時 replace 模式會安靜少刪）。
+
+        order_fields 必須是完整的唯一鍵（pk_fields），不能只給單一非唯一欄位——
+        並列（tie）時 ORDER BY 不保證跨多次請求（每次 offset 各自獨立查詢計畫）
+        的相對順序一致，會導致漏列或重複列（第二輪外部審查發現：alarms 的主鍵
+        是 (department, device_model, code) 三欄，只用 code 或 department 排序
+        會有大量並列，1759 筆超過 1000 分頁門檻時即會觸發）。
+        """
         page_size = 1000
         result = []
         offset = 0
-        full_qs = f"{qs}&order={order_field}&limit={page_size}"
+        order_clause = ",".join(order_fields)
+        full_qs = f"{qs}&order={order_clause}&limit={page_size}"
         while True:
             batch = self._req("GET", f"{self.table}?{full_qs}&offset={offset}")
             result.extend(batch)
@@ -186,7 +194,7 @@ class SupabaseStore:
         qs = "select=*"
         if department is not None:
             qs += f"&department=eq.{urllib.parse.quote(department, safe='')}"
-        result = self._paginated_get(qs, self.pk)
+        result = self._paginated_get(qs, self.pk_fields)
         if self.is_devices:
             result = [_row_to_device(row) for row in result]
         return result
@@ -228,7 +236,7 @@ class SupabaseStore:
         scan_qs = f"select={select_fields}"
         if department is not None:
             scan_qs += f"&department=eq.{urllib.parse.quote(department, safe='')}"
-        existing = self._paginated_get(scan_qs, self.pk_fields[0])
+        existing = self._paginated_get(scan_qs, self.pk_fields)
         to_delete = [row for row in existing if self._row_key(row) not in new_keys]
         for row in to_delete:
             qs = "&".join(f"{f}=eq.{urllib.parse.quote(str(row[f]), safe='')}" for f in self.pk_fields)
@@ -299,6 +307,31 @@ class DepartmentStore:
             raw = r.read().decode()
             return json.loads(raw) if raw.strip() else []
 
+    def _count(self, table: str, filter_qs: str) -> int:
+        """用 Prefer: count=exact + Range: 0-0 取得筆數，不搬移實際資料列
+        （PLAN 5 節前端刪除確認流程用，表可能有上千筆，不該整批 GET 下來數）。
+
+        select=department 而非 select=id：alarms 表沒有 id 欄位（複合主鍵是
+        (department, device_model, code)），department 欄位則是這批表全部
+        都有的共同欄位，避免每張表要記各自的主鍵長相。
+        """
+        base, key = self._base_key()
+        req = urllib.request.Request(
+            f"{base}/rest/v1/{table}?select=department&{filter_qs}",
+            headers={
+                "apikey": key, "Authorization": f"Bearer {key}",
+                "Prefer": "count=exact", "Range-Unit": "items", "Range": "0-0",
+            },
+            method="GET",
+        )
+        with urllib.request.urlopen(req) as r:
+            content_range = r.headers.get("Content-Range", "")
+            # 格式："0-0/N"
+            if "/" in content_range:
+                total = content_range.rsplit("/", 1)[-1]
+                return int(total) if total.isdigit() else 0
+            return 0
+
     _PUBLIC_FIELDS = "id,name,active,hidden,purgeable,session_version,created_at"
 
     def list(self, active_only: bool = False) -> list:
@@ -356,6 +389,19 @@ class DepartmentStore:
         qs = f"id=eq.{urllib.parse.quote(dept_id, safe='')}"
         self._req("PATCH", f"{self._TABLE}?{qs}", {"active": active},
                   extra_headers={"Prefer": "return=minimal"})
+
+    def count_impact(self, dept_id: str) -> dict:
+        """唯讀版的 purge() 統計，供刪除前確認用（PLAN 5 節前端刪除流程第一步，
+        外部審查發現：設計稿的刪除流程依賴這個端點顯示「將刪除 N 台機種、
+        M 筆警報」，先前不存在）。表清單與 purge() 保持一致，避免兩處各自
+        維護一份、日後漏改其中一邊。用 count=exact + limit=0 取得筆數，
+        不搬移實際資料列（部分表可能有上千筆）。"""
+        counts = {}
+        dept_qs = f"department=eq.{urllib.parse.quote(dept_id, safe='')}"
+        for table in ("alarms", "ai_scans", "ai_corrections", "ai_logs",
+                      "feedback", "alarm_views", "alarm_history", "devices"):
+            counts[table] = self._count(table, dept_qs)
+        return counts
 
     def purge(self, dept_id: str, confirm_id: str) -> dict:
         """硬刪除一個部門與其所有關聯資料。僅限 purgeable=true 的部門，

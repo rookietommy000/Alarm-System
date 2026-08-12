@@ -864,6 +864,17 @@ def create_app() -> Flask:
         _invalidate_dept_cache(dept_id)
         return jsonify({"ok": True})
 
+    @app.get("/api/admin/departments/<dept_id>/impact")
+    @superadmin_required
+    def department_impact(dept_id: str):
+        """刪除部門前的確認端點：各表筆數統計（PLAN 5 節前端刪除流程第一步，
+        外部審查發現此端點原本不存在，設計稿的刪除確認畫面依賴它）。"""
+        dept = department_store.get_by_id(dept_id)
+        if dept is None:
+            abort(404, "部門不存在")
+        counts = department_store.count_impact(dept_id)
+        return jsonify({"department": dept_id, "counts": counts})
+
     @app.delete("/api/admin/departments/<dept_id>")
     @superadmin_required
     def purge_department(dept_id: str):
@@ -883,11 +894,17 @@ def create_app() -> Flask:
     @app.get("/api/whoami")
     @public_endpoint
     def whoami():
+        dept_id = session.get("department")
+        dept_name = None
+        if dept_id and _use_supabase():
+            dept = _dept_cached(dept_id)
+            dept_name = dept.get("name") if dept else None
         return jsonify({
             "auth": is_logged_in(),
             "admin": is_admin(),
             "superadmin": is_superadmin(),
-            "department": session.get("department"),
+            "department": dept_id,
+            "department_name": dept_name,
         })
 
     @app.get("/api/departments/public")

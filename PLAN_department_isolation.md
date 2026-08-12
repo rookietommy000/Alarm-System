@@ -1622,3 +1622,57 @@ def test_resolve_target_department_does_not_read_request_args():
 11. `whoami` 回應缺少 `department_name`（部門顯示名稱），前台 topbar 要顯示「2.1線」而非 `line21` 時繞不過去——趁前端還沒開工先補上這個欄位（對應 PLAN 5.3 節）
 
 **影響範圍**：`backend/app.py`（`create_device()` id 產生規則、`login_submit()`/`admin_login_submit()` 守衛條件）；`backend/import_alarms.py`（`_create_missing_devices()` id 產生規則、`replace` 模式明確傳入 `on_conflict`）；`backend/storage.py`（新增 `_paginated_get()` helper、`load()`/`save()` 改用它、`save()` 新增 `on_conflict` 參數並補 `id` 保留邏輯、`JsonStore.save()` 同步加參數維持介面一致）；59 個既有 pytest 全數通過；用真實 Supabase 連線驗證三項 🔴 修正（跨部門同名機種、`load()` 分頁計數不變、`save()` 整批取代含 `on_conflict`），驗證用臨時部門 `zztest_a`/`zztest_b` 已 purge 清除，正式資料（`mf4d`：1759 警報、14 機種）全程未受影響。🟡6-11 六項記錄為待辦，非阻塞，部分留到部署階段（🟡8 待辦）、部分留到 `sentinel_pack` 執行階段（`DeptScope.ALL` 孤兒資料驗證）、部分留到前端開工前（🟡11 `whoami` 補欄位）。
+
+---
+
+第二十八輪審查（外部專家第二輪審查：分頁修正只做了一半，排序鍵不唯一；補 `whoami` 缺欄位與 `/impact` 端點）：
+
+**背景**：把修正後的六個核心檔案（v2 審查包）重新交給外部專家審查，確認第二十七輪的三個 🔴 修正是否正確、有沒有引入新問題。專家確認 🔴1（id 衝突）、🔴2（登入 fallback）、🟡4/5（`on_conflict`/`id`）三項修得正確，但指出 🔴3（`save()` 分頁）**只修了一半**——分頁迴圈補上了，但排序鍵本身不是唯一鍵，同一類 bug 會以另一種形式回來。
+
+**🔴 `_paginated_get()` 的排序鍵不唯一，跨頁 LIMIT/OFFSET 順序不保證一致（已修正）**
+
+`load()` 傳入 `self.pk`（`alarms` 是 `"code"`）、`save()` 掃描傳入 `self.pk_fields[0]`（`"department"`）當排序鍵，兩者都不是唯一鍵：`alarms` 的真正主鍵是 `(department, device_model, code)` 三欄複合，只用 `code` 排序時同一個 `code`（如 `E001`）可能同時出現在多個機種底下、大量並列；只用 `department` 排序更嚴重，目前整張表 1759 筆全部同一個部門，等於完全沒有排序區分度。
+
+PostgreSQL 的 `ORDER BY` 遇到並列（tie）時不保證跨多次獨立查詢（`offset=0`、`offset=1000` 是兩次獨立的 HTTP 請求、兩次獨立的查詢計畫）的相對順序一致。後果：部分列可能同時出現在兩頁（`load()` 回傳重複警報；`save()` 刪除因為 DELETE 冪等所以無害）、部分列可能兩頁都沒出現（`load()` 少幾筆、`save()` 掃描漏掉 = 🔴3 那個「replace 少刪」問題換個形式回來）。且**是間歇性的**——資料量與並發程度越高越容易觸發，1759 筆剛好超過 1000 分頁門檻，正式環境現在就處於這個風險狀態。專家特別指出：`load()` 這處的排序鍵問題是他上一輪沒抓到的，不是這次改壞的，這次只是新加的 `save()` 排序鍵繼承了同一個既有問題。
+
+修正：`_paginated_get(qs, order_fields)` 參數從單一欄位字串改成欄位列表，呼叫端一律傳入完整的 `self.pk_fields`（唯一鍵）：
+```python
+result = self._paginated_get(qs, self.pk_fields)          # load()
+existing = self._paginated_get(scan_qs, self.pk_fields)   # save() 刪除掃描
+```
+**用真實 Supabase 連線驗證**（比照專家建議的兩條檢查）：
+```
+total count: 1759
+unique count: 1759
+duplicates: 0
+devices count: 14
+```
+1759 筆全部拿得到、`(device_model, code)` 組合零重複，確認排序鍵改為複合鍵後分頁正確。
+
+**🟡 補齊 `whoami` 缺 `department_name`（PLAN 5.3 節，第三次被點名，已修正）**
+
+前台 topbar 需要顯示部門顯示名稱（如「製造四部包裝組」）而非 `id`（`mf4d`），且沒有其他管道能拿到這個值（哨兵部門不在 `/api/departments/public`、超管的 `session["department"]` 是 `None`）。`whoami` 端點新增 `department_name` 欄位，複用既有的 `_dept_cached()` 60 秒行程內快取（不需要額外一次 DB 查詢）：
+```python
+dept_id = session.get("department")
+dept_name = None
+if dept_id and _use_supabase():
+    dept = _dept_cached(dept_id)
+    dept_name = dept.get("name") if dept else None
+```
+
+**🟡 新增 `GET /api/admin/departments/<dept_id>/impact` 端點（`superadmin_required`，已修正）**
+
+專家指出前端刪除部門流程設計稿依賴這個端點顯示「將刪除 N 台機種、M 筆警報」，但 `app.py` 裡完全不存在（出現 0 次）。經與使用者確認需求後，現在就實作：新增 `DepartmentStore.count_impact(dept_id)`，表清單與既有 `purge()` 保持一致（避免兩處各自維護一份、日後漏改其中一邊）。
+
+實作過程中發現兩個需要修正的地方，記錄供日後類似情境參考：
+1. **一開始用 `select=id&limit=0` 搭配 `Prefer: count=exact` 想拿筆數不搬資料，但 `alarms` 表沒有 `id` 欄位**（複合主鍵是 `(department, device_model, code)`，不像 `devices` 有獨立代理鍵）——改用 `select=department`，這是所有部門表都有的共同欄位，不需要為每張表各自記住主鍵長相
+2. **`limit=0` 被 PostgREST 拒絕（400 Bad Request）**，正確做法是用 `Range: 0-0` header（搭配 `Range-Unit: items`）而非 `limit` query 參數，回應的 `Content-Range` header 格式是 `0-0/N`，從中解析出總筆數 `N`
+
+新增 `DepartmentStore._count(table, filter_qs)` helper 封裝這個模式。**用真實 Supabase 連線驗證**：
+```
+mf4d impact counts: {'alarms': 1759, 'ai_scans': 0, 'ai_corrections': 0,
+'ai_logs': 0, 'feedback': 3, 'alarm_views': 76, 'alarm_history': 0, 'devices': 14}
+```
+`alarms: 1759`、`devices: 14` 與正式資料完全吻合。同步在 `tests/test_route_auth_registry.py` 的白名單登記這個新路由（`superadmin` 層級）。
+
+**影響範圍**：`backend/storage.py`（`_paginated_get()` 簽名改為接受欄位列表、`load()`/`save()` 呼叫端更新、新增 `DepartmentStore._count()`/`count_impact()`）；`backend/app.py`（`whoami` 補 `department_name`、新增 `department_impact()` 路由）；`tests/test_route_auth_registry.py`（白名單新增一筆）；59 個既有 pytest 全數通過；三項修正皆用真實 Supabase 連線驗證（分頁去重、`whoami` 邏輯沿用既有快取未單獨測試但邏輯簡單、`count_impact()` 數字與正式資料吻合）。🟡6-10（`admin_logout` 未清 session、超管路徑未驗證部門存在性、`limit=5000` 統計扭曲、`/api/server-url` 公開、11 處異常吞噬）仍是待辦，尚未處理。
