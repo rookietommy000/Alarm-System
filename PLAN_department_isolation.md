@@ -1775,3 +1775,220 @@ mf4d impact counts: {'alarms': 1759, 'ai_scans': 0, 'ai_corrections': 0,
 測試期間產生的 `login_attempts` 記錄（`mf4d`/`__super__`）已清除，正式資料全程未受影響；59 個既有 pytest（後端邏輯本身無改動，僅 `_check_login_throttle()` 的節流回應方式調整）全數通過。JS 語法用 Node.js `new Function()` 額外驗證（`dashboard.html`、`index.html` 兩份腳本皆通過），避免大範圍字串編輯引入語法錯誤未被發現。
 
 **尚未完成（下一步）**：PLAN 5.5 節「SW 快取行為手動驗證」需要真實瀏覽器操作（開發者工具檢查 Cache Storage、模擬弱網/離線），無法自動化，且依 PLAN 第十輪審查需要 B 帳號（哨兵部門暫時 `hidden=false`），這步驟排在維護窗口內、`app.py` 實際部署之後才有意義執行（本機環境的 Service Worker 行為與 Render 正式 HTTPS 環境下可能不同，PLAN 第八輪審查已記錄這個風險）。
+
+---
+
+第三十二輪審查（哨兵資料實際載入 Supabase，全面採用 Dashboard 手動操作路徑，取代 psql/連線字串方案）：
+
+**背景**：使用者要求開始執行「窗口前」checklist 剩餘項目（第 1-2 項）。階段 9 路由權限測試已在更早的輪次完成並確認全綠，本輪聚焦第 2 項——把已修正欄位對應的 `01_seed_sentinel.sql` 實際載入 Supabase。過程中對「用什麼工具執行 SQL」這件事做了一輪決策，並在操作中發生一次密碼外洩事故。
+
+**🔴 SQL 執行環境決策：Direct connection 存在但最終選擇完全不用，改走 Dashboard SQL Editor（已定案）**
+
+原始問題：本機無 `psql`、`.env` 只有 REST API 憑證。諮詢使用者的外部專家後，得到三個選項與明確建議：Session pooler（6543 port）僅支援交易語意但**不支援 `pg_dump`**（transaction mode 下 pooler 無法處理 dump 需要的 prepared statement 與 session 層級設定，會直接失敗）；Direct connection（5432 port，不經 pooler）對「一次性跑腳本 + 偶爾 dump」這種用途最單純，是專家的推薦選項。
+
+使用者一度取得 Direct connection 字串並提供給我，但**最終決策是兩者都不用**——改為完全依循「三支既有遷移腳本（001/002/003）都是手動貼 Dashboard SQL Editor 執行」的既有模式，`pg_dump` 備份也改用 Table Editor 的 CSV Export 取代。理由：使用者對這條路徑已有經驗、不需要額外安裝 `psql`/`pg_dump`、且維持與先前三次遷移一致的操作方式，降低本次操作的變數。
+
+**🔴 操作事故：Direct connection 密碼明文貼入對話（已處理，非本輪待修正項目，記錄供日後警惕）**
+
+使用者在提供連線字串時，把資料庫密碼明文貼在對話裡（`postgresql://postgres:[密碼]@db.xxx.supabase.co:5432/postgres`）。這組憑證與 `SUPABASE_KEY`（REST API anon/service key）不同層級，是資料庫本身的完整存取密碼，一旦外洩等同資料庫門戶洞開。當場建議使用者立即到 Dashboard 重設密碼，使用者已完成重設，舊字串作廢。**經驗記錄**：往後若使用者主動提供連線字串等級的憑證，應在收到當下立即提醒風險並建議走「存進 `.env`、不在對話中貼值」的路徑，而非事後才提醒；本輪是先給出建議後使用者仍直接貼了值，及時攔截但沒能完全預防。
+
+**🟡 `sentinel_pack/gen_hashes.py` 沿用了第十八輪已修正過的同一個 Python 3.9 scrypt 問題（已修正）**
+
+第十八輪審查已在 `backend/gen_department_hashes.py` 修正過「本機與 Render 皆為 Python 3.9，`hashlib` 缺 `scrypt` 編譯支援，`werkzeug.security.generate_password_hash()` 預設演算法會直接 `AttributeError`」這個環境限制，要求明確指定 `method="pbkdf2:sha256"`。但 `sentinel_pack/gen_hashes.py` 是獨立檔案，沒有同步套用這個修正，執行時同樣撞上 `AttributeError: module 'hashlib' has no attribute 'scrypt'`。修正方式相同：兩處 `generate_password_hash()` 呼叫明確加上 `method='pbkdf2:sha256'`，並在檔案 docstring 補充這個環境限制的說明，避免下一個獨立小工具又重複踩坑。
+
+**🟢 佔位字串替換與 seed 執行（完整走完，真實 Supabase 連線驗證）**
+
+三個佔位字串替換完成：`__HOME_DEPT__` → `mf4d`；`__PW_HASH__`/`__ADMIN_PW_HASH__` → `gen_hashes.py`（修正後）產生的 `pbkdf2:sha256` 雜湊；`__COLLIDE_CODE__` → `0001`（查詢 `mf4d` 部門下 `ACM001` 機種的真實警報代碼取得）。字串替換過程中發現檔案開頭的操作說明文字（「1) 全域取代 __HOME_DEPT__ 為...」）被同一次替換誤傷，殘留成語意混亂的殘留註解（例如「全域取代 mf4d 為你自己部門的 id（例如 mf4d）」），已一併修正為「✅ 佔位字串已於本輪替換完成」的說明。
+
+備份：Table Editor 對 `departments`／`devices`／`alarms` 三表執行 Export CSV，取代原計畫的 `pg_dump`。
+
+**執行結果（分段貼上檔尾五個檢查查詢，逐一驗證，全數通過）**：
+- 各表筆數：`departments=1, devices=4, alarms=20, ai_scans=7, ai_corrections=3, ai_logs=4, alarm_history=3, feedback=4, alarm_views=12`，合計 58，與 seed 腳本設計完全吻合
+- 撞名確認：`ACM001` 同時存在於 `mf4d`（135 筆，正式資料）與 `zztest`（4 筆，哨兵資料），驗證了 T-02 撞名測試「WHERE 條件是否正確帶 department」的前提資料已就緒
+- `null_dept_devices` = 0
+- devices/alarms NULL 檢查 = 0/0
+- 孤兒列檢查：`orphan feedback=1`、`orphan alarm_views=1`，對應 PLAN 3.7 節 `DeptScope.ALL` 不得無聲收窄的驗證前提已備妥
+
+**影響範圍**：`sentinel_pack/gen_hashes.py`（`method='pbkdf2:sha256'` 修正＋docstring 補充）；`sentinel_pack/01_seed_sentinel.sql`（佔位字串全部替換為實際值，開頭操作說明文字同步修正為完成狀態）；Supabase 正式資料庫新增 `zztest` 哨兵部門與其 58 筆關聯資料（`purgeable=true`，可用 `02_teardown_sentinel.sql` 或 `DepartmentStore.purge()` 清除）；正式資料（`mf4d`：1759 警報、14 機種）全程未受影響，過程中額外確認其目前基準值為 `alarms=1759, devices=14, ai_scans=0`；CSV 備份快照（`departments_rows.csv`/`devices_rows.csv`/`alarms_rows.csv`）已由使用者下載留存。
+
+**尚未完成（窗口前 checklist 第 3-4 項）**：記錄 Dashboard 基準值（今日掃描數、機種數、Top10）尚未執行；pg_dump 改用 CSV 快照的方式已完成，等同滿足「確認備份是最近的」這項要求。使用者要求先暫停、把目前狀態交給外部專家審查，再決定是否繼續。
+
+---
+
+第三十三輪審查（外部專家覆核哨兵資料載入結果：一項數字異常排除、三項補強動作全部完成）：
+
+**背景**：把第三十二輪的執行摘要交給使用者的外部專家覆核。專家先指出一項數字對不上的異常，接著逐一回答先前提出的三個問題。
+
+**🟡 `alarm_views` 筆數異常（12 筆 vs 原始 pack 設計的 4 筆）——已確認是正確的事件表改法，非重跑造成的重複（已排除疑慮）**
+
+專家指出檢查結果 `1/4/20/7/3/4/3/4/12`（合計58）跟 `sentinel_pack` README 原始設計的 `1/4/20/7/3/4/3/4/4`（合計50）對不上，差在 `alarm_views`。專家給出判斷方式：若是「事件表改法」（第十一輪已確認 `alarm_views` 是事件表而非計數表，一次瀏覽一列），應該看到 4 組代碼、每組 2-4 筆；若是重跑造成，會看到完全重複的列。
+
+用真實 Supabase 連線查詢分組結果：`(ACM001, ZZC001)=3`、`(ZZ-ALPHA-01, ZZA001)=4`、`(ZZ-ALPHA-01, ZZA002)=3`、`(ZZ-ITA-01-Città, ZZI001)=2`，共 4 組、合計 12 筆，與 `01_seed_sentinel.sql` 第 204-216 行的原始設計逐筆吻合（README 早已標註 12 筆是修正後的正確值，v3→v4 版本更新時已經把 4 筆計數表假設改成 12 筆事件表模擬，PLAN 第三十二輪記錄的預期值 `1/4/20/7/3/4/3/4/12=58` 其實才是正確的，反而是引用專家對照的「原始 pack 4/50」是舊版 v3 之前的數字）。確認為正確的事件表改法，非 bug。
+
+**🟢 問題一：Dashboard 手動操作路徑的風險——CSV 備份不完整，已用 schema 快照補強**
+
+專家指出 Table Editor 的 CSV 匯出涵蓋不到三件事：NULL 與空字串的區別（隔離設計依賴 `department IS NULL` 語意）、約束/索引/主鍵、一鍵還原能力——目前狀態是「遷移前有 `pg_dump`，遷移後（哨兵資料載入後）沒有任何完整備份」。
+
+專家評估風險等級：維護窗口當天不動 schema（只部署程式碼），急迫性不高，但若之後要跑 `--mode replace` 匯入或部門 `purge()`，屆時會需要更完整的備份。折衷方案：不裝 `psql`，改用 SQL Editor 查詢 `pg_constraint`/`pg_indexes` 產生 schema 快照，搭配既有 CSV 組合使用。
+
+**已執行**：分別跑了約束查詢與索引查詢，結果存成 `sentinel_pack/schema_snapshot_20260812.md`。驗證結果：`alarms_pkey` 已是 `(department, device_model, code)` 複合主鍵、`devices_dept_model_key` 已是 `(department, model)` 複合唯一約束（階段 3 遷移確認生效）；所有帶 `department` 欄位的表皆有對應索引；`login_attempts` 的節流查詢索引 `(ip, department, attempted_at desc)` 存在。**待辦（非本輪範圍，專家建議列入窗口後）**：取得 Direct connection 連線字串＋安裝 `pg_dump`，作為更完整的備份手段。
+
+**🟢 問題二：密碼外洩事故——處理程序正確，並完成兩項補充確認**
+
+專家確認重設密碼是正確且必要的第一步，但額外要求兩項確認：(a) 舊字串是否殘留在其他地方（shell history、剪貼簿工具、`.env`/暫存檔、對話紀錄）；(b) Supabase Dashboard Logs 查連線紀錄，確認外洩窗口期間沒有非本人 IP 連入。
+
+**已執行**：`grep` 檢查 `~/.zsh_history`，確認沒有殘留這組連線字串（原因：字串是透過對話框貼給 Claude，而非在終端機執行，本來就不會進 shell history）；`~/.bash_history` 不存在（使用者用 zsh）。使用者親自查看 Supabase Dashboard Logs，確認外洩窗口期間的連線皆為本人操作。兩項確認皆已完成，無異常。
+
+**專家對「更早介入」的建議（記錄供日後參考）**：最有效的介入點是讓憑證從一開始就不經過人手——流程應該是「使用者自己複製→直接貼進 `.env`→只回報『存好了』」，而非在建議取得連線字串的當下才分兩則訊息說明「先給連線方式建議」再「事後補充不要貼值的提醒」。應在**同一則建議裡**就同時說明處理方式。此外建議專案文件（`.env.example`）替每個敏感變數加註記，例如「含資料庫密碼，絕不貼進任何對話/issue/截圖」。**這是本次互動流程上的改進點，已記錄，日後遇到類似情境（使用者主動要提供連線字串等級憑證）時，應在確認要不要取得連線字串的同一則訊息裡，就講清楚「請自行存入 `.env`，不要貼值到對話裡」，不要分兩次講。**
+
+**🟢 問題三：`verify_isolation.sh` 執行時機——確認現在不該跑，已完成配套的兩個小動作**
+
+專家給出明確判斷：現在執行 `verify_isolation.sh` 一定會失敗，且失敗是正確的——腳本測的三段式路由、`?dept=` 越權、`__super__` 登入分岔全部是新版 `app.py` 的行為，但線上目前還是舊版，跑了只會得到誤導性的大片紅字。腳本要留到維護窗口當天、`app.py` 部署完成後才有意義執行。
+
+現階段「哨兵資料就緒」的判斷成立——五項自我檢查驗的是資料層面（筆數、撞名機種、NULL、孤兒列），資料層面已確認完畢，不需要 `verify_isolation.sh` 才能下這個結論。
+
+**已執行的配套動作**：
+1. `bash -n verify_isolation.sh` 語法檢查，通過
+2. 意外發現：先前 `gen_hashes.py` 產生的 `ZZ_PW`/`ZZ_ADMIN_PW` 兩組隨機密碼，使用者當時沒有複製保存——這組密碼只印在終端機一次、不會被任何檔案記住，遺失後 `zztest` 部門會變成無法登入的死資料。專家原本只是提醒「確認一下有沒有存」，追問後確認使用者確實沒有保存
+3. **修正**：重新執行 `gen_hashes.py` 產生新一組密碼與雜湊；到 Dashboard SQL Editor 執行 `UPDATE departments SET pw_hash=..., admin_pw_hash=... WHERE id='zztest'` 更新雜湊；這次密碼明確存進 `sentinel_pack/.env.sentinel`（獨立於 `testing/.env`，因為這組密碼是給人手動 `export` 用，不是應用程式的執行環境變數；且 `sentinel_pack/` 本身不在任何 git repo 範圍內，不需要額外 `.gitignore` 規則）
+
+**影響範圍**：`sentinel_pack/.env.sentinel`（新檔，哨兵測試帳號密碼，不受 git 管控）；`sentinel_pack/schema_snapshot_20260812.md`（新檔，約束+索引快照）；Supabase `departments` 表 `zztest` 一筆的 `pw_hash`/`admin_pw_hash` 已更新為新密碼對應的雜湊值；窗口前 checklist 現況：階段 9 測試✅、哨兵資料載入✅（含本輪的密碼補救與備份補強）、記錄 Dashboard 基準值⬜（唯一剩餘項目）、`verify_isolation.sh` 留待窗口當天執行（非阻塞，屬預期行為）。
+
+---
+
+第三十四輪審查（記錄 Dashboard 基準值——窗口前 checklist 最後一項，完成；過程中發現並記錄一個尚未修復的前端點擊 bug）：
+
+**背景**：本機啟動 Flask（`.venv/bin/python3 backend/app.py`，port 5001）供使用者登入 Dashboard 記錄基準值。過程中使用者回報 `admin-login.html` 的「系統管理員」部門選項卡片點擊完全沒反應，一路排查後確認是真實存在的前端 bug，而非快取或操作問題。
+
+**🟡 `admin-login.html` 部門選項卡片點擊無反應（已定位成因，尚未修正，記錄為待辦）**
+
+排查過程：確認不是快取問題（無痕模式、Cmd+Shift+R 強制刷新皆重現）；確認伺服器回傳的 HTML 內容正確含 `selectDept`/`system-option` 邏輯（`curl` 直接驗證）；用瀏覽器 Console 執行 `document.querySelectorAll('.dept-option').length` 確認 DOM 存在兩個按鈕；執行 `document.querySelectorAll('.dept-option')[1].click()` 直接呼叫 `.click()` 後，畫面上「系統管理員」卡片确实變成選中狀態（綠色虛線邊框）——**證明 `selectDept()` 函式邏輯本身完全正常，`click` 事件監聽器也確實有正確綁定並執行**。
+
+**結論**：問題不在 JavaScript 邏輯，而在滑鼠實際點擊沒有觸發到該元素的 `click` 事件——最可能的原因是有其他元素（不透明或透明的覆蓋層）在視覺上不可見但實際攔截了該座標範圍的滑鼠事件，或者是 CSS `pointer-events`/`z-index` 層疊順序問題導致點擊被別的元素吃掉。這類問題通常需要瀏覽器開發者工具的 Elements 面板實際檢查該座標點擊命中的是哪個 DOM 節點（`document.elementFromPoint(x, y)`），本輪未進一步深入排查，只做到「用 JS 直接呼叫 `.click()` 繞過去，讓使用者能繼續操作」這一步。
+
+**繞過方式（本輪使用，非修復）**：使用者在瀏覽器 Console 執行 `document.querySelectorAll('.dept-option')[1].click()` 手動觸發選中，再於密碼欄輸入密碼、按「進入後台」正常送出表單。第一次嘗試因先前多次表單提交觸發了第 2.2 節的漸進式登入節流（延遲期間內任何密碼都會被判定為「密碼錯誤」，這是刻意的枚舉防護設計，不可區分「節流中」與「密碼真的錯誤」），等待後重試即成功登入超管帳號。
+
+**待辦（下次處理前端時排入）**：修正 `admin-login.html` 的部門選項卡片點擊判定，需要用瀏覽器開發者工具實際檢查點擊座標命中的元素、或檢查 `.dept-option`/`.dept-select-wrap`/`.modal-body` 一帶是否有意外的定位/層疊設定造成點擊被攔截。`login.html`（前台登入頁）是否有同樣問題尚未測試，應一併檢查（兩者共用類似的部門選單渲染邏輯）。
+
+**🟢 Dashboard 基準值記錄完成（`mf4d` 部門，超管切換檢視後讀取）**
+
+透過超管帳號登入、切換檢視部門到 `mf4d`（而非預設的「全部部門」跨部門混合檢視——混合檢視下的數字會與 `zztest` 哨兵資料混在一起，不能當作乾淨基準值，過程中也直接印證了超管跨部門檢視功能本身運作正常：Top10 同時出現 `mf4d` 正式代碼與 `zztest` 的 `[SENTINEL]` 標記代碼），記錄如下：
+
+| 項目 | 數值 |
+|---|---|
+| 今日掃描次數 | 0 |
+| 本週掃描次數 | 0 |
+| AI 辨識失敗率 | 0%（0/0 筆） |
+| 機種總數 | 14 |
+| 回饋統計 | 有效 2 筆(67%)、無效 1 筆(33%)、需改善方案 1 筆(50%) |
+
+**最常查詢 Top10（mf4d）**：
+1. `0001` MAIN POWER CUT 主電源切斷 — 5
+2. `0132` Feed Ready To Start 送料處可運作 — 4
+3. `0001` Main Power Cut 主電源切斷 — 3（注意：與第 1 名同代碼但大小寫不同，可能是機種不同或資料原始記錄差異，非本輪修正範圍，僅如實記錄）
+4. `0054` Error for Formed Web Positioning 成型泡殼位置錯誤 — 3
+5. `0199` Product Emptying in Progress 產品清空中 — 3
+6. `0521` Syringes 1 Starwheel Minimum Load 星盤入料低料 — 3
+7. `0256` End Covering Material Prealarm 易撕膜即將用盡 — 3
+8. `0002` NO COMPRESSED AIR 無壓縮空氣 — 2
+9. `0003` MANUAL STOP 手動停止 — 2
+10. `0081` REPHASE THE MACHINE REMOVE THE PRODUCTS 重新調整機器的相位移除產品 — 2
+
+此數字與更早輪次透過 REST API 直接查詢確認的 `devices=14`、`ai_scans=0` 完全吻合，交叉驗證通過。
+
+**用途**：維護窗口部署完成後，重新登入同一個 `mf4d` 檢視，比對「今日/本週掃描數、機種數、Top10 排序」是否與此處記錄的基準值一致（允許因時間推移產生的正常掃描數增長，但機種數、Top10 排序結構不應無故劇烈變動；若部署後 `mf4d` 檢視下出現本應只存在於 `zztest` 的 `[SENTINEL]` 標記資料，或機種數不再是 14，即代表過濾邏輯出現問題）。
+
+**至此窗口前 checklist 四項全部完成**：
+1. ✅ 階段 9 路由權限測試（59 pytest 全綠）
+2. ✅ `sentinel_pack` 欄位修正 + 哨兵資料實際載入 Supabase
+3. ✅ 記錄 Dashboard 基準值（本輪完成）
+4. ✅ 確認備份是最近的（CSV 快照 + schema 快照，第三十二/三十三輪完成）
+
+**影響範圍**：無程式碼變更（本輪純操作+記錄）；發現一個未修復的前端 bug（`admin-login.html` 部門卡片點擊無反應），已記錄根因排查過程與待辦事項，留待下次處理前端時一併修正；本機 Flask 伺服器（`backend/app.py`，port 5001）於本輪啟動，供使用者登入操作，記錄完成後應提醒使用者是否需要保持運行或關閉。
+
+---
+
+第三十五輪審查（修正 admin-login.html 點擊 bug；補齊 index.html 的 AlarmApi 連動；用真實登入雙向驗證部門隔離已生效）：
+
+**背景**：使用者要求修正上一輪發現的 `admin-login.html` 點擊 bug，並指出「前台還沒做更新連動」。
+
+**🟡 `admin-login.html` 部門卡片點擊無反應——改用事件委派修正（已修正，根因仍未 100% 確認，但症狀已解決）**
+
+原實作是逐一對每個動態建立的 `.dept-option` 按鈕呼叫 `btn.addEventListener('click', ...)`。改為單一委派監聽器綁在容器 `#deptList` 上、用 `e.target.closest('.dept-option')` 判斷，按鈕改用 `dataset.deptCode` 存代碼而非閉包捕捉。使用者實測確認修正後兩個選項（`mf4d`／系統管理員）皆可正常點擊切換並成功登入。
+
+**根因的誠實記錄**：本輪未能 100% 確認原本點擊失效的底層原因（懷疑與 Bootstrap 5.3.3 Modal 的 `shown.bs.modal` 動畫/focus-trap 初始化時機、動態按鈕插入順序有關，但未用瀏覽器開發者工具的 `elementFromPoint` 實際定位是哪個元素攔截了點擊）。事件委派是否是「真正修好了根因」還是「换了一種寫法剛好繞開了那個時序問題」，兩者從症狀上無法區分。**若之後 `login.html`（前台，同樣的部門選單 pattern，但不是 Bootstrap Modal）也回報過同樣的點擊問題，才需要回頭深究真正機制**；若只有 Modal 場景出現過，則傾向支持是 Modal 時序問題的假設。`login.html` 目前也已一併改為同樣的事件委派寫法，屬預防性同步，非因為它本身回報過問題。
+
+**🟢 `index.html` 補齊 `AlarmApi` 連動（PLAN 5.1 節遺漏，本輪補齊）**
+
+第三十一輪的前端實作，`dashboard.html` 已完全轉換乾淨（0 個原生 `fetch()`，13 處全走 `AlarmApi`），但 `index.html` 只接了 `whoami()` 一處，其餘 **12 處原生 `fetch()` 呼叫全部遺漏**——這是本輪才發現的疏漏，非新問題。已逐一改用 `AlarmApi.get/post`：
+
+- 查詢類（機種列表、回饋統計、瀏覽統計、警報搜尋、拍照分析 `/api/analyze`）：改用 `AlarmApi.get/post`，自動獲得 401 全域攔截（session 過期時導回登入頁，不再需要各處手動判斷 `r.status === 401`，原本 `fetchAlarms()` 裡唯一一處手動判斷已移除，行為統一由 `api.js` 處理）
+- 記錄類（`/api/view`、`/api/feedback`、`/api/confirm`、`/api/correct`、`silentConfirm`）：維持原有 `.catch(() => {})` 靜默失敗語意（這些是背景記錄動作，不該因為網路抖動或 401 打斷使用者當下操作流程），但統一改用 `AlarmApi.post` 而非手寫 `fetch` + 手動組 headers/body
+
+修正後用 Python 從 HTML 中擷取 Vue 腳本區塊、以 `node -e "new Function(...)"` 做語法驗證，通過；用真實 Supabase 連線的 curl 測試（模擬瀏覽器登入 + 呼叫 `/api/devices`、`/api/alarms?q=`）確認後端行為與改動前一致，資料正確帶 `department` 欄位。
+
+**🟢 意外釐清一個認知誤解：本機執行的 `app.py` 早已是含完整隔離邏輯的新版，「窗口才部署 app.py」指的是 Render 正式環境，不是本機**
+
+使用者問「怎麼確定資料真的有被分割」，促成本輪追查確認：`scope_department()`、`resolve_target_department()`、`DeptScope`、三段式路由等全部隔離邏輯，**早在更早的輪次（第二十一輪）就已完整實作並 commit（`909a08b` 及更早的 commit）**，本機執行的正是這份完整程式碼——PLAN 第 7 節「維護窗口才部署 app.py」描述的是**部署到 Render 正式環境**這件事，不是本機開發環境的程式碼版本。此前數輪的表述（包含本文件某幾處）可能造成「本機還在跑舊版邏輯」的錯誤印象，此處明確更正。
+
+**🟢 用真實登入做雙向隔離驗證（比先前僅靠 SQL 直接查表更貼近實際使用路徑）**
+
+用 `mf4d` 帳號登入 `/login`，搜尋關鍵字 `SENTINEL`（哨兵資料的專屬標記）→ **0 筆**，證明 `mf4d` 查詢範圍不包含 `zztest` 資料。反向用 `zztest` 帳號登入，查詢撞名機種 `ACM001`（兩個部門都有這個機種）→ 查到 **4 筆，全部標記 `department: zztest`**，其中一筆代碼剛好也是 `0001`（哨兵 seed 特意設計的撞名代碼），但內容是 `zztest` 自己的資料，未混入 `mf4d` 那筆同代碼的正式資料。兩個方向都確認乾淨隔離，這正是 `sentinel_pack` 設計時 T-02 撞名測試要驗證的核心風險（過濾條件是否真的帶了 `department`，而不只是比對 `device_model`），透過真實 HTTP 登入+查詢路徑得到肯定結果，比之前僅透過 Supabase REST API 直接查表更貼近使用者實際會走的路徑。
+
+**討論後的決策：不提前建立真實第二部門**
+
+使用者提出「是否該有一個真實部門的警報資料才好測試」的疑問。討論後結論：哨兵資料能驗證「隔離邏輯本身正確」，但無法驗證「真實使用場景、真實資料形狀下是否還撐得住」，這件事只有真實第二部門能回答。但**維持 PLAN 第 7 節原定順序，不提前建立**——理由是本機程式碼雖已完整但尚未正式部署到 Render，提前建第二部門只會在維護窗口當天的 `department` 參數改必填、正式部署等操作中多一個變數，不划算。真實第二部門的建立維持排在窗口之後（PLAN 第 7 節步驟 8）。
+
+**影響範圍**：`frontend/admin-login.html`（部門選單改事件委派）；`frontend/login.html`（同步改為事件委派，預防性修正）；`frontend/index.html`（12 處原生 `fetch()` 全部改用 `AlarmApi`，`fetchAlarms()` 移除手動 401 判斷）；59 個既有 pytest 不受影響（純前端改動）；本輪驗證全部透過真實 Supabase 連線與真實登入流程，測試產生的 session cookie 已清除，未寫入任何測試資料。窗口前置作業至此全部完成，下一步是 PLAN 3.6/4.8 節「`department` 參數改必填」（維護窗口當天，與 `storage.py`/`app.py` 部署同一次 commit）。
+
+---
+
+第三十六輪審查（PLAN 3.6/4.8 節「department 參數改必填」提前完成；外部審查修正對「必填時機」的誤讀，並發現一則差點寫錯的假通過測試）：
+
+**背景**：使用者要求開始步驟 5（`department` 參數改必填）。我原本準備依 PLAN 文件字面表述，把這件事留到窗口當天跟 `app.py` 部署同一次 commit，但使用者要求先問專家。
+
+**🔴 對 PLAN 3.6 節「同一次 commit 內移除所有預設值」的誤讀（已被外部審查修正）**
+
+我原本的判斷：3.6 節寫「第 5 階段 app.py 上線後，同一次 commit 內移除所有預設值」，理解成「必填化這件事該在窗口當天做」。外部審查指出這是誤讀——那句話定義的是**不可延後的最晚期限**，不是「必須等到那天才做」。關鍵論證：
+
+1. 必填化的存在意義正是「讓漏傳的呼叫點當場 `TypeError`」——這是一個**設計來製造失敗**的改動。在系統停擺的維護窗口裡執行一個會製造失敗的動作，跟整份規劃「把可能失敗的動作移到窗口外」的一貫邏輯是反的（哨兵資料先載入、路由測試先跑綠、備份先做好，都是同一條原則）
+2. 我用「已經人工 grep 過呼叫端，應該不會漏」來論證不急，但這個論證本身站不住腳——必填化存在的理由就是「人工檢查不可靠」，用一個自己不完全信任的方法（grep）去論證不需要一個更可信的方法（讓 Python 直接報錯），邏輯上是自我削弱的
+3. 只要改動不影響線上行為（`storage.py`/`ai_memory.py` 的呼叫端在窗口前就已經全部走 `app.py` 目前版本，本機測試沒有連正式環境），必填化本身是**零風險的窗口前作業**，跟哨兵資料載入同一類
+
+**結論**：現在做。且過程中若發現任何測試呼叫端目前依賴預設值（`ai_memory.py` 這層有 19+ 處），修正的過程本身有價值——會暴露「這一塊到底有沒有真正的自動化測試覆蓋」。
+
+**🟢 完整必填化執行範圍**
+
+1. `backend/storage.py`：`SupabaseStore.load()/save()`、`AuditLogger.log()/load()`、`FeedbackStore.append()/load()/stats()`、`ViewStore.append()/load()/top()/stats()`、`AiScanStore.load_scans()/load_corrections()/load_logs()` 全部拿掉 `Optional[str] = None` 預設值。`JsonStore` 類別（PLAN 3.2 節刻意排除）與 `LoginAttemptStore._count_since_last_success()`（有獨立的 `scope_by_department` 開關語意，PLAN 3.6 節表格本就沒列入）維持不變
+2. `backend/app.py`：唯一發現的真正遺漏——`/ping` 健康檢查端點原本完全不傳 `department`（`alarms_store.load()`），改為明確傳 `department=None` 並加註解說明用意（健康檢查只確認連得到 DB，不關心特定部門）
+3. `backend/ai/ai_memory.py`：`record_scan()`/`record_confirmation()`/`record_correction()`/`load_corrections()`/`load_confirmed_history()` 全部改為 `department` 強制關鍵字必填（用 `*,` 分隔），逐一確認 `ai_pipeline.py` 呼叫端皆已用關鍵字傳值
+4. `backend/ai/ai_pipeline.py`：`run_pipeline()`/`run_confirmation()`/`run_correction()` 同步跟進，逐一確認 `app.py` 呼叫端（`/api/analyze`、`/api/confirm`、`/api/correct`）皆已用 `session.get("department")` 傳值
+
+**驗證**：60 個既有 pytest 全數通過（含 `tests/test_ai_pipeline.py` 24 處測試呼叫補上明確 `department` 值後恢復綠燈）；用真實 Supabase 連線重啟本機 Flask，端到端測試登入、警報查詢、`/ping` 健康檢查、`/api/analyze` 拍照分析全部正常，`scan_id` 正確產生，證明必填化整條路徑（`app.py` → `run_pipeline` → `record_scan` → `_append_record`）沒有任何 `TypeError`。
+
+**🔴 過程中發現：差點寫進一條「假通過」的隔離測試（外部審查點出的結構性問題，已修正並加上永久防線）**
+
+依專家建議，補測試時原本想在 `TestLoadConfirmedHistory` 加一則跨部門隔離驗證，第一版寫法類似：
+```python
+dept_a_history = m.load_confirmed_history("PILM004", department="dept_a")
+dept_b_history = m.load_confirmed_history("PILM004", department="dept_b")
+assert "op_a" in {r["confirmed_by"] for r in dept_a_history}
+assert "op_b" in {r["confirmed_by"] for r in dept_b_history}
+```
+動手前重新檢查 `_load_records()` 原始碼才發現：**`JsonStore` fallback（pytest 走的路徑）的 JSON 分支完全不使用 `department` 參數做過濾**——`department` 只是寫入記錄的欄位值，不影響查詢範圍。也就是說上面這條測試在本機環境下，`dept_a_history` 實際上會同時包含 `dept_a` 和 `dept_b` 的資料，斷言依然會通過（因為寫得夠鬆散），但測試名字若叫 `test_department_isolation_no_cross_department_leak`，會是一條**通過、但完全沒驗證到隔離**的測試——比沒有測試更危險，因為之後有人查「隔離有沒有測試覆蓋」會被這條綠燈誤導。
+
+修正：重寫成 `test_department_value_correctly_threaded_into_record`，誠實限縮驗證範圍（只驗證 `department` 值有沒有正確寫入 `record_scan()` 回傳的記錄），docstring 明確聲明「這條測試驗證不到查詢時是否真的過濾」與原因。
+
+**用「刪掉機制看紅不紅」的判準交叉確認**：把 `_load_records()` 的 `department` 參數整個拿掉（假想操作，未實際執行），原本第一版的測試依然會綠——證實那確實是一條假通過測試。
+
+**🟢 結構性防線：新增 `tests/test_no_fake_isolation_claims.py`**
+
+外部審查指出這不是單一測試寫錯的問題，是**環境問題**——`JsonStore` 刻意維持單租戶（PLAN 3.2 節），意味著「在 pytest 裡宣稱驗證跨部門隔離」這件事**必然**是假的，不是「可能寫錯」。同樣的陷阱也存在於 `assert_session_valid()`（`backend/app.py` 第 102-119 行，`if not _use_supabase(): return` 提早返回，三態檢查——部門存在性／`active`/`session_version`——在 pytest 環境下完全不執行）。
+
+掃描確認：目前沒有任何測試檔案宣稱驗證 `assert_session_valid()` 或相關機制（第二十一輪對這個機制的驗證是透過真實 Supabase 連線手動測試完成的，記錄在案，不是靠 pytest），這塊沒有踩雷。
+
+新增 `tests/test_no_fake_isolation_claims.py`：掃描 `tests/` 目錄下所有測試函式名稱，若含 `isolation`/`cross_department`/`no_leak`/`session_valid`/`purge`/`停用`/`隔離` 等關鍵字則直接讓這條測試失敗，逼寫測試的人明確面對「這個環境測得出這件事嗎」，而不是被測試名稱和綠燈唬過去。用假想的違規命名（`test_department_isolation_actually_works`、`test_session_valid_after_department_deactivated`）與重寫後的誠實命名（`test_department_value_correctly_threaded_into_record`）交叉驗證這個 pattern 正確區分兩類情況。
+
+**更廣的判準（外部審查提供，記錄供日後寫測試時參考）**：「這條測試如果把被測的機制整段刪掉，它會紅嗎？如果不會，它測的就不是那個機制」——不需要理解環境細節，刪掉、跑一次、看顏色即可判斷。同時這件事也回頭印證了先前 PLAN 第七輪「purge 時機延到不再需要回歸驗證」那個判斷的價值：自動化測試網在「跨部門隔離」這塊有一個結構性、無法用 pytest 補上的洞，`sentinel_pack`／`verify_isolation.sh` 對真實 Supabase 的驗證是唯一填得上這個洞的手段，這也是哨兵部門不該太早清除的另一個理由。
+
+**影響範圍**：`backend/storage.py`、`backend/app.py`、`backend/ai/ai_memory.py`、`backend/ai/ai_pipeline.py`（department 全面必填化）；`tests/test_ai_pipeline.py`（24 處呼叫補值，新增 1 則誠實命名的驗證測試）；新增 `tests/test_no_fake_isolation_claims.py`（結構性防線）；全專案 pytest 由 59 增至 61，全數通過；本機 Flask 伺服器已重啟並用真實 Supabase 連線驗證核心路徑無異常。PLAN 第 7 節步驟 5（department 改必填）至此已提前完成，維護窗口當天只需專注步驟 6-10（storage.py/app.py 部署、verify_isolation.sh、前端部署、SW 驗證）。
