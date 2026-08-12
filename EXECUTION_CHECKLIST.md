@@ -57,33 +57,42 @@
   - [x] 2. 撰寫 `rollback_stage3.sql`（DROP COLUMN 新欄位、還原 1.3 節主鍵切換，用上面查到的真實約束名稱），已 commit（`9ade50b`）
   - [x] 3. `pg_dump -Fc --no-owner --no-privileges` 完整備份，並用 `pg_restore -l` 驗證可讀——已執行，415 TOC entries，`alarms`/`devices`/`feedback`/`ai_scans`/`ai_corrections`/`ai_logs`/`alarm_history`/`alarm_views` 8 張目標表均涵蓋 TABLE+DATA+約束+索引（**此步驟已取代 CSV 匯出，不需另外再做**）。檔案存於 `data/backup/`（已在 `.gitignore` 排除，不進版控；**提醒：應再搬到 Supabase 帳號體系以外的地方，如外接硬碟/雲端硬碟，避免只留在本機專案目錄**）
   - [x] 4. Supabase Dashboard 確認內建備份/保留天數——**【第十六輪查證，第十七輪校正解讀】免費方案沒有備份功能**（Scheduled backups/Point in Time Restore/Restore to new project 皆需 Pro 方案）。**這不是「兩層防護少一層」**——正確理解是：第一層＝交易包裹＋`rollback_stage3.sql`（防遷移失敗，已就緒），第二層＝`pg_dump`（防專案損毀，已就緒且已驗證），Dashboard 備份只是第二層的備援副本；專家確認「夠，可以往下走」，不需升級付費方案，見 PLAN 1.6/第十六~十七輪
-  - [ ] 5. 確認 `migrate_add_departments.py`（階段 2）與主鍵/約束切換（階段 3）的 SQL 全部包在 `BEGIN`/`COMMIT` 交易內
-  - [ ] 6. 遷移執行後重跑 `00_preflight_check.sql` 驗收
-  - [ ] 7. **【第十七輪新增】階段 2 回填完成、驗證無 NULL 之後，再執行一次 `pg_dump`**（`post_backfill_$(date +%Y%m%d_%H%M).dump`），作為比「遷移前」更近的還原點——回填是階段 1~3 唯一真正寫入資料的動作，`rollback_stage3.sql` 只還原 schema、救不了填錯的部門對應值
+  - [x] 5. 確認 `002`/`003` 的 SQL 全部包在 `BEGIN`/`COMMIT` 交易內——兩支腳本皆已包裹並成功 `COMMIT`
+  - [x] 6. 遷移執行後重跑驗收——`\d devices`/`\d alarms` 確認新約束正確生效，計數驗證 `alarms` 1759 筆、`devices` 14 筆不變，無 NULL、無重複
+  - [x] 7. 階段 2 回填完成、驗證無 NULL 之後執行一次 `pg_dump`——`post_backfill_20260812_0912.dump`（437 TOC entries，已驗證可讀）
+
+**【階段 1/2/3 全部執行完成】**
+- `001_add_department_columns.sql`：9張表加 `department` 欄位，`departments`/`login_attempts` 建表完成
+- `002_migrate_add_departments.sql`：建立 `mf4d` 部門，回填 `devices` 14筆／`alarms` 1759筆／`feedback` 76筆／`alarm_views` 3筆，`feedback` 剩 1 筆測試殘留資料留 NULL（符合 PLAN 1.5 節設計）；`line` 交叉驗證通過（`mf4d`／`2.1`=7、`mf4d`／`2.2`=7）
+- `003_switch_constraints.sql`：`devices` 主鍵 `id` 不動＋新增 `devices_dept_model_key UNIQUE(department, model)`；`alarms` 主鍵切換為 `PRIMARY KEY(department, device_model, code)`；兩表 `department` 皆已收緊 `NOT NULL`
 - [x] 執行重複值預檢：`00_preflight_check.sql` 已含此檢查，結果 **0 筆重複**，`alarms`/`devices` 均可安全繼續
 - [x] **【第十一輪額外查明】無外鍵指向 `alarms`/`devices` 舊主鍵**（0 筆），主鍵切換不用擔心連動；基準筆數 `alarms` 1759、`devices` 14、`ai_scans` 5，與既有記錄一致
 - [x] **【第十一輪額外查明】`devices.id` 是否為型號本身**：已確認不是（`id` 與 `model` 完全脫鉤），新機種安全建立不需要額外設計 id 產生規則
 - [x] **【第十一輪額外查明】`devices.line` 是否隱含跨部門資料**：已與使用者確認，`line`（2.1/2.2）只是同一部門內的產線分類標記，非隱藏的部門邊界，不影響現行「只有一個部門」的前提
 
-## 階段 1：建表與加欄位（對應計畫 1.1、1.2、1.3、1.4、2.2.1）— 全部 nullable，零行為變更
+## 階段 1：建表與加欄位（對應計畫 1.1、1.2、1.3、1.4、2.2.1）— 全部 nullable，零行為變更 — 【已完成，第十八輪】
 
-- [ ] 建立 `departments` 表（`id`/`name`/`pw_hash`/`admin_pw_hash`/`session_version`/`active`/`hidden`/`purgeable`/`created_at`）
-- [ ] 建立 `login_attempts` 表（`id`/`ip`/`department`（無 FK）/`success`/`attempted_at`），SQL 註記中明確標註 `department` 對不到 `departments` 表是刻意設計、不可被清理腳本誤刪
-- [ ] `devices` 加 `department` 欄位＋索引
-- [ ] `alarms` 加 `department` 欄位＋索引（先建 `(department, device_model, code)` unique index，暫不切主鍵）
-- [ ] `ai_scans`／`ai_corrections`／`ai_logs`／`alarm_history`／`feedback`／`alarm_views` 加 `department` 欄位＋索引（`feedback`/`alarm_views` 之後不加 `NOT NULL`，見 1.5、3.7）
+- [x] 建立 `departments` 表（`id`/`name`/`pw_hash`/`admin_pw_hash`/`session_version`/`active`/`hidden`/`purgeable`/`created_at`）——`backend/migrations/001_add_department_columns.sql`
+- [x] 建立 `login_attempts` 表（`id`/`ip`/`department`（無 FK）/`success`/`attempted_at`），SQL 註記中明確標註 `department` 對不到 `departments` 表是刻意設計、不可被清理腳本誤刪
+- [x] `devices` 加 `department` 欄位＋索引
+- [x] `alarms` 加 `department` 欄位＋索引
+- [x] `ai_scans`／`ai_corrections`／`ai_logs`／`alarm_history`／`feedback`／`alarm_views` 加 `department` 欄位＋索引
+- [x] 驗證：9 張表皆已取得 `department` 欄位，外鍵 `alarms_department_fkey`/`devices_department_fkey` 正確指向 `departments(id)`
 
-## 階段 2：遷移腳本（對應計畫 1.7）
+## 階段 2：遷移腳本（對應計畫 1.7）— 【已完成，第十九輪】
 
-- [ ] 撰寫 `backend/migrate_add_departments.py`：重複值預檢 → 用現有 `.env` 密碼雜湊建立預設部門（`hidden=false, purgeable=false`）→ `devices`/`alarms` 回填 → `feedback`/`alarm_views` best-effort 回填 → 印出處理筆數，可重複執行
-- [ ] 執行遷移腳本，驗證 `devices`/`alarms` 無 NULL
-- [ ] 驗證通過後，`devices.department`／`alarms.department` 加 `NOT NULL` 約束
+- [x] 撰寫 `backend/migrations/002_migrate_add_departments.sql`：重複值預檢（0 筆）→ 用現有 `.env` 密碼雜湊（`pbkdf2:sha256`，見 `gen_department_hashes.py`）建立 `mf4d` 部門（`hidden=false, purgeable=false`）→ `devices`/`alarms` 回填 → `feedback`/`alarm_views` best-effort 回填
+- [x] 執行遷移腳本，驗證 `devices`/`alarms` 無 NULL——`devices_null_dept=0`、`alarms_null_dept=0`；`feedback` 76 筆回填成功，剩 1 筆測試殘留資料（`code=TEST`）留 NULL 符合預期；`alarm_views` 3 筆全數回填
+- [x] `line` 交叉驗證：`mf4d`／`2.1`=7、`mf4d`／`2.2`=7，合計 14 筆，無非預期組合
+- [x] 回填後補一次 `pg_dump`（`post_backfill_20260812_0912.dump`，437 TOC entries，已驗證可讀）
 
-## 階段 3：主鍵/唯一約束切換（對應計畫 1.2、1.3、第 7 節步驟 3）— 獨立階段，必須在階段 5（storage.py 含 `upsert_one()`）之前完成
+## 階段 3：主鍵/唯一約束切換（對應計畫 1.2、1.3、第 7 節步驟 3）— 【已完成，第十九輪】— 獨立階段，已在階段 5（storage.py 含 `upsert_one()`）之前完成
 
-- [ ] **【第十一輪：已確認為混合型，工作量比原假設輕】** `devices` 主鍵 `id` 不動，只需 `alter table devices drop constraint devices_model_key;` + `alter table devices add constraint devices_dept_model_key unique (department, model);`（注意欄位名是 `model`）
-- [ ] `alarms` 主鍵從 `(device_model, code)` 切換為 `(department, device_model, code)`，執行並驗證（欄位名確認無誤，直接照 PLAN 1.3 節做）
-- [ ] 確認無其他表以外鍵指向這兩張表的舊主鍵（若有，先 drop 再重建）
+- [x] `devices` 主鍵 `id` 不動，`alter table devices drop constraint devices_model_key;` + `alter table devices add constraint devices_dept_model_key unique (department, model);` 已執行——`backend/migrations/003_switch_constraints.sql`
+- [x] `alarms` 主鍵從 `(device_model, code)` 切換為 `(department, device_model, code)`，已執行並用 `\d alarms` 驗證生效
+- [x] 確認無其他表以外鍵指向這兩張表的舊主鍵（第十一輪已查明 0 筆，此次未發現連動問題）
+- [x] `devices`/`alarms` 的 `department` 皆已收緊 `NOT NULL`
+- [x] 最終計數驗證：`alarms` 1759 筆、`devices` 14 筆，數量與遷移前一致，無 NULL、無重複
 
 ## 階段 4：後端 — 密碼與登入安全（對應計畫第 2 節，本清單風險最高的階段）
 
