@@ -102,7 +102,7 @@ def _validate_devices_exist(rows: list, department: str) -> tuple:
 
 def _create_missing_devices(missing_models: list, department: str) -> None:
     for model in missing_models:
-        new_id = f"M-{model}"
+        new_id = f"{department}-{model}"
         devices_store.upsert_one(
             {"id": new_id, "model": model, "category": "", "line": ""},
             department=department,
@@ -208,7 +208,7 @@ def main():
 
     if args.mode == "replace":
         print(f"\n整批取代寫入（含刪除）...")
-        alarms_store.save(rows, department=args.department)
+        alarms_store.save(rows, department=args.department, on_conflict="department,device_model,code")
     else:
         print(f"\n逐筆 upsert（append/upsert 模式，不刪除既有資料）...")
         for r in rows:

@@ -1575,3 +1575,50 @@ def test_resolve_target_department_does_not_read_request_args():
    **修正**：`_validate_devices_exist()` 拿掉 `create_missing` 參數，單純回報缺什麼，不在函式內部因為旗標值改變回傳語意；是否自動建立完全交給 `main()` 依旗標判斷。修正後重新測試「機種缺失＋`--create-missing-devices`」情境：機種正確建立（`devices.json` 新增一筆）、警報正確寫入，不再產生孤兒資料。
 
 **影響範圍**：`backend/import_alarms.py` 的 `_validate_devices_exist()` 簽名與內部邏輯；59 個既有 pytest 不受影響；此修正在把程式碼交給專家審查之前完成，屬於一次額外的自我覆核收穫，說明「回頭準備審查材料」這個動作本身也有除錯價值——重新以「別人要看」的心態通讀程式碼，跟寫完當下的心態不同，容易抓到當時漏掉的路徑組合。
+
+---
+
+第二十七輪審查（外部專家完整審查核心程式碼，發現並修正三個 🔴 級「安靜地錯」的問題）：
+
+**背景**：把 `storage.py`/`app.py`/`ai_memory.py`/`ai_pipeline.py`/`import_alarms.py`/`test_route_auth_registry.py` 六個核心檔案（連同背景說明、已知過渡期妥協、自己抓到的兩個 bug 記錄）整理成審查包交給外部專家做程式碼層級審查——這是這批程式碼第一次接受設計文件之外的獨立審查。專家的評語：「程式碼品質比多數第一版好——`_row_to_device()` 的單點轉換守住了、`resolve_target_department()` 確實只讀 path、登入分岔沒有 fallthrough、`_remaining_delay()` 的倒數視窗修對了」，但指出三個會在**推廣第二部門或正式上線當天**才會現形的問題，其中兩個屬於「安靜地錯」（不報錯、資料悄悄壞掉），與這批程式碼自己抓到的兩個 bug 是同一類性質。
+
+**🔴 1. `devices.id` 產生規則 `f"M-{model}"` 沒把部門算進去，第二個部門建同型號機種會撞主鍵 500（已修正）**
+
+`devices.id` 是全域唯一主鍵，但 `app.py` 的 `create_device()` 與 `import_alarms.py` 的 `_create_missing_devices()` 都用 `f"M-{model}"` 產生 id，沒有把 `department` 算進去。當 LINE21 已有 `PILM003`（`id="M-PILM003"`），LINE3 管理員新增同型號機種時：`upsert_one()` 的 `on_conflict="department,model"` 檢查通過（`(LINE3, PILM003)` 不存在於複合唯一鍵），但走 INSERT 時 `id="M-PILM003"` 撞上既有主鍵，`23505 unique_violation` → 500。**這正好是整個多部門隔離工程存在的理由**（1.3 節：不同部門可能買同型號設備），而且只有在真正推廣第二部門、且該部門第一次新增與其他部門同型號的機種時才會出現，先前所有測試都只用單一部門或不同型號測試，完全沒踩到。
+
+修正：兩處都改為 `f"{target}-{model}"` / `f"{department}-{model}"`，讓 id 天然包含部門前綴，不會跨部門衝突（既有 14 筆 `M-` 格式資料不動，`id` 本來就不需要有語意）。**用真實 Supabase 連線驗證**：建立兩個臨時部門 `zztest_a`/`zztest_b`，各自新增同型號機種 `PILM003`，確認兩者 id 分別為 `zztest_a-PILM003`/`zztest_b-PILM003`、互不衝突，各自 `load()` 只看得到自己的機種。
+
+**🔴 2. `.env` 明文比對 fallback 的守衛條件看表單內容，正式環境可被繞過節流（已修正）**
+
+`/login`、`/admin/login` 的守衛條件原本是 `if _use_supabase() and form_department:`——只要請求裡不送 `department` 欄位（不論正式或本機環境），就會掉進下方「本機/測試模式 fallback：`.env` 明文比對」的分支。後果：完全繞過 `_check_login_throttle()`（無限次嘗試、不寫入 `login_attempts` 任何紀錄）、明文比對舊的 `ADMIN_PASSWORD`/`LOGIN_PASSWORD`、沒有 `session_version`。雖然拿到的 session 會被 `assert_session_valid()`（`_dept_cached("local")` 回 `None`）擋下 401，但這是靠第二道防線在救，第一道防線（節流＋雜湊比對）本身形同虛設——攻擊者可以無限次測 `ADMIN_PASSWORD` 而不留任何痕跡，是一個無節流、無稽核紀錄的密碼預言機。
+
+修正：守衛條件改成純看環境（`if _use_supabase():`），跟表單內容脫鉤；`.env` fallback 分支現在只有 `_use_supabase()` 為 `False`（本機/測試模式）才可能執行到。兩個登入端點都已修正。**待辦（非本輪修正範圍）**：正式環境的 `.env` 建議直接移除 `LOGIN_PASSWORD`/`ADMIN_PASSWORD`，遷移腳本已把它們雜湊進 `departments` 表，留著只是風險，留待部署階段處理。
+
+**🔴 3. `save()` 的刪除掃描沒有分頁，超過 1000 筆的表在 `replace` 模式下會安靜少刪（已修正）**
+
+`SupabaseStore.load()` 正確地用 `page_size=1000` 迴圈處理 PostgREST 單次回傳上限，但 `save()` 內部「刪除不在新清單裡的舊資料」的掃描只發一次 GET、沒有分頁。`alarms` 表現有 1759 筆，若對超過 1000 筆的部門執行 `import_alarms.py --mode replace`，只會掃到前 ~1000 筆，其餘該刪的舊資料留在資料庫裡，且指令會印出「完成」不報任何錯——`replace` 的整批取代語意安靜失效。方向上是「少刪不是誤刪」所以不會掉資料，但與這批程式碼自己抓到的另外兩個 bug 是同一類「安靜地錯」。
+
+修正：抽出 `_paginated_get(qs, order_field)` helper，`load()` 與 `save()` 的刪除掃描都改用它。**用真實 Supabase 連線驗證**：`load(department="mf4d")` 重構後仍正確回傳全部 1759 筆警報、14 筆機種（計數不變，證明分頁邏輯抽取正確）；另外在臨時部門上測試 `save()` 整批取代，確認新舊資料正確替換、其他部門資料不受影響。
+
+**🟡 4/5. `save()` 缺少 `on_conflict` 參數；`_device_payload_to_row()` 路徑下 `save()` 未保留 `id`（已一併修正）**
+
+`upsert_one()` 的 docstring 花篇幅解釋「PostgREST upsert 預設取主鍵，必須明確指定 on_conflict」，但 `save()` 自己沒有這個參數，POST 時完全沒帶 `on_conflict` query string。`alarms` 表主鍵剛好已切換成 `(department, device_model, code)` 所以目前無害，但 `devices` 表主鍵是 `id`，若透過 `save()` 走 `devices_store`（例如日後有人寫機種批次匯入），行為會不符預期。同時 `save()` 在 `is_devices` 分支呼叫 `_device_payload_to_row()` 轉換時沒有保留原始 `item["id"]`，是與階段 20 審查中 `upsert_one()` 曾踩過的同一種疏漏（`_device_payload_to_row()` 是為 POST body 設計，不含 `id`）。
+
+修正：`save()` 新增 `on_conflict: Optional[str] = None` 參數（未指定時 fallback 用 `pk_fields` 組成，維持向下相容），呼叫端（`import_alarms.py` 的 `replace` 模式）已更新明確傳入 `on_conflict="department,device_model,code"`；`save()` 在 devices 分支比照 `upsert_one()` 的既有寫法補上 `id` 保留邏輯；`JsonStore.save()` 同步加上（忽略的）`on_conflict` 參數，維持兩個 store 呼叫端介面一致。用真實 Supabase 連線驗證：`devices_store.save(..., on_conflict="department,model")` 正確整批取代，帶著正確的 `id`/`category`/`line` 值寫入。
+
+**🟢 對「最沒把握的部分」的專家判斷（未發現問題，記錄供參考）**
+
+- **PostgREST query string injection 風險**：專家判斷安全——欄位名與運算子全部來自程式碼常數，只有值是變數且一律走 `urllib.parse.quote(v, safe='')`，關鍵字元（逗號、括號）會被正確編碼，`.` 不編碼但 PostgREST 只取第一個 `.` 前當運算子不影響正確性，加上 `DEPT_ID_RE` 限制部門 id 字元集。唯一建議：`AiScanStore.cleanup_expired()` 的 `quote(tier)` 用預設 `safe='/'` 跟其他地方不一致，目前 `tier` 來自程式碼常數無害，但建議統一成 `safe=''` 防止日後變成使用者輸入時出問題（**待辦，非阻塞**）
+- **`DeptScope.ALL` 不加過濾約束**：專家確認目前邏輯上成立（`_dept_qs(None)` 回空字串、`.load(department=None)` 跳過條件），但屬於「邏輯自然滿足」而非有測試守著，建議補一筆哨兵孤兒資料（`department IS NULL`）＋一條斷言，讓這條約束變成可驗證的而非只靠程式碼慣例維持（**待辦，對應 PLAN 3.7 節，留到 `sentinel_pack` 執行階段**）
+- **`import_alarms.py` 的 `_validate_devices_exist()`**：專家確認第二十六輪的修正「寫得很紮實」，剩下的兩個小問題（`M-{model}` id、`save()` 分頁）就是本輪 🔴1/🔴3，已一併修正
+
+**🟡 已記錄、留待後續處理的非阻塞項目（專家原始清單，未在本輪修正）**
+
+6. `AiScanStore._get()`／`storage.py` 共 11 處 `except Exception: return []`，網路抖動、查詢語法錯、權限問題全部表現成「今日掃描數 0」，管理員會誤判成「今天沒人用」而非「查詢失敗」——建議至少統計路徑改成往外拋或回傳明確錯誤標記
+7. `admin_logout()` 只 `session.pop("admin")`/`session.pop("superadmin")`，沒有 `session.clear()`，殘留 `auth=True`／`department`；對超管而言 `department=None`，登出後台後 `scope_department()` 會一律 401，前台永久壞掉直到重新登入——建議比照 `/logout` 直接 `session.clear()`
+8. `resolve_target_department()` 對超管直接回傳 path 值不驗證存在性，`scope_department()` 的 `?dept=` 同理；打錯字在有 FK 的表變 500、在無 FK 的表（`ai_scans`/`feedback`）安靜寫入孤兒列——建議超管路徑也查一次 `_dept_cached()`，不存在就 404
+9. `ai_scan_store.load_scans(limit=5000)` 在 `DeptScope.ALL`（不帶部門過濾）時取的是全公司最近 5000 筆，若某部門特別忙會洗掉其他部門在總覽統計裡的佔比，部門數變多後問題放大
+10. `/api/server-url` 是 `public_endpoint` 且會回傳內網 IP，系統已上公網後這個端點免登入就洩漏內網位址——建議改 `login_required` 或偵測到 `RENDER_EXTERNAL_URL` 時不走 LAN 分支
+11. `whoami` 回應缺少 `department_name`（部門顯示名稱），前台 topbar 要顯示「2.1線」而非 `line21` 時繞不過去——趁前端還沒開工先補上這個欄位（對應 PLAN 5.3 節）
+
+**影響範圍**：`backend/app.py`（`create_device()` id 產生規則、`login_submit()`/`admin_login_submit()` 守衛條件）；`backend/import_alarms.py`（`_create_missing_devices()` id 產生規則、`replace` 模式明確傳入 `on_conflict`）；`backend/storage.py`（新增 `_paginated_get()` helper、`load()`/`save()` 改用它、`save()` 新增 `on_conflict` 參數並補 `id` 保留邏輯、`JsonStore.save()` 同步加參數維持介面一致）；59 個既有 pytest 全數通過；用真實 Supabase 連線驗證三項 🔴 修正（跨部門同名機種、`load()` 分頁計數不變、`save()` 整批取代含 `on_conflict`），驗證用臨時部門 `zztest_a`/`zztest_b` 已 purge 清除，正式資料（`mf4d`：1759 警報、14 機種）全程未受影響。🟡6-11 六項記錄為待辦，非阻塞，部分留到部署階段（🟡8 待辦）、部分留到 `sentinel_pack` 執行階段（`DeptScope.ALL` 孤兒資料驗證）、部分留到前端開工前（🟡11 `whoami` 補欄位）。

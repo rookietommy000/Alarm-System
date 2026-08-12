@@ -49,7 +49,7 @@ class JsonStore:
             items = [_row_to_device(row) for row in items]
         return items
 
-    def save(self, items: list, department: Optional[str] = None) -> None:
+    def save(self, items: list, department: Optional[str] = None, on_conflict: Optional[str] = None) -> None:
         with self._lock:
             write_items = [_device_payload_to_row(i) for i in items] if self.is_devices else items
             if self.is_devices:
@@ -166,19 +166,27 @@ class SupabaseStore:
             raw = r.read().decode()
             return json.loads(raw) if raw.strip() else []
 
-    def load(self, department: Optional[str] = None) -> list:
+    def _paginated_get(self, qs: str, order_field: str) -> list:
+        """PostgREST 單次 GET 有列數上限（Supabase 預設 1000），任何可能掃到
+        整張表的查詢都必須走這裡分頁，不能只發一次 GET（外部審查發現：save()
+        的刪除掃描先前沒分頁，資料表超過 1000 筆時 replace 模式會安靜少刪）。"""
         page_size = 1000
         result = []
         offset = 0
-        qs = f"select=*&order={self.pk}&limit={page_size}"
-        if department is not None:
-            qs += f"&department=eq.{urllib.parse.quote(department, safe='')}"
+        full_qs = f"{qs}&order={order_field}&limit={page_size}"
         while True:
-            batch = self._req("GET", f"{self.table}?{qs}&offset={offset}")
+            batch = self._req("GET", f"{self.table}?{full_qs}&offset={offset}")
             result.extend(batch)
             if len(batch) < page_size:
                 break
             offset += page_size
+        return result
+
+    def load(self, department: Optional[str] = None) -> list:
+        qs = "select=*"
+        if department is not None:
+            qs += f"&department=eq.{urllib.parse.quote(department, safe='')}"
+        result = self._paginated_get(qs, self.pk)
         if self.is_devices:
             result = [_row_to_device(row) for row in result]
         return result
@@ -186,23 +194,32 @@ class SupabaseStore:
     def _row_key(self, row: dict) -> tuple:
         return tuple(str(row.get(f, "")) for f in self.pk_fields)
 
-    def save(self, items: list, department: Optional[str] = None) -> None:
+    def save(self, items: list, department: Optional[str] = None, on_conflict: Optional[str] = None) -> None:
         """整批取代語意。若 department 有值，刪除掃描比對只在該部門範圍內進行
         （PLAN 3.1 節：避免存 A 部門資料時把 B 部門資料誤刪）。
 
         用於 devices_store 的批次匯入／管理頁全量儲存，以及 alarms 的批次匯入
         （第 6 節新工具）。單筆 CRUD 一律改走 upsert_one()/delete_one()。
+
+        on_conflict：同 upsert_one() 的理由（PostgREST upsert 預設取主鍵，不會
+        自動用新建的 unique index），未指定時 fallback 用 pk_fields 組成，跟
+        upsert_one() 的呼叫端保持一致的簽名（外部審查發現：先前 save() 完全
+        沒帶這個參數，devices 表主鍵是 id，會打錯約束）。
         """
         write_items = items
         if self.is_devices:
             write_items = [_device_payload_to_row(item) for item in items]
+            for row, original in zip(write_items, items):
+                if "id" in original:
+                    row["id"] = original["id"]
             if department is not None:
                 for row in write_items:
                     row["department"] = department
 
         # Step 1: upsert all items in the new list — never deletes, so safe if network drops
         if write_items:
-            self._req("POST", self.table, write_items,
+            conflict_target = on_conflict or ",".join(self.pk_fields)
+            self._req("POST", f"{self.table}?on_conflict={conflict_target}", write_items,
                       extra_headers={"Prefer": "resolution=merge-duplicates,return=minimal"})
 
         # Step 2: delete only rows whose PK is no longer in the list
@@ -211,7 +228,7 @@ class SupabaseStore:
         scan_qs = f"select={select_fields}"
         if department is not None:
             scan_qs += f"&department=eq.{urllib.parse.quote(department, safe='')}"
-        existing = self._req("GET", f"{self.table}?{scan_qs}")
+        existing = self._paginated_get(scan_qs, self.pk_fields[0])
         to_delete = [row for row in existing if self._row_key(row) not in new_keys]
         for row in to_delete:
             qs = "&".join(f"{f}=eq.{urllib.parse.quote(str(row[f]), safe='')}" for f in self.pk_fields)

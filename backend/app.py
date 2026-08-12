@@ -209,7 +209,12 @@ def create_app() -> Flask:
         pw = (request.form.get("password") or "").strip()
         form_department = (request.form.get("department") or "").strip()
 
-        if _use_supabase() and form_department:
+        # 守衛條件只看環境，不看表單內容——若含 form_department 判斷，正式環境下
+        # 只要不送 department 欄位就會掉進下方的 .env 明文比對 fallback，繞過節流
+        # 與雜湊比對，變成一個無節流、無稽核紀錄的密碼預言機（外部審查發現）。
+        if _use_supabase():
+            if not form_department:
+                return redirect(url_for("login_page", error=1))
             throttled = _check_login_throttle(form_department)
             if throttled is not None:
                 return throttled
@@ -219,7 +224,7 @@ def create_app() -> Flask:
             next_url = request.form.get("next") or request.args.get("next", "/app")
             return redirect(next_url if next_url.startswith("/") else "/app")
 
-        # 本機/測試模式 fallback：.env 明文比對
+        # 本機/測試模式 fallback：.env 明文比對（只有 _use_supabase()=False 才會到這裡）
         if pw == os.environ.get("LOGIN_PASSWORD", ""):
             session.clear()
             session["auth"] = True
@@ -331,7 +336,10 @@ def create_app() -> Flask:
         pw = (request.form.get("password") or "").strip()
         form_department = (request.form.get("department") or "").strip()
 
-        if _use_supabase() and form_department:
+        # 守衛條件只看環境，不看表單內容——理由同 login_submit()
+        if _use_supabase():
+            if not form_department:
+                return redirect(url_for("admin_login_page", error=1))
             throttled = _check_login_throttle(form_department)
             if throttled is not None:
                 return throttled
@@ -340,7 +348,7 @@ def create_app() -> Flask:
                 return redirect(url_for("admin_login_page", error=1))
             return redirect("/admin")
 
-        # 本機/測試模式 fallback：.env 明文比對
+        # 本機/測試模式 fallback：.env 明文比對（只有 _use_supabase()=False 才會到這裡）
         if pw == os.environ.get("ADMIN_PASSWORD", ""):
             session.clear()
             session["admin"] = True
@@ -429,7 +437,7 @@ def create_app() -> Flask:
         items = devices_store.load(department=target)
         if any(d.get("model") == model for d in items):
             abort(409, "機種已存在")
-        new_id = (body.get("id") or "").strip() or f"M-{model}"
+        new_id = (body.get("id") or "").strip() or f"{target}-{model}"
         device = devices_store.upsert_one(
             {"id": new_id, "model": model,
              "category": (body.get("category") or "").strip(),
