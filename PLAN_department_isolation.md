@@ -1453,3 +1453,23 @@ def test_resolve_target_department_does_not_read_request_args():
 **共同邏輯（專家原話，記錄供日後類似判斷參考）**：兩題本質是同一件事——要不要為了「外觀乾淨」去動已經在運作的東西。`line` 長得像部門不代表要改設計；`model`/`device_model` 名字不一致不代表要為了一致去動 76 處前端。兩題答案都是「不動」，理由相同：外觀問題與實質風險不對等，這與先前「PLAN 改用實際欄位名、不改資料庫」是同一條原則的延伸。
 
 **影響範圍**：1.2 節新增 `department`/`line` 定義句；3.1.1 節整段改寫為永久雙 key 設計＋三條配套規則；4.4 節新增路由參數命名說明；階段 12（`sentinel_pack` seed 腳本）與階段 3（devices 唯一約束切換）的內容原本就已對齊 `department, model` 複合鍵，此輪未發現需要額外修改之處，僅 3.1.1 節整段更新。
+
+---
+
+第二十輪審查（`storage.py` 完整改寫並用真實 Supabase 連線逐項實測，發現一個實作細節缺口）：
+
+**背景**：階段 5 依 PLAN 第 3 節完整改寫 `backend/storage.py`（`department` 參數化、`_row_to_device()`／`_device_payload_to_row()` 雙 key 轉換、`upsert_one()`/`delete_one()`、`DepartmentStore`、`save()` 部門過濾），一次寫完整份檔案。由於這些改動大量涉及 `SupabaseStore`（走 PostgREST），pytest 只覆蓋 `JsonStore` 路徑，因此額外用 `.venv/bin/python3` 直接對真實 Supabase 連線逐項手動驗證，過程中發現一個實作疏漏。
+
+**🟡 `upsert_one()` 首次實作遺漏 `id` 欄位傳遞（已修正，非設計缺陷）**
+1. **`_device_payload_to_row()` 原本是為 `POST /api/devices` 的 body 轉換設計的**（body 不含 `id`，`id` 由伺服器端生成），但 `upsert_one()` 直接複用這個函式時，沒有把呼叫端傳入的 `id` 值保留下來，導致第一次測試 `devices_store.upsert_one()` 時撞上 `devices.id` 的 `NOT NULL` 約束（`23502` 錯誤）。修正為 `upsert_one()` 內部轉換後，若原始 `item` 含 `id`，明確保留該值，不依賴 `_device_payload_to_row()` 的通用轉換覆蓋掉呼叫端指定的主鍵 → 修正後用臨時測試資料重新驗證，`upsert_one()`／`delete_one()` 對 `devices`／`alarms` 皆正常運作，無殘留資料
+
+**🟢 完整改寫並實測通過的項目**
+2. `_row_to_device()` 永久雙 key：14 筆真實 `devices` 資料驗證 `model`/`device_model` 值一致
+3. `upsert_one()`/`delete_one()`：`devices`（`on_conflict=department,model`）與 `alarms`（`on_conflict=department,device_model,code`）皆用真實寫入/刪除測試，資料無殘留
+4. `save()` 部門過濾修正：建立臨時測試部門 `zztest`（`purgeable=true`），驗證 `save([], department='zztest')` 只刪除 `zztest` 部門資料，`mf4d` 14 筆完全不受影響——直接驗證了 PLAN 3.1 節要點的「刪除掃描地雷」修正確實生效
+5. `DepartmentStore`：`list()` 確認不洩漏 `pw_hash`/`admin_pw_hash`；`get_by_id()` 含 `session_version`/`active`；`list_public()` 正確回傳 `id`/`name`；對不存在部門回傳 `None`；`purge()` 的二次確認與 `purgeable` 保護機制皆用臨時部門完整走過一次（建立→寫入關聯資料→purge→確認清除），過程中意外驗證了 `devices.department` 外鍵約束確實會擋下指向不存在部門的寫入（用不存在的假部門 `__zztest__save__` 測試 `save()` 時，直接被 FK 擋下 409，改用真實建立的臨時部門才測通）
+
+**🟢 過渡期設計確認符合 PLAN 4.8 節**
+6. 所有新加的 `department` 參數（`load()`/`save()`/`append()`/`log()` 等）皆保留 `None` 預設值，`AuditLogger`/`FeedbackStore`/`ViewStore`/`AiScanStore` 目前呼叫端（舊版 `app.py`）不帶 `department` 也能正常運作——57 個既有 pytest 全數通過，確認過渡期行為與階段 5 部署要求（先驗證行為不變）一致
+
+**影響範圍**：`backend/storage.py` 完整改寫；驗證方式記錄在案（Supabase 真實連線手動測試，非 pytest），供日後类似「pytest 覆蓋不到 SupabaseStore 路徑」的情境參考；`DepartmentStore.check_login()` 尚未實作（原 PLAN 3.3 節列出但實際登入比對邏輯屬於階段 7 `app.py` 的職責，改為 `app.py` 直接呼叫 `get_by_id()` 取雜湊後用 `werkzeug.security.check_password_hash()` 比對，不在 `storage.py` 內建密碼比對方法）。

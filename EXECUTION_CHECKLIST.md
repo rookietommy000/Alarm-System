@@ -110,17 +110,19 @@
 - [ ] `login_attempts` 寫入三段式判斷：格式不合法（不符 `DEPT_ID_RE`）不查 DB 不寫入；格式合法但部門不存在照常寫入 `success=false`；已在節流窗口內的請求只回 429 不再寫入
 - [ ] `cleanup-expired` 端點新增 `delete from login_attempts where attempted_at < now() - interval '90 days'`
 
-## 階段 5：後端 — `storage.py`（對應計畫第 3 節）
+## 階段 5：後端 — `storage.py`（對應計畫第 3 節）— 【核心改寫已完成，第二十輪】
 
-- [ ] 修正 `SupabaseStore.save()` 刪除掃描地雷：`devices_store` 加 `department=eq.<dept>` 過濾
-- [ ] 新增 `upsert_one()`／`delete_one()`，**明確指定 `on_conflict`**（`alarms`: `department,device_model,code`；`devices`: `department,model`——注意 `devices` 表欄位實際叫 `model`，不是 `device_model`），`alarms`/`devices` 單筆 CRUD 改用這兩個方法
-- [ ] **【第十九輪定案】`_row_to_device()` 採永久雙 key**（不是過渡期）：回傳同時含 `model` 與 `device_model` 兩個 key 指向同一個值；前端 76 處（`index.html` 40、`dashboard.html` 36）維持讀 `model` 不動；寫入路徑（`POST`/`PUT /api/devices`）兩個 key 都要接受並統一轉成 `model` 寫入 DB；新程式碼（`js/api.js`、部門切換器等）一律用 `device_model`；轉換邏輯只能存在於 `_row_to_device()` 這一處，不得讓 `row["model"]` 漏到 `app.py`（見 PLAN 3.1.1 節）
-- [ ] `JsonStore.load()`/`save()` 加 `department=None` 參數（忽略，維持單租戶相容，僅服務 pytest）
-- [ ] 另建獨立 Supabase 開發專案（schema 相同），本機開發連線資訊放 `.env.local` 並加入 `.gitignore`——**不要**讓 `JsonStore` 支援多部門過濾
-- [ ] 新增 `DepartmentStore` 類別：`list()`（含 `hidden`/`purgeable`，絕不回傳密碼雜湊）、`get_by_id()`（含 `session_version`/`active`）、`check_login()`、`create()`、`update_name()`、`update_password()`（連帶 `session_version += 1`）、`set_active()`、`purge(dept_id, confirm_id)`
-- [ ] `purge()` 保護機制：僅 `purgeable=true` 可執行（建立時固定，不由時間/登入紀錄推斷），需 `confirm_id` 與 `dept_id` 相符二次確認
-- [ ] 3.6 節：`AuditLogger`/`FeedbackStore`/`ViewStore`/`AiScanStore`/`ai_memory` 所有涉及部門的方法，`department` 參數改必填（遷移期暫留預設值 `None`，階段 10 上線後同一次 commit 內移除）
-- [ ] 3.7 節：確認 `DeptScope.ALL` 路徑的 query builder 不加任何 `department` 相關過濾條件（含容易被誤加的 `.not.is.null`），程式碼加註解說明約束
+- [x] 修正 `SupabaseStore.save()` 刪除掃描地雷：`department` 有值時刪除掃描比對加 `department=eq.<dept>` 過濾（`devices`/`alarms` 皆適用），實測驗證：`save([], department='zztest')` 只刪 `zztest` 部門資料，`mf4d` 14 筆完全不受影響
+- [x] 新增 `upsert_one()`／`delete_one()`，**明確指定 `on_conflict`**（`alarms`: `department,device_model,code`；`devices`: `department,model`），已用真實 Supabase 連線測試寫入/刪除，過程無殘留資料
+- [x] **【第十九輪定案】`_row_to_device()` 採永久雙 key**（不是過渡期）：回傳同時含 `model` 與 `device_model` 兩個 key 指向同一個值；已實測驗證 14 筆 `devices` 資料雙 key 值一致；`_device_payload_to_row()` 做寫入方向對稱轉換（兩個 key 都接受，統一轉 `model` 寫入 DB）
+- [x] `JsonStore.load()`/`save()` 加 `department=None` 參數（忽略，維持單租戶相容，僅服務 pytest）——57 個既有測試全綠
+- [ ] 另建獨立 Supabase 開發專案（schema 相同），本機開發連線資訊放 `.env.local` 並加入 `.gitignore`——**不要**讓 `JsonStore` 支援多部門過濾（尚未執行，非阻塞項，可延後）
+- [x] 新增 `DepartmentStore` 類別：`list()`（含 `hidden`/`purgeable`，已實測確認絕不回傳密碼雜湊）、`get_by_id()`（含 `session_version`/`active`，已驗證）、`list_public()`（供 `/api/departments/public` 用）、`create()`、`update_name()`、`update_password()`（連帶 `session_version += 1`）、`set_active()`、`purge(dept_id, confirm_id)`
+- [x] `purge()` 保護機制：僅 `purgeable=true` 可執行，需 `confirm_id` 與 `dept_id` 相符二次確認——已建立臨時測試部門 `zztest` 實測整套流程（建立→寫入→purge），確認 `mf4d` 資料全程未受影響
+- [ ] 3.6 節：`AuditLogger`/`FeedbackStore`/`ViewStore`/`AiScanStore`/`ai_memory` 所有涉及部門的方法，`department` 參數改必填——**目前處於過渡期，全部保留預設值 `None`**（PLAN 4.8 節），待階段 11 部署 `app.py` 時在同一次 commit 內移除預設值
+- [ ] 3.7 節：確認 `DeptScope.ALL` 路徑的 query builder 不加任何 `department` 相關過濾條件（含容易被誤加的 `.not.is.null`）——`load()`/`stats()` 系列方法已支援 `department=None` 時不加過濾，符合此節要求，但正式的 `scope_department()` 呼叫邏輯要到階段 7（`app.py`）才會寫
+
+**驗證方式**：未透過 pytest（Supabase 連線非測試環境覆蓋範圍），改用 `.venv/bin/python3` 直接呼叫 real Supabase 逐項手動驗證（`load()`、`upsert_one()`/`delete_one()`、`save()` 部門過濾、`DepartmentStore` 讀取/`purge()`），過程中建立的所有臨時測試資料（`zztest` 部門、`TEST-UPSERT-*`/`TEST-MODEL`/`TEST-CODE`）皆已清除，最終確認 `alarms` 1759 筆、`devices` 14 筆、`departments` 僅 `mf4d` 一筆，與階段 3 完成時一致。
 
 ## 階段 6：後端 — AI 管線部門隔離（對應計畫 3.5）
 
