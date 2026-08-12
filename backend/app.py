@@ -170,6 +170,10 @@ def create_app() -> Flask:
             viewing = request.args.get("dept")
             if not viewing or viewing == "__all__":
                 return (DeptScope.ALL, None)
+            # 超管的 ?dept= 打錯字時，過去會安靜回空清單（外部審查發現）。
+            # 加一次存在性驗證，不存在就 404，跟一般帳號越權時的行為一致。
+            if _use_supabase() and _dept_cached(viewing) is None:
+                abort(404)
             return (DeptScope.DEPT, viewing)
         dept = session.get("department")
         if not dept:
@@ -180,6 +184,11 @@ def create_app() -> Flask:
         """寫入端點用：決定這次寫入要落在哪個部門。path_department 只來自 URL path，
         不讀 request.args、不讀 body 的 department 欄位（配套規則 a）。"""
         if is_superadmin():
+            # 超管路徑打錯字時，過去會在有 FK 的表變 500、在無 FK 的表
+            # （ai_scans/feedback）安靜寫入孤兒列（外部審查發現）。加一次
+            # 存在性驗證，不存在就 404。
+            if _use_supabase() and _dept_cached(path_department) is None:
+                abort(404)
             return path_department  # 超管：path 段就是明確指定的目標，直接採用
         dept = session.get("department")
         if not dept:
@@ -360,8 +369,11 @@ def create_app() -> Flask:
     @app.get("/admin/logout")
     @public_endpoint
     def admin_logout():
-        session.pop("admin", None)
-        session.pop("superadmin", None)
+        # session.clear()，不只 pop admin/superadmin（外部審查發現：只 pop
+        # 這兩個鍵會殘留 auth=True／department，對超管而言 department 是
+        # None，登出後台後 scope_department() 會一律 401，前台永久壞掉
+        # 直到重新登入）。比照 /logout 直接清空整個 session。
+        session.clear()
         return redirect("/app")
 
     # ── Data normalize ──────────────────────────────────────────────

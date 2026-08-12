@@ -1692,3 +1692,37 @@ mf4d impact counts: {'alarms': 1759, 'ai_scans': 0, 'ai_corrections': 0,
 **三輪外部審查小結**：第一輪三個 🔴（會直接讓功能爆掉的問題：機種 id 跨部門衝突、登入節流可被繞過、`save()` 完全沒分頁）、第二輪一個 🔴（前一輪修了一半：分頁迴圈補上但排序鍵不唯一）、第三輪一個 ⚪（防禦性寫法的價值判斷：拿不到答案時該拋錯還是給預設值）。問題嚴重度逐輪收斂，跟先前 27 輪設計審查的收尾模式一致，是可以停止審查、進入部署階段的訊號。專家並確認 `js/api.js`、`sw.js` 不依賴這批端點，可以與部署階段平行進行。
 
 **影響範圍**：`backend/storage.py` 的 `DepartmentStore._count()`；59 個既有 pytest 全數通過；用真實 Supabase 連線驗證正常路徑與零列路徑皆正確。這是「核心後端程式碼交付外部審查」這條支線的最後一輪，接下來進入部署前置作業（`department` 參數改必填 → 部署 `storage.py`/`app.py` → `sentinel_pack` 驗證），與前端（等待使用者 design 稿轉換）可平行進行。
+
+---
+
+第三十輪審查（處理外部審查 🟡6-10 五項後續待辦，逐項評估後三項修正、一項確認無需修正、一項記錄不動）：
+
+**背景**：三輪外部審查的 🔴/⚪ 全部處理完後，回頭處理先前列為「非阻塞」的六項 🟡 待辦（🟡11 `whoami` 已在第二十八輪處理）。逐項評估後發現不是每項都該用同一種方式處理，性質差異頗大。
+
+**🟡7. `admin_logout()` 沒有 `session.clear()`（已修正）**
+
+原本只 `session.pop("admin")`/`session.pop("superadmin")`，殘留 `auth=True`／`department`。對超管而言 `department` 是 `None`，登出後台後任何 `scope_department()` 呼叫都會 `abort(401)`，前台永久壞掉直到重新登入——比對 `/logout` 端點（已經是 `session.clear()`），這是行為不一致。修正為比照 `/logout` 直接 `session.clear()`。**用真實測試驗證**：登出後 `session` 字典為空 `{}`。
+
+**🟡8. 超管路徑/`?dept=` 不驗證部門存在性（已修正）**
+
+`scope_department()`（讀取用）與 `resolve_target_department()`（寫入用）對超管的處理原本都直接採用 path/`?dept=` 的值，不驗證是否真的存在。打錯字時：讀取路徑安靜回空清單（看起來像「這個部門沒有資料」而非「這個部門不存在」）；寫入路徑在有 FK 的表（`devices`/`alarms`）撞外鍵變 500，在無 FK 的表（`ai_scans`/`feedback`）安靜寫入孤兒列。修正為兩處都加一次 `_dept_cached()` 存在性驗證（沿用既有的 60 秒行程內快取，不加額外查詢成本），不存在就 `abort(404)`，與一般帳號越權時的回應行為一致。**用真實測試驗證**：超管帶 `?dept=zz_not_exist` 打 `GET /api/alarms` → 404；帶 `?dept=mf4d`（存在）→ 200，1759 筆正常；超管對不存在的部門發 `POST /api/devices/zz_not_exist` → 404（先前會安靜寫入或撞 FK 500）。
+
+**🟡9. `limit=5000` 統計扭曲（記錄為待辦，本輪不修）**
+
+`AiScanStore.load_scans(limit=5000)` 等方法在 `DeptScope.ALL`（總管不過濾）情境下，取的是全公司最近 5000 筆而非「每個部門各自的最近 N 筆」，若某部門流量特別大會洗掉其他部門在總覽統計裡的佔比。**判斷不在本輪修正**：這不是能靠改一個數字解決的 bug，正確修法（例如分部門獨立統計後再合併）屬於統計功能設計變更，且目前系統只有 `mf4d` 一個部門，這個問題要等真正有第二個部門且流量不均時才會顯現、也才看得出實際該怎麼設計。記錄下來，留到有第二個真實部門上線後依實際情況決定。
+
+**🟡10. `/api/server-url` 公開洩漏內網 IP（重新檢查後確認現有實作已正確，無需修正）**
+
+重新檢查 `server_url()` 的實作，發現它已經有 `RENDER_EXTERNAL_URL`／`PUBLIC_URL` 環境變數的分支：正式環境（Render 部署，`RENDER_EXTERNAL_URL` 有值）會直接回傳公開 URL，不會進入下方組裝 LAN IP 的分支；只有本機/區網開發模式（沒有這個環境變數）才會回傳 `_lan_ip()`——這正是這個端點原始設計的用途（手機在同一區網用 IP 存取本機開發伺服器）。這與外部審查建議的「偵測到 `RENDER_EXTERNAL_URL` 時不走 LAN 分支」邏輯完全一致，現有程式碼已經是對的，此項判斷為誤判，不需要改動。
+
+**🟡6. 11 處 `except Exception` 異常吞噬（逐項評估後判斷不動）**
+
+逐一檢視 `storage.py` 內 11 處 `except Exception`，發現這批分成三類、性質不同，不該用同一種方式處理：
+1. **寫入操作失敗吞掉**（`AuditLogger`/`FeedbackStore`/`ViewStore`/`LoginAttemptStore.record()` 共 4 處）：刻意設計，附帶的既有註解已明確寫理由——稽核日誌/瀏覽紀錄寫入失敗不該讓主要業務操作（建立警報、登入）連帶失敗，這是常見且合理的「最佳努力（best-effort）」寫入模式
+2. **讀取操作失敗回空清單**（`AuditLogger.load()`/`FeedbackStore.load()`/`ViewStore.load()`/`AiScanStore._get()` 共 4 處）：這正是外部審查原本點名「今日掃描數 0 vs 沒人用」的問題本體，但這批全部是 Dashboard 統計/歷史查詢，不是本次多部門隔離工程要修的核心邏輯範圍；且改成拋錯會讓 Dashboard 頁面一次 API 抖動就整頁掛掉，現有的降級策略（顯示 0 而非整頁報錯）在這個情境下是合理的產品取捨，不像已修正的 `_count()` 那樣「錯誤結果會直接誘發破壞性操作」
+3. **登入節流查詢失敗回 `(0, None)`**（`LoginAttemptStore._count_since_last_success()` 1 處）：查不到節流資訊時視同沒有節流，效果是節流失效但登入仍可正常進行——這是安全的降級方向（寧可節流暫時失效，也不要讓登入功能整個掛掉），不是危險方向
+4. **`cleanup_expired()` 失敗回 `-1`**（`AiScanStore.cleanup_expired()`/`LoginAttemptStore.cleanup_expired()` 共 2 處）：用 `-1` 當哨兵值標記失敗，呼叫端 `app.py` 的 `total_removed` 計算已經用 `sum(n for n in removed.values() if n > 0)` 正確過濾負數，且 `-1` 會清楚出現在回應 JSON 的 `removed_by_tier` 欄位裡讓操作者看到，不是「安靜地錯」
+
+判斷：真正符合「危險預設值——結果被用來做破壞性決策、且表面看起來正常」這個模式的只有已在第二十九輪修正的 `_count()`。其餘 11 處統一改成拋錯會是過度工程，且會讓原本合理的降級設計（Dashboard 統計頁面容錯）變得脆弱。記錄此判斷，不動這批程式碼。
+
+**影響範圍**：`backend/app.py`（`admin_logout()` 改用 `session.clear()`、`scope_department()`/`resolve_target_department()` 加超管部門存在性驗證）；59 個既有 pytest 全數通過；三項修正用真實 Flask test client + 真實 Supabase 連線驗證（session 清空、越權部門 404、正常部門仍可用、寫入路徑 404）。🟡6/9/10 三項評估後判斷不需修正或暫不修正，理由已記錄在案，避免日後重複討論同一個問題。至此外部審查衍生的所有項目全部處理完畢，正式進入部署前置作業階段。
