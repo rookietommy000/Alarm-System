@@ -179,10 +179,12 @@
 
 **此階段的把關意義是在部署前擋下漏掛裝飾器/掛錯層級的路由，必須排在階段 10（部署 app.py）之前執行，全綠才可進入階段 10。**
 
-- [ ] 撰寫 `tests/test_route_auth_registry.py`：`ROUTE_AUTH_REGISTRY` 的 key 為 `(rule, method)` 元組（不可只用 rule 字串，因為同路徑不同 method 權限層級不同，見階段 7）
-- [ ] 測試遍歷 `app.url_map`，對每個 `(rule, method)` 斷言：白名單已登記＋view function 實際 `_auth_level` 與宣告層級一致
-- [ ] 新增 `resolve_target_department()` 原始碼檢查：`inspect.getsource` 斷言函式體不含 `request.args`
-- [ ] 針對本機（`JsonStore`）能跑的部分先確認全綠
+- [x] 撰寫 `tests/test_route_auth_registry.py`：`ROUTE_AUTH_REGISTRY` 的 key 為 `(rule, method)` 元組（不可只用 rule 字串，因為同路徑不同 method 權限層級不同，見階段 7）
+- [x] 測試遍歷 `app.url_map`，對每個 `(rule, method)` 斷言：白名單已登記＋view function 實際 `_auth_level` 與宣告層級一致
+- [x] 新增 `resolve_target_department()` 原始碼檢查：`ast` 解析找出巢狀函式節點、跳過 docstring 後斷言函式體不含 `request.args`（見 PLAN 第二十四輪，避開了第二十一輪記錄的 docstring 誤判陷阱）
+- [x] 針對本機（`JsonStore`）能跑的部分全綠——全專案 pytest 57→59 個，全數通過
+
+**完成，詳見 PLAN 第二十四輪審查。** `department` 參數改必填（3.6/4.8 節）仍留到階段 11（部署 `app.py`）同一次 commit 處理，不在本階段。
 
 ## ⚠️ 階段 11～14 屬於同一個維護窗口（對應計畫「第八輪審查」發現）
 

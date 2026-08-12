@@ -1530,3 +1530,16 @@ def test_resolve_target_department_does_not_read_request_args():
 4. **實測驗證**：用真實 Supabase 連線寫入一筆帶 `department='mf4d'` 的 scan 記錄，確認用 `department='mf4d'` 查詢能找到、用其他部門查詢查不到、用 `department=None` 查詢（模擬總管視角）能看到全部——三種情境皆符合 PLAN 3.5/3.7 節的設計要求
 
 **影響範圍**：`backend/ai/ai_memory.py`、`backend/ai/ai_pipeline.py`、`backend/app.py`（三個 AI 相關端點）；驗證過程建立的測試記錄（`ZZTEST-MODEL` scan）已清除；57 個既有 pytest 全數通過；`ai_logger.py`（LOG 層）目前未加 `department` 欄位——`ai_logs` 表雖已在階段 1 加上 `department` 欄位並有 `AiScanStore.load_logs()` 支援過濾，但 `log_scan()`/`log_confirmation()`/`log_correction()` 尚未實際寫入這個值，留待需要時再補（不影響本輪 MEM 層的核心隔離目標，LOG 層主要用途是除錯追蹤而非跨部門資料洩漏的主要風險點）。
+
+---
+
+第二十四輪審查（階段 9：`tests/test_route_auth_registry.py` 撰寫完成）：
+
+**背景**：依 PLAN 8.1 節撰寫路由權限白名單自動測試，把第二十一輪手動驗證過的「30 個 `/api/*` 路由皆帶有正確 `_auth_level`」這個結果，轉成可長期執行、之後任何人新增路由忘記加裝飾器都能立即抓到的自動化測試。
+
+**🟢 兩項測試皆撰寫完成並通過**
+1. `test_all_api_routes_registered_and_decorated`：`ROUTE_AUTH_REGISTRY` 以 `(rule, method)` 為 key（非單純 rule 字串，對應第七輪審查修正），遍歷 `app.url_map` 逐一比對「白名單宣告層級」vs「view function 實際 `_auth_level` 屬性」，兩者不一致即失敗；額外加了反向檢查（白名單裡不能有 app.py 已不存在的路由，避免白名單本身跟著腐化不被發現）
+2. `test_resolve_target_department_does_not_read_request_args`：用 `ast` 解析 `create_app()` 原始碼、找出巢狀定義的 `resolve_target_department` 函式節點、明確跳過開頭的 docstring `Expr` 節點後才檢查函式本體是否含 `request.args` 字串——避開了第二十一輪審查記錄的陷阱（docstring 本身就寫著「不讀 request.args」這句說明文字，naive 字串比對會被這行誤判為違規）
+3. 兩項測試皆一次寫對、一次通過，沒有額外除錯——這是第二十一輪先用手動腳本驗證過 `_auth_level` 標記完整性、且提前記錄了 docstring 陷阱的直接效益，正式寫測試時沒有再踩到同樣的坑
+
+**影響範圍**：新增 `tests/test_route_auth_registry.py`；全專案 pytest 從 57 個增加為 59 個，全數通過；PLAN 3.6/4.8 節「`department` 參數改必填」仍照計畫保留到 `app.py` 部署階段（階段 11）與 `storage.py`/`ai_memory.py` 的預設值在同一次 commit 一起移除，不在本輪處理。
