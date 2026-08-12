@@ -1473,3 +1473,24 @@ def test_resolve_target_department_does_not_read_request_args():
 6. 所有新加的 `department` 參數（`load()`/`save()`/`append()`/`log()` 等）皆保留 `None` 預設值，`AuditLogger`/`FeedbackStore`/`ViewStore`/`AiScanStore` 目前呼叫端（舊版 `app.py`）不帶 `department` 也能正常運作——57 個既有 pytest 全數通過，確認過渡期行為與階段 5 部署要求（先驗證行為不變）一致
 
 **影響範圍**：`backend/storage.py` 完整改寫；驗證方式記錄在案（Supabase 真實連線手動測試，非 pytest），供日後类似「pytest 覆蓋不到 SupabaseStore 路徑」的情境參考；`DepartmentStore.check_login()` 尚未實作（原 PLAN 3.3 節列出但實際登入比對邏輯屬於階段 7 `app.py` 的職責，改為 `app.py` 直接呼叫 `get_by_id()` 取雜湊後用 `werkzeug.security.check_password_hash()` 比對，不在 `storage.py` 內建密碼比對方法）。
+
+---
+
+第二十一輪審查（`app.py` 完整改寫並用真實 Supabase 連線逐項驗證最高風險項目，發現一個測試陷阱）：
+
+**背景**：依 PLAN 第 2、4 節完整改寫 `backend/app.py`——登入分岔（`__super__` vs 部門）、`assert_session_valid()` 三態校驗、`scope_department()`/`resolve_target_department()`、四種權限裝飾器（`login_required`/`admin_required`/`superadmin_required`/`public_endpoint`，含 `_auth_level` 標記）、全部路由依 method 拆分並改帶部門路徑段、部門管理端點、`/api/whoami`/`/api/departments/public`。同步更新 `tests/test_api.py` 反映新路由結構（`/api/alarms/<department>/...` 等）。
+
+**🟡 `JsonStore` 缺少 `upsert_one()`/`delete_one()` 導致 pytest 全面失敗（已修正）**
+1. **`app.py` 的單筆 CRUD 端點（`create_alarm`/`update_alarm`/`create_device` 等）統一呼叫 `upsert_one()`/`delete_one()`，但這兩個方法原本只在 `SupabaseStore` 實作**，`JsonStore`（pytest 使用）完全沒有對應介面，導致 6 個測試因 `AttributeError` 失敗 → 為 `JsonStore` 補上 `upsert_one()`/`delete_one()`（內部走 load-modify-save，不模擬 PostgREST 的 `on_conflict` 語意，僅求呼叫端介面一致）；同時 `JsonStore.load()` 補上 `_row_to_device()` 正規化（`devices.json` 讀出來原本沒有雙 key），修正後 `test_devices` 的 `device_model` 斷言才能通過（見 `backend/storage.py`）
+
+**🟢 完整改寫並用真實 Supabase 連線逐項驗證的核心安全機制**
+2. **登入分岔（PLAN 第 2 節最高風險項）**：實測「超管密碼登入部門帳號」與「部門密碼登入 `__super__`」皆被正確拒絕，兩條路徑完全不 fallthrough
+3. **越權防護（PLAN 4.1 節）**：一般帳號存取其他部門的路徑段回 404（不透露部門存在）；一般帳號帶 `?dept=其他部門` 完全不影響查詢範圍（`scope_department()` 只在超管時讀 `?dept=`）
+4. **`assert_session_valid()` 三態校驗（PLAN 2.1 節）**：透過真實 API（`PUT .../active`、`PUT .../reset-password`、`DELETE .../<dept_id>`）觸發部門停用、密碼重設、部門被 purge 三種情況，確認同一 process 內原本已登入的 session 立即失效（停用/重設回 401；purge 後回乾淨的 401，不是撞外鍵 500，驗證了 PLAN 2.1 節特別強調的第三種情況）
+5. **超管密碼保護（PLAN 第 2 節第二道防線）**：`POST /api/admin/departments`、`PUT .../reset-password` 皆正確拒絕與 `SUPERADMIN_PASSWORD` 相同的明文密碼
+6. **`_auth_level` 標記完整性**：30 個 `/api/*` 路由逐一檢查，全部帶有 `_auth_level`（`login`/`admin`/`superadmin`/`public`），且層級與 PLAN 4.4/4.5/4.6/4.7 節規格完全一致——這組結果直接對應階段 9 要寫的 `test_route_auth_registry.py`，先用手動腳本驗證邏輯正確，降低正式寫測試時踩坑的機率
+
+**🟡 發現一個測試陷阱：`inspect.getsource` 字串比對法對 docstring 誤判（記錄供階段 9 參考）**
+7. **PLAN 8.1 節要求「`resolve_target_department()` 不得讀取 `request.args`」的原始碼檢查，若直接用 `"request.args" not in source` 這種簡單字串比對，會被函式自己的 docstring 誤判**——`resolve_target_department()` 的說明文字寫著「不讀 `request.args`」，這行註解本身就含有 `request.args` 字串，導致簡單比對會誤報「含有 request.args」而失敗，即使函式本體完全沒有真正存取它。用 `ast` 解析、排除 docstring 後只檢查函式本體，才能得到正確結果 → 記錄此陷阱，階段 9 撰寫 `tests/test_route_auth_registry.py` 內的 `test_resolve_target_department_does_not_read_request_args` 時，要用 AST 解析排除 docstring，不能用naive 字串比對
+
+**影響範圍**：`backend/app.py` 完整改寫（登入、權限框架、全部端點）；`tests/test_api.py` 同步更新路由路徑反映新結構，57 個測試全數通過；`backend/storage.py` 補上 `JsonStore.upsert_one()`/`delete_one()`；本輪所有驗證測試建立的臨時部門（`zztest2`~`zztest6`）皆已清除，正式資料（`mf4d`：`alarms` 1759、`devices` 14）全程未受影響；`tests/test_route_auth_registry.py`（階段 9）與登入節流機制（`login_attempts`，階段 4）仍未實作，為下一步工作。

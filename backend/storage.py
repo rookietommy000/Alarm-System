@@ -22,28 +22,84 @@ class JsonStore:
     department 參數一律接受但忽略——JsonStore 不承擔多部門角色，
     多租戶真正的風險點（PostgREST eq 語意、NULL 不匹配、save() 整表
     刪除掃描、on_conflict）在這裡不存在，測通不代表任何保證。
+
+    upsert_one()/delete_one() 只是為了讓 app.py 的單筆 CRUD 呼叫端
+    介面一致（不用 if isinstance(store, SupabaseStore) 分支），內部
+    仍是 load-modify-save，不模擬 PostgREST 的 on_conflict 語意。
     """
 
-    def __init__(self, filename: str):
+    def __init__(self, filename: str, is_devices: bool = False):
         self.filename = filename
+        self.is_devices = is_devices
         self._lock = Lock()
 
     @property
     def path(self) -> Path:
         return _data_dir() / self.filename
 
+    def _match_fields(self) -> list:
+        return ["model"] if self.is_devices else ["device_model", "code"]
+
     def load(self, department: Optional[str] = None) -> list:
         if not self.path.exists():
             return []
         with self.path.open("r", encoding="utf-8") as f:
-            return json.load(f)
+            items = json.load(f)
+        if self.is_devices:
+            items = [_row_to_device(row) for row in items]
+        return items
 
     def save(self, items: list, department: Optional[str] = None) -> None:
         with self._lock:
+            write_items = [_device_payload_to_row(i) for i in items] if self.is_devices else items
+            if self.is_devices:
+                for row, original in zip(write_items, items):
+                    if "id" in original:
+                        row["id"] = original["id"]
             self.path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self.path.with_suffix(".tmp")
             with tmp.open("w", encoding="utf-8") as f:
-                json.dump(items, f, ensure_ascii=False, indent=2)
+                json.dump(write_items, f, ensure_ascii=False, indent=2)
+            tmp.replace(self.path)
+
+    def upsert_one(self, item: dict, department: Optional[str] = None,
+                    on_conflict: Optional[str] = None) -> dict:
+        with self._lock:
+            raw = []
+            if self.path.exists():
+                with self.path.open("r", encoding="utf-8") as f:
+                    raw = json.load(f)
+            write_item = _device_payload_to_row(item) if self.is_devices else dict(item)
+            if self.is_devices and "id" in item:
+                write_item["id"] = item["id"]
+            fields = self._match_fields()
+            replaced = False
+            for i, row in enumerate(raw):
+                if all(row.get(f) == write_item.get(f) for f in fields):
+                    raw[i] = write_item
+                    replaced = True
+                    break
+            if not replaced:
+                raw.append(write_item)
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_suffix(".tmp")
+            with tmp.open("w", encoding="utf-8") as f:
+                json.dump(raw, f, ensure_ascii=False, indent=2)
+            tmp.replace(self.path)
+        return _row_to_device(write_item) if self.is_devices else write_item
+
+    def delete_one(self, department: Optional[str] = None, match: dict = None) -> None:
+        match = match or {}
+        with self._lock:
+            raw = []
+            if self.path.exists():
+                with self.path.open("r", encoding="utf-8") as f:
+                    raw = json.load(f)
+            remaining = [row for row in raw if not all(row.get(k) == v for k, v in match.items())]
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_suffix(".tmp")
+            with tmp.open("w", encoding="utf-8") as f:
+                json.dump(remaining, f, ensure_ascii=False, indent=2)
             tmp.replace(self.path)
 
 
@@ -638,7 +694,7 @@ if _use_supabase():
     devices_store = SupabaseStore("devices", pk="id", pk_fields=["department", "model"], is_devices=True)
 else:
     alarms_store = JsonStore("alarms.json")
-    devices_store = JsonStore("devices.json")
+    devices_store = JsonStore("devices.json", is_devices=True)
 
 department_store = DepartmentStore()
 feedback_store = FeedbackStore()

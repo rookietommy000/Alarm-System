@@ -71,10 +71,10 @@ def test_filter_by_device_and_severity(client):
 
 
 def test_get_single_alarm(client):
-    r = client.get("/api/alarms/CNC-A100/E001")
+    r = client.get("/api/alarms/local/CNC-A100/E001")
     assert r.status_code == 200
     assert r.get_json()["description"] == "主軸過載"
-    assert client.get("/api/alarms/CNC-A100/NOPE").status_code == 404
+    assert client.get("/api/alarms/local/CNC-A100/NOPE").status_code == 404
 
 
 def test_create_alarm(client):
@@ -87,51 +87,52 @@ def test_create_alarm(client):
         "solution": "",
         "keywords": ["test"],
     }
-    r = client.post("/api/alarms", json=payload)
+    r = client.post("/api/alarms/local", json=payload)
     assert r.status_code == 201
     assert len(client.get("/api/alarms").get_json()) == 2
 
 
 def test_create_duplicate_rejected(client):
     payload = {"code": "E001", "device_model": "CNC-A100", "description": "dup"}
-    assert client.post("/api/alarms", json=payload).status_code == 409
+    assert client.post("/api/alarms/local", json=payload).status_code == 409
 
 
 def test_same_code_different_device_allowed(client):
     payload = {"code": "E001", "device_model": "OTHER-MACHINE", "severity": "警告", "description": "不同機型相同碼", "cause": "", "solution": "", "keywords": []}
-    assert client.post("/api/alarms", json=payload).status_code == 201
+    assert client.post("/api/alarms/local", json=payload).status_code == 201
 
 
 def test_create_missing_code_rejected(client):
-    assert client.post("/api/alarms", json={"description": "x"}).status_code == 400
+    assert client.post("/api/alarms/local", json={"description": "x"}).status_code == 400
 
 
 def test_create_invalid_severity_rejected(client):
-    assert client.post("/api/alarms", json={"code": "X1", "severity": "致命"}).status_code == 400
+    assert client.post("/api/alarms/local", json={"code": "X1", "severity": "致命"}).status_code == 400
 
 
 def test_update_alarm(client):
-    r = client.put("/api/alarms/CNC-A100/E001", json={"description": "更新後"})
+    r = client.put("/api/alarms/local/CNC-A100/E001", json={"description": "更新後"})
     assert r.status_code == 200
-    assert client.get("/api/alarms/CNC-A100/E001").get_json()["description"] == "更新後"
+    assert client.get("/api/alarms/local/CNC-A100/E001").get_json()["description"] == "更新後"
 
 
 def test_update_missing(client):
-    assert client.put("/api/alarms/CNC-A100/NOPE", json={"description": "x"}).status_code == 404
+    assert client.put("/api/alarms/local/CNC-A100/NOPE", json={"description": "x"}).status_code == 404
 
 
 def test_delete_alarm(client):
-    assert client.delete("/api/alarms/CNC-A100/E001").status_code == 204
-    assert client.get("/api/alarms/CNC-A100/E001").status_code == 404
+    assert client.delete("/api/alarms/local/CNC-A100/E001").status_code == 204
+    assert client.get("/api/alarms/local/CNC-A100/E001").status_code == 404
 
 
 def test_devices(client):
     r = client.get("/api/devices")
     assert r.status_code == 200
     assert r.get_json()[0]["model"] == "CNC-A100"
+    assert r.get_json()[0]["device_model"] == "CNC-A100"
 
 
 def test_keywords_string_normalized(client):
-    r = client.post("/api/alarms", json={"code": "K1", "keywords": "a, b ,c"})
+    r = client.post("/api/alarms/local", json={"code": "K1", "keywords": "a, b ,c"})
     assert r.status_code == 201
     assert r.get_json()["keywords"] == ["a", "b", "c"]

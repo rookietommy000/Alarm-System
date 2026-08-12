@@ -94,21 +94,23 @@
 - [x] `devices`/`alarms` 的 `department` 皆已收緊 `NOT NULL`
 - [x] 最終計數驗證：`alarms` 1759 筆、`devices` 14 筆，數量與遷移前一致，無 NULL、無重複
 
-## 階段 4：後端 — 密碼與登入安全（對應計畫第 2 節，本清單風險最高的階段）
+## 階段 4：後端 — 密碼與登入安全（對應計畫第 2 節，本清單風險最高的階段）— 【核心登入分岔已完成並實測，第二十一輪；節流機制尚未實作】
 
-- [ ] `requirements.txt` 加 `werkzeug>=3.0`
-- [ ] 密碼雜湊／驗證改用 `generate_password_hash`/`check_password_hash`
-- [ ] **實作登入路徑入口分岔**：表單選 `__super__` 只比對 `SUPERADMIN_PASSWORD`（`hmac.compare_digest`），選真實部門只比對該部門 `admin_pw_hash`，**兩條路互不 fallthrough**——這是整份規劃權限提升風險最高的一項，優先處理
-- [ ] `session.clear()` 於登入成功時執行，避免舊 session 殘留鍵帶入新登入
-- [ ] `POST /api/admin/departments`、`reset-password` 拒絕與 `SUPERADMIN_PASSWORD` 明文相同的密碼（400）
-- [ ] 實作 `assert_session_valid()`：部門存在性＋`active`＋`session_version` 三態合取校驗，`None`（不存在）也要快取，TTL 30~60 秒行程內快取
-- [ ] `set_active()`／`update_password()`／`purge()` 成功後主動 pop 快取，讓操作者所在 worker 立即生效
-- [ ] 實作部門不存在時的 dummy hash 比對（`_DUMMY_HASH` 模組載入時算好），回應與密碼錯誤完全一致（枚舉防護）
-- [ ] 實作登入節流細網：`(ip, department)` 組合，15 分鐘窗口內最近成功登入之後的連續失敗數 `N_ip_dept`
-- [ ] 實作登入節流粗網：只看 `ip`（不看 department），門檻 20 次，`N_ip`
-- [ ] `delay = min(max(2**N_ip_dept if N_ip_dept>=1 else 0, 2**(N_ip-19) if N_ip>=20 else 0), 60)`，429 + `Retry-After`，**不用 `sleep()`**
-- [ ] `login_attempts` 寫入三段式判斷：格式不合法（不符 `DEPT_ID_RE`）不查 DB 不寫入；格式合法但部門不存在照常寫入 `success=false`；已在節流窗口內的請求只回 429 不再寫入
-- [ ] `cleanup-expired` 端點新增 `delete from login_attempts where attempted_at < now() - interval '90 days'`
+- [x] `requirements.txt` 加 `werkzeug>=3.0`
+- [x] 密碼雜湊／驗證改用 `generate_password_hash`/`check_password_hash`（`method="pbkdf2:sha256"`，Python 3.9 無 `hashlib.scrypt`，見第十八輪）
+- [x] **實作登入路徑入口分岔**：表單選 `__super__` 只比對 `SUPERADMIN_PASSWORD`（`hmac.compare_digest`），選真實部門只比對該部門 `admin_pw_hash`，**兩條路互不 fallthrough**——已用真實 Supabase 連線實測「超管密碼登入部門帳號」與「部門密碼登入 `__super__`」皆被正確拒絕
+- [x] `session.clear()` 於登入成功時執行，避免舊 session 殘留鍵帶入新登入
+- [x] `POST /api/admin/departments`、`reset-password` 拒絕與 `SUPERADMIN_PASSWORD` 明文相同的密碼（400）——已實測驗證
+- [x] 實作 `assert_session_valid()`：部門存在性＋`active`＋`session_version` 三態合取校驗，`None`（不存在）也要快取，TTL 60 秒行程內快取——已用真實 API（停用/重設密碼/purge）實測三種情況皆讓 session 立即失效（purge 後回乾淨 401，非撞外鍵 500）
+- [x] `set_active()`／`update_password()`／`purge()` 成功後主動 pop 快取，讓操作者所在 worker 立即生效——已實測確認同一 process 內立即生效
+- [x] 實作部門不存在時的 dummy hash 比對（`_DUMMY_HASH` 模組載入時算好），回應與密碼錯誤完全一致（枚舉防護）——已寫入程式碼（`_do_login()` 內），格式不合法與部門不存在兩種情況皆會消耗 dummy hash 比對時間
+- [ ] **【尚未實作】登入節流細網**：`(ip, department)` 組合，15 分鐘窗口內最近成功登入之後的連續失敗數 `N_ip_dept`
+- [ ] **【尚未實作】登入節流粗網**：只看 `ip`（不看 department），門檻 20 次，`N_ip`
+- [ ] **【尚未實作】** `delay = min(max(2**N_ip_dept if N_ip_dept>=1 else 0, 2**(N_ip-19) if N_ip>=20 else 0), 60)`，429 + `Retry-After`，**不用 `sleep()`**
+- [ ] **【尚未實作】** `login_attempts` 寫入三段式判斷：格式不合法（不符 `DEPT_ID_RE`）不查 DB 不寫入；格式合法但部門不存在照常寫入 `success=false`；已在節流窗口內的請求只回 429 不再寫入
+- [ ] **【尚未實作】** `cleanup-expired` 端點新增 `delete from login_attempts where attempted_at < now() - interval '90 days'`
+
+**⚠️ 上線前提醒**：`SUPERADMIN_PASSWORD` 目前本機測試值為弱密碼（純數字），節流機制完成前不可對外開放，正式上線前需要換成高強度密碼並確認上方節流機制已完成。
 
 ## 階段 5：後端 — `storage.py`（對應計畫第 3 節）— 【核心改寫已完成，第二十輪】
 
@@ -129,43 +131,45 @@
 - [ ] `ai_memory.py` 所有查詢函式（歷史記錄、候選建議）加 `department` 參數並套用於查詢條件，不可省略
 - [ ] `ai_pipeline.py` 把 `session["department"]` 一路往下傳，不遺漏
 
-## 階段 7：後端 — `app.py` 權限框架（對應計畫第 4 節）
+## 階段 7：後端 — `app.py` 權限框架（對應計畫第 4 節）— 【已完成並實測，第二十一輪】
 
-- [ ] 實作 `scope_department()`：讀取過濾用，只讀 `session`／（超管時）`?dept=`，`DeptScope.ALL`/`DeptScope.DEPT`，取不到部門直接 401
-- [ ] 實作 `resolve_target_department()`：寫入專用，**只讀 URL path，禁止讀 `request.args`**（配套規則 a，最容易被重構破壞的地方）；body 帶的 `department` 與 path 不符 → 400（規則 b）；無部門路徑段的端點超管呼叫一律 400（規則 c）
-- [ ] 新增 `superadmin_required`、`@public_endpoint` 裝飾器；`login_required`/`admin_required`/`superadmin_required`/`public_endpoint` 四者各自設 `_auth_level` 標記屬性（`"login"`/`"admin"`/`"superadmin"`/`"public"`）
-- [ ] **【第七輪關鍵】確認同一 rule 依 HTTP method 拆成獨立 view function**（例如 `GET /api/alarms/<department>/<device_model>/<code>` 用 `login_required`，同路徑 `PUT`/`DELETE` 用 `admin_required`），不可用單一函式處理多個 method 又想要不同權限層級——此決定務必在動手寫其餘端點前先確認，事後拆分成本高
-- [ ] `create_app()` 啟動時 fail-fast 檢查：生產環境未設 Supabase 直接中止，不悄悄降級
-- [ ] 更換 `FLASK_SECRET_KEY` 並確認寫死在 Render 環境變數（非隨機產生，否則每次重啟/擴容全體被登出）
+- [x] 實作 `scope_department()`：讀取過濾用，只讀 `session`／（超管時）`?dept=`，`DeptScope.ALL`/`DeptScope.DEPT`，取不到部門直接 401——已實測一般帳號帶 `?dept=其他部門` 完全不影響查詢範圍
+- [x] 實作 `resolve_target_department()`：寫入專用，**只讀 URL path，禁止讀 `request.args`**（配套規則 a）；body 帶的 `department` 與 path 不符 → 400（規則 b，`_check_body_department_conflict()`）；無部門路徑段的端點超管呼叫一律 400（規則 c，`feedback`/`view`/`analyze`/`confirm`/`correct` 皆已實作）——已用 AST 解析（排除 docstring）驗證函式本體不含 `request.args`，**發現簡單字串比對會被 docstring 說明文字誤判，寫測試時需注意（見第二十一輪）**
+- [x] 新增 `superadmin_required`、`@public_endpoint` 裝飾器；四個裝飾器皆設 `_auth_level` 標記——已逐一檢查全部 30 個 `/api/*` 路由確認標記完整且與規格一致
+- [x] **同一 rule 依 HTTP method 拆成獨立 view function**（`GET`=`login`、`PUT`/`DELETE`=`admin`）——已在 `alarms`/`devices` 的 `<department>/<device_model>[/<code>]` 路由套用
+- [x] `create_app()` 啟動時 fail-fast 檢查：生產環境未設 Supabase 直接中止，不悄悄降級
+- [x] `FLASK_SECRET_KEY` 讀取環境變數固定值（本機 `.env` 已有），Render 環境變數維持既有設定，尚未在部署時重新產生換新（見階段 11 維護窗口）
 
-## 階段 8：後端 — 各端點改動（對應計畫 4.4~4.7）
+## 階段 8：後端 — 各端點改動（對應計畫 4.4~4.7）— 【已完成並實測，第二十一輪】
 
 **警報（`alarms`）**：
-- [ ] `GET /api/alarms`（列表）→ `login`，`scope_department()` 過濾
-- [ ] `POST /api/alarms/<department>` → `admin`，`resolve_target_department(department)`
-- [ ] `GET /api/alarms/<department>/<device_model>/<code>` → `login`
-- [ ] `PUT /api/alarms/<department>/<device_model>/<code>` → `admin`
-- [ ] `DELETE /api/alarms/<department>/<device_model>/<code>` → `admin`
+- [x] `GET /api/alarms`（列表）→ `login`，`scope_department()` 過濾——已實測 mf4d 帳號登入後只看到自己 1759 筆
+- [x] `POST /api/alarms/<department>` → `admin`，`resolve_target_department(department)`
+- [x] `GET /api/alarms/<department>/<device_model>/<code>` → `login`
+- [x] `PUT /api/alarms/<department>/<device_model>/<code>` → `admin`
+- [x] `DELETE /api/alarms/<department>/<device_model>/<code>` → `admin`
 
 **機種（`devices`）**：
-- [ ] `GET /api/devices`（列表）→ `login`，`scope_department()` 過濾
-- [ ] `POST /api/devices/<department>` → `admin`，`resolve_target_department(department)`（不再從 body 解析）
-- [ ] `GET /api/devices/<department>/<device_model>` → `login`
-- [ ] `PUT /api/devices/<department>/<device_model>` → `admin`
-- [ ] `DELETE /api/devices/<department>/<device_model>` → `admin`
+- [x] `GET /api/devices`（列表）→ `login`，`scope_department()` 過濾
+- [x] `POST /api/devices/<department>` → `admin`，`resolve_target_department(department)`（不再從 body 解析）
+- [x] `GET /api/devices/<department>/<device_model>` → `login`
+- [x] `PUT /api/devices/<department>/<device_model>` → `admin`
+- [x] `DELETE /api/devices/<department>/<device_model>` → `admin`
 
 **其他端點**：
-- [ ] `POST /api/feedback`、`POST /api/view` 加 `login_required`（原無驗證），寫入帶 `department`（session 取），超管呼叫 400
-- [ ] `GET /api/feedback/stats`、`GET /api/view/stats` 加驗證＋`scope_department()` 過濾（讀取端點，超管可用 `?dept=`）
-- [ ] `POST /api/analyze` 加驗證，部門傳入 `run_pipeline()`，超管呼叫 400
-- [ ] `POST /api/confirm`、`POST /api/correct` 加驗證，超管呼叫 400；`confirmed_by` 改用 `f"{target}/{role}"`（`target` 來自 `resolve_target_department()`，`role` 三態含 `superadmin`）
-- [ ] `GET /api/audit` 依 `scope_department()` 過濾
-- [ ] `GET /api/admin/scan-stats`、`scan-recent`、`scan-ranking` 依部門過濾
-- [ ] 確認 `ai_logs` 讀取端點（若 Dashboard「AI 辨識失敗率」有讀）也套用部門過濾
-- [ ] `POST /api/admin/cleanup-expired` 改 `superadmin_required`
-- [ ] 新增部門管理端點：`GET/POST/PUT /api/admin/departments*`、`PUT .../active`、`DELETE .../<id>`（purge，body 需 `confirm_id`）
-- [ ] 新增 `GET /api/whoami`（`@public_endpoint`）
-- [ ] 新增 `GET /api/departments/public`（`@public_endpoint`，只列 `active=true` 且 `hidden=false`）
+- [x] `POST /api/feedback`、`POST /api/view` 加 `login_required`（原無驗證），寫入帶 `department`（session 取），超管呼叫 400
+- [x] `GET /api/feedback/stats`、`GET /api/view/stats` 加驗證＋`scope_department()` 過濾（讀取端點，超管可用 `?dept=`）
+- [x] `POST /api/analyze` 加驗證，超管呼叫 400（`department` 傳入 `run_pipeline()` 待階段 6 AI 管線隔離完成後串接）
+- [x] `POST /api/confirm`、`POST /api/correct` 加驗證，超管呼叫 400；`confirmed_by` 改用 `_confirmed_by()`（`f"{target}/{role}"`，`role` 三態含 `superadmin`）
+- [x] `GET /api/audit` 依 `scope_department()` 過濾
+- [x] `GET /api/admin/scan-stats`、`scan-recent`、`scan-ranking` 依部門過濾
+- [x] 新增 `GET /api/admin/ai-logs` 讀取端點，套用部門過濾
+- [x] `POST /api/admin/cleanup-expired` 改 `superadmin_required`
+- [x] 新增部門管理端點：`GET/POST/PUT /api/admin/departments*`、`PUT .../active`、`DELETE .../<id>`（purge，body 需 `confirm_id`）——已用真實 API 逐一實測（建立/改名/停用/重設密碼/purge）
+- [x] 新增 `GET /api/whoami`（`@public_endpoint`）——已驗證回應格式正確
+- [x] 新增 `GET /api/departments/public`（`@public_endpoint`，只列 `active=true` 且 `hidden=false`）
+
+**驗證方式**：`tests/test_api.py` 已同步更新反映新路由結構，57 個測試全數通過；核心安全機制（登入分岔、越權防護、`assert_session_valid()` 三態）額外用真實 Supabase 連線手動驗證（詳見 PLAN 第二十一輪），過程建立的臨時部門（`zztest2`~`zztest6`）皆已清除，正式資料（`mf4d`）全程未受影響。
 
 ## 階段 9：自動化測試（對應計畫 8.1）— 【第七輪調整：移到部署 app.py 之前】
 
