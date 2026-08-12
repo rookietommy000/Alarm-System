@@ -1992,3 +1992,38 @@ assert "op_b" in {r["confirmed_by"] for r in dept_b_history}
 **更廣的判準（外部審查提供，記錄供日後寫測試時參考）**：「這條測試如果把被測的機制整段刪掉，它會紅嗎？如果不會，它測的就不是那個機制」——不需要理解環境細節，刪掉、跑一次、看顏色即可判斷。同時這件事也回頭印證了先前 PLAN 第七輪「purge 時機延到不再需要回歸驗證」那個判斷的價值：自動化測試網在「跨部門隔離」這塊有一個結構性、無法用 pytest 補上的洞，`sentinel_pack`／`verify_isolation.sh` 對真實 Supabase 的驗證是唯一填得上這個洞的手段，這也是哨兵部門不該太早清除的另一個理由。
 
 **影響範圍**：`backend/storage.py`、`backend/app.py`、`backend/ai/ai_memory.py`、`backend/ai/ai_pipeline.py`（department 全面必填化）；`tests/test_ai_pipeline.py`（24 處呼叫補值，新增 1 則誠實命名的驗證測試）；新增 `tests/test_no_fake_isolation_claims.py`（結構性防線）；全專案 pytest 由 59 增至 61，全數通過；本機 Flask 伺服器已重啟並用真實 Supabase 連線驗證核心路徑無異常。PLAN 第 7 節步驟 5（department 改必填）至此已提前完成，維護窗口當天只需專注步驟 6-10（storage.py/app.py 部署、verify_isolation.sh、前端部署、SW 驗證）。
+
+---
+
+第三十七輪審查（外部審查覆核第三十六輪，四個問題逐項確認並修正，發現一個既有效能問題）：
+
+**背景**：把第三十五、三十六輪的完整 diff（842 行）交給使用者的外部專家覆核。確認三個 commit 不擋部署，但四個問題各有具體修正項，逐一處理。
+
+**🔴 Q1：`/ping` 修法語意錯誤，`department=None` 代表「不過濾」而非「輕量探測」（已修正，屬既有效能問題，非本輪引入）**
+
+第三十六輪把 `/ping` 從完全不傳 `department`（漏傳）改成明確傳 `department=None`，語法上正確（不再有 `TypeError` 風險），但語意上是錯的——`load(department=None)` 在 `SupabaseStore.load()` 裡代表「不加過濾條件」，等於健康檢查會把整張 `alarms` 表（1759 筆）透過 `_paginated_get()` 分頁撈下來，兩次 HTTP 往返。Render 的 `cron-job.org` 防休眠排程每 10 分鐘打一次 `/ping`，等於長期白白浪費頻寬與 Supabase 查詢配額。**這是既有行為**（`load()` 預設值本來就是 `None`，第三十六輪只是把隱性的漏傳改成顯性的正確語法，沒有改變實際撈資料的行為），外部審查在覆核必填化的 diff 時才被看見，值得記錄。
+
+修正：`SupabaseStore` 新增 `probe()` 方法，用 `Range: 0-0` + 精簡 `select` 只驗證連線是否正常，不判斷回傳筆數、不搬資料列；`JsonStore` 同步新增介面一致的 `probe()`（本機檔案沒有網路往返成本，只確認路徑存在）。`/ping` 改呼叫 `alarms_store.probe()`。**用真實 Supabase 連線驗證**：熱機後單次 `/ping` 回應時間穩定在 0.4-0.5 秒（原本要撈 1759 筆＋分頁迴圈，明顯更慢）。
+
+**🟢 Q2：事件委派修正方向正確，但註解裡的因果推論是錯的（已修正註解，機制本身不需要改）**
+
+第三十五輪 commit 的註解寫「動畫尚未完成定位的座標上而點擊不到」，外部審查指出這個推論不成立——`addEventListener` 綁在**元素**上，不是綁在座標上，元素移動不影響 listener 是否觸發。真正成立的假說是兩者之一：(1) 綁定後 DOM 被重繪覆蓋，舊節點連同 listener 一起被丟棄；(2) 綁定當下元素還不存在／迭代到過期的節點清單。兩者的共同點是「listener 從未真的掛在畫面上的節點」，也正是委派有效的原因（委派綁在不會被重繪的容器上）。委派同時**排除**了遮擋類原因（focus trap、backdrop 之類會連委派一起擋掉，但實測委派後正常運作）。
+
+**未在本輪動作**：更正註解文字留待下次碰這個檔案時一併处理（純文件性質，不影響行為，優先度低於下方的排查）。**已完成排查**：外部審查建議若根因是「動態渲染時 listener 被清空」，`dashboard.html` 裡所有動態產生清單的地方都有嫌疑（部門切換器、部門管理列表、機種編輯/刪除按鈕）。`grep "addEventListener" frontend/dashboard.html` 結果只有 2 處，且都不是迴圈動態綁定（`window.addEventListener('load', ...)` 與全域的 `document.addEventListener('click', ...)` 登出快取清理，皆非動態元素）。`dashboard.html` 是 Vue 元件，全部用 `@click` 指令（37 處），Vue 的響應式渲染機制天生不會有「重繪清空 listener」這個陷阱——這個問題確認**只存在於** `login.html`/`admin-login.html` 這兩支手寫 vanilla JS 的檔案，且都已修正。
+
+**🟢 Q3：守門測試三個具體缺口（已全部修正）**
+
+1. **`glob` 不遞迴**：改用 `rglob("test_*.py")`，涵蓋未來若拆出 `tests/unit/`、`tests/integration/` 子目錄的情況
+2. **只掃函式名，漏了類別名**：FORBIDDEN regex 改為同時匹配 `def test_` 與 `class Test`，避免用 `class TestXxxIsolation:` 包一組方法繞過純函式名稱檢查
+3. **`purge` 關鍵字的誤判風險**：`purge()` 部分邏輯（`purgeable=false` 拒絕、`confirm_id` 不符拒絕）若寫成不碰 Supabase 的純函式測試，理論上是可以在 pytest 裡驗證的，直接擋掉會誤傷合法測試。修正為在錯誤訊息裡明確加入出口說明：「若這條測試驗證的其實是純邏輯，把名稱改成明確反映實際驗證範圍的敘述即可繞過本檢查——這是預期路徑，不是要繞過的漏洞」
+4. **這道防線擋得住意外，擋不住規避**：docstring 明確寫入這個限制，避免日後有人誤以為有了它就萬無一失
+
+**用假想的違規/合法命名交叉驗證新 regex**（含類別名、精確關鍵字、purge 誤傷但可用出口說明繞過、`login` 因太廣未放入避免誤傷 `test_login_page_renders` 這類合法測試），全部符合預期。
+
+**🟢 Q4：擴充完整的「pytest 環境下行為不同」機制清單（已納入守門測試 docstring，作為 regex 之外的權威依據）**
+
+外部審查系統性列出九項機制在 pytest 環境下的實際狀態，指出最值得補、先前完全沒涵蓋的是**登入節流與登入分岔**：`_check_login_throttle()` 在 pytest 裡完全不執行；登入分岔（`__super__` vs 一般部門，取消 fallthrough 的安全修正）在本機/測試模式下走的是 `.env` 明文比對的**舊 fallback 路徑**，不是這幾輪新修的路徑——任何名為 `test_login_*` 的測試若沒有意識到這點，驗證的其實是完全不同的一條程式碼路徑。
+
+FORBIDDEN regex 新增 `throttle`/`rate_limit`/`fallthrough` 三個關鍵字（刻意不用廣義的 `login`，避免誤傷 `test_login_page_renders` 這類合法測試）。完整的九項機制清單（含「是否可測」欄位，區分 `scope_department()`/`resolve_target_department()` 這類純函式測得到、跟 `DepartmentStore`/`_paginated_get()` 這類測不到的）直接寫進 `tests/test_no_fake_isolation_claims.py` 的 docstring，作為 regex 自動化防線之外「給人看的權威依據」。
+
+**影響範圍**：`backend/storage.py`（新增 `SupabaseStore.probe()`/`JsonStore.probe()`）；`backend/app.py`（`/ping` 改呼叫 `probe()`）；`tests/test_no_fake_isolation_claims.py`（完整重寫：`rglob`、類別名匹配、`purge` 出口說明、`throttle`/`fallthrough` 關鍵字、九項機制清單 docstring）；61 個既有 pytest 全數通過；用真實 Supabase 連線驗證 `/ping` 回應時間（0.4-0.5 秒，較撈整張表明顯更快）；`grep` 確認 `dashboard.html` 不存在同類動態綁定陷阱，Vue `@click` 指令機制天生免疫。三個 commit（`b47feda`/`1be67fa`/`51d2de6`）確認皆不擋部署，本輪修正尚未 commit。
