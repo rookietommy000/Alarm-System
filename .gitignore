@@ -16,3 +16,4 @@ data/backup/
 # 一次性外部審查用文件，不需要進版本庫
 expert_review_*.md
 today_review_package.md
+architecture_review_*.md

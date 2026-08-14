@@ -2026,4 +2026,31 @@ assert "op_b" in {r["confirmed_by"] for r in dept_b_history}
 
 FORBIDDEN regex 新增 `throttle`/`rate_limit`/`fallthrough` 三個關鍵字（刻意不用廣義的 `login`，避免誤傷 `test_login_page_renders` 這類合法測試）。完整的九項機制清單（含「是否可測」欄位，區分 `scope_department()`/`resolve_target_department()` 這類純函式測得到、跟 `DepartmentStore`/`_paginated_get()` 這類測不到的）直接寫進 `tests/test_no_fake_isolation_claims.py` 的 docstring，作為 regex 自動化防線之外「給人看的權威依據」。
 
+---
+
+第三十八輪：**維護窗口正式執行完成**（storage.py → app.py → verify_isolation.sh → 前端 → SW 驗證，PLAN 第 7 節步驟 6-10 全部完成）
+
+**背景**：窗口前置作業（第 32~37 輪）全部完成後，本輪執行第 7 節部署順序的最後五步。使用者要求中途可暫停用餐，因此第一次 push 刻意切在 storage.py 完成、app.py 未動的那個 commit（`e3aacb0`），與 PLAN 第九輪定案的「storage.py／app.py 分開 commit」直接對應，過渡期單獨部署可行。
+
+**部署前架構覆核（外部專家）**：storage.py 上線後，用一份整理過的架構總覽文件（含目前部署狀態、資料庫層/應用層/前端設計決策、驗證機制總覽）請外部專家審查，發現並處理四個問題：
+
+1. **🔴 寫入路徑在過渡期是壞的（Q1，已確認範圍但判斷不修，直接推進部署收斂）**：`storage.py` 的 `save()` 在 `department=None`（舊 app.py 呼叫慣例）時，`_device_payload_to_row()` 會丟掉 `department` 欄位且不補回，導致機種/警報新增全部撞 `NOT NULL` 約束 500；編輯既有資料則正常（round-trip 值還在）。**沒有資料損失風險**——約束在寫入前就擋下整批，不會進到刪除掃描那一步。判斷：這是過渡期的已知限制，直接推進 app.py 部署即可消除，不需要另外修
+2. **🟢 Q3 回滾策略分兩類，不是一律回滾**：類型 A（隔離失效，T-01~T-07 任一紅）必須立即回滾；類型 B（單項機制失敗，如 T-11/T-13/T-14）不回滾，記錄後繼續。判準是「這個失敗會不會讓 A 部門看到 B 部門的資料」。部署前先到 Render Dashboard 確認 Manual Deploy 可選特定 commit，回滾手段備妥後才繼續
+3. **🔴 Q4：前端「部分回滾」在 app.py 上線後不可行**：app.py 上線後登入需要 `department` 欄位、路由改三段式，舊版前端完全接不上新後端——「只回滾前端保留新 app.py」會讓沒有人能登入，比 SW 壞掉嚴重得多。前端與 app.py 只能一起回滾。SW 若驗證失敗，止血手段是準備一支 `sw-kill.js`（`self.registration.unregister()` + 清空所有 cache），獨立部署、不影響 app.py，已依專家建議先寫好放著（未部署，僅備用）
+4. **🟢 Q2：換 `FLASK_SECRET_KEY` 造成強制登出，真正的風險不是登出本身，是「登出後登不回來」的空窗**——從 push app.py 到前端上線之間，舊版 `login.html` 不送 `department` 欄位，瀏覽器完全無法登入。建議把這段間隔壓到最短，中途驗證一律用 curl（`verify_isolation.sh`），不要嘗試用瀏覽器檢查。**實際執行時因為 app.py 與前端 20 個檔案都在同一批 commit 裡，兩者是同一次 push 一起上線，這個空窗被進一步壓縮到接近零**
+
+**執行過程中發現並修正的問題（環境設定疏漏，非邏輯錯誤）**：
+
+**🔴 `render.yaml` 從一開始就沒有列 `SUPERADMIN_PASSWORD`**：push app.py 後用 `verify_isolation.sh` 驗證，超管登入卡在 T-04 之前就找不到 cookie。追查發現 Render Dashboard 上根本沒有這個環境變數（`os.environ.get("SUPERADMIN_PASSWORD", "")` 缺省吃到空字串，`hmac.compare_digest(password, "")` 對任何非空密碼恆為 `False`，症狀是 `?error=1`，不是明確的設定錯誤提示）。這代表**超管登入自新版 app.py 上線起，在正式環境上就沒有一組正確密碼能用**，直到本輪發現並修正。修正：Dashboard 手動新增這個環境變數並產生新密碼；`render.yaml` 補上這個 key（commit `5b02224`，避免重建服務時再漏），本輪維護窗口尚未 push，待下次一併推送
+
+**除錯過程中的一個重要教訓（記錄供日後參考）**：定位 `SUPERADMIN_PASSWORD` 問題之後，緊接著又在 `verify_isolation.sh` 的 T-04/T-05 遇到看似邏輯錯誤的失敗（`mf4d` 管理員登入也失敗、腳本中途 `unbound variable` 崩潰），花了相當長時間排查，包含直接呼叫 `check_password_hash()`／`department_store.get_by_id()`／在 `_do_login()` 加 debug print，最終發現兩個問題都跟系統邏輯無關：(1) **手動重跑指令時 shell 變數沒有重新 `source`**——Bash 工具的每次呼叫是獨立 shell，之前 `set -a; source .env; set +a` 只在那一次呼叫裡有效，之後的呼叫用到的是空字串密碼；(2) **macOS 系統內建 `bash 3.2`（非 zsh、非 Homebrew 新版 bash）對字串插值中混雜多位元組 UTF-8 字元（腳本裡的中文說明文字）有解析問題**，`export LC_ALL=C` 可繞過。兩者都在同一個 Bash 呼叫裡完整 `source` 環境變數＋設定 `LC_ALL=C` 後解決，跟 app.py／storage.py 的程式邏輯完全無關。教訓：**遇到「同樣的操作這次失敗」時，先檢查執行環境本身（變數作用域、shell 版本、locale），不要急著往程式碼邏輯排查**——這次差點因為這兩個環境問題誤判成隔離邏輯有 bug
+
+**🟢 verify_isolation.sh 完整執行結果：45 通過，0 失敗**（T-13 依設計預設跳過，會變更哨兵密碼，非必要項）。涵蓋登入五身分、撞名機種隔離（T-02，含 1.3 節設計的核心驗證）、雙向寫入隔離（T-03）、超管寫入目標存在性驗證（T-04）、單筆 CRUD 不誤刪其他部門（T-05，同時確認了架構審查 Q1 提到的寫入路徑 bug 在 app.py 正式接手後已不存在）、六個統計/稽核端點過濾（T-06）、共用關鍵字搜尋隔離（T-07）、總管跨部門可見（T-08）、未登入攔截（T-09）、權限層級遞增（T-10）、hidden 旗標（T-11）、whoami 不洩漏（T-12）、孤兒資料只有總管看得到（T-14，`DeptScope.ALL` 未被無聲收窄）
+
+**🟢 前端與 SW 驗證**：前端 20 個檔案（`js/api.js`／三個 HTML／`sw.js`）與 app.py 同一次 push 一起上線，不需要分開部署，進一步壓縮了「登入頁空窗」的時間。SW 手動驗證（真實瀏覽器，PLAN 5.5 節）：Service Worker 確認 `activated and is running`（新版 `sw.js`，時間戳與部署一致）；Cache Storage 只剩 `alarm-query-v11` 一份（舊版已被 `activate` 清除），內容只有 4 個靜態資源，**完全沒有 `/api/*` 項目**——這是跨帳號快取洩漏的必要條件不成立的直接證據；離線模式下 `/app` 打不開（`ERR_FAILED`），對照 `sw.js` 第 63-66 行原始碼確認是刻意設計（HTML 頁面一律直接打網路，不進快取，因為 auth 導向必須每次真正到達 Flask），行為與程式碼完全吻合。**經外部專家覆核判斷：安全面驗證已完整**（無 `/api/*` 快取項目 + 舊快取確實被清 + HTML 未走快取路徑，三點共同證明跨帳號洩漏物理上不可能發生），靜態資源 cache-first 的實際離線載入屬功能驗證非安全驗證，且此系統離線時 HTML 本來就打不開（使用者到不了會用到 `style.css` 的畫面），影響範圍與優先度都低，本輪未實測，留待日後有需要時補（例如真的有人反映離線體驗問題）
+
+**收尾檢查**：`zztest` 部門的 `hidden` 全程維持 `true`（本輪跑 `verify_isolation.sh` 是用密碼直接登入，未經過公開選單，不需要暫時調整這個旗標，跟第十輪審查記錄的情境不同）；未曾掛過維護頁，`/login` 全程可正常存取；使用者親自完整走一次登入＋警報查詢的正常路徑，確認功能正常。
+
+**影響範圍**：Render 正式環境從 `e3aacb0`（storage.py 完成）→ `95adfbf`（app.py + 前端全部改動）完成部署，隔離機制正式在正式環境生效；Render Dashboard 新增 `SUPERADMIN_PASSWORD` 環境變數（先前遺漏）；`render.yaml` 補上這個 key（commit `5b02224`，待下次一併 push）；新增 `frontend/sw-kill.js`（止血用，未部署，未進版本控制討論範圍，僅供緊急情況覆蓋 `sw.js` 使用）；`testing/architecture_review_20260814.md`（本輪整理給外部專家審查的架構文件，未加入 `.gitignore`，視需要決定是否保留在版本庫）。至此 PLAN 第 7 節部署順序的十個步驟（加欄位→遷移腳本→約束切換→storage.py→app.py→哨兵驗證→前端→批次匯入建第二部門→建立登入帳號→purge 哨兵）已完成前七步；第 8-10 步（建立真實第二部門、匯入資料、purge 哨兵部門）依 PLAN 既有決定維持延後，非本輪範圍。
+
 **影響範圍**：`backend/storage.py`（新增 `SupabaseStore.probe()`/`JsonStore.probe()`）；`backend/app.py`（`/ping` 改呼叫 `probe()`）；`tests/test_no_fake_isolation_claims.py`（完整重寫：`rglob`、類別名匹配、`purge` 出口說明、`throttle`/`fallthrough` 關鍵字、九項機制清單 docstring）；61 個既有 pytest 全數通過；用真實 Supabase 連線驗證 `/ping` 回應時間（0.4-0.5 秒，較撈整張表明顯更快）；`grep` 確認 `dashboard.html` 不存在同類動態綁定陷阱，Vue `@click` 指令機制天生免疫。三個 commit（`b47feda`/`1be67fa`/`51d2de6`）確認皆不擋部署，本輪修正尚未 commit。
