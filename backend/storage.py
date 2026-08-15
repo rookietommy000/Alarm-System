@@ -54,6 +54,15 @@ class JsonStore:
             items = [_row_to_device(row) for row in items]
         return items
 
+    def get_one(self, department: Optional[str] = None, match: dict = None) -> Optional[dict]:
+        """介面對齊 SupabaseStore.get_one()。JsonStore 沒有分頁成本問題，
+        單純 load() 後線性找一筆即可，不需要另外的查詢路徑。"""
+        match = match or {}
+        for row in self.load(department):
+            if all(row.get(k) == v for k, v in match.items()):
+                return row
+        return None
+
     def save(self, items: list, department: Optional[str] = None, on_conflict: Optional[str] = None) -> None:
         with self._lock:
             write_items = [_device_payload_to_row(i) for i in items] if self.is_devices else items
@@ -243,6 +252,19 @@ class SupabaseStore:
         if self.is_devices:
             result = [_row_to_device(row) for row in result]
         return result
+
+    def get_one(self, department: str, match: dict) -> Optional[dict]:
+        """單筆精確查詢，不分頁、不撈整個部門（外部審查第四輪發現：
+        alarms 有 1759 筆，load() 兩次 HTTP 往返只為了取一列做稽核用的
+        old_data 或存在性檢查，隨部門警報數線性變慢）。match 為精確比對
+        條件，同 delete_one()/patch_one() 的定位方式。"""
+        qs_parts = [f"select=*", f"department=eq.{urllib.parse.quote(department, safe='')}"]
+        for k, v in match.items():
+            qs_parts.append(f"{k}=eq.{urllib.parse.quote(str(v), safe='')}")
+        result = self._req("GET", f"{self.table}?{'&'.join(qs_parts)}&limit=1")
+        if not result:
+            return None
+        return _row_to_device(result[0]) if self.is_devices else result[0]
 
     def _row_key(self, row: dict) -> tuple:
         return tuple(str(row.get(f, "")) for f in self.pk_fields)
@@ -877,6 +899,39 @@ class AlarmSuggestionStore:
         if department is not None:
             qs += f"&department=eq.{urllib.parse.quote(department, safe='')}"
         return self._req("GET", f"{self._TABLE}?{qs}")
+
+    def has_pending(self, department: str, device_model: str, code: str) -> bool:
+        """單筆存在性檢查，不撈整個部門的待審清單（外部審查第四輪發現：
+        submit_local_suggestion() 原本呼叫 list_pending() 只為了檢查某一筆
+        有沒有待審建議，隨部門待審筆數增加會越來越浪費）。用
+        Range: 0-0 只確認有沒有列，不搬資料——同 DepartmentStore._count()
+        的既有模式，且同樣必須帶 Prefer: count=exact，否則 Content-Range
+        只回 "0-0/*"（未知筆數）而非真正的總數，導致這裡永遠判斷為
+        False（第一版漏帶這個 header 的實測結果：資料庫確實擋下重複
+        提交、回 409，但這個函式卻回報「沒有 pending」，讓 create() 繼續
+        往下打，PostgREST 的 409 沒被接住，變成未預期的 500 而非乾淨的
+        應用層 409——同一個「except/防線失效時不出聲」的模式）。應用層
+        檢查是給友善 409 訊息的第一線，資料庫的部分唯一索引（005 遷移）
+        才是真正防競態的保險，兩者不衝突。"""
+        if not _use_supabase():
+            return False
+        base, key = self._base_key()
+        qs = (f"select=id&status=eq.pending"
+              f"&department=eq.{urllib.parse.quote(department, safe='')}"
+              f"&device_model=eq.{urllib.parse.quote(device_model, safe='')}"
+              f"&code=eq.{urllib.parse.quote(code, safe='')}")
+        req = urllib.request.Request(
+            f"{base}/rest/v1/{self._TABLE}?{qs}",
+            headers={"apikey": key, "Authorization": f"Bearer {key}",
+                     "Prefer": "count=exact", "Range-Unit": "items", "Range": "0-0"},
+            method="GET",
+        )
+        with urllib.request.urlopen(req) as r:
+            content_range = r.headers.get("Content-Range", "")
+            if "/" not in content_range:
+                return False
+            total = content_range.rsplit("/", 1)[-1]
+            return total.isdigit() and int(total) > 0
 
     def get_by_id(self, suggestion_id: int) -> Optional[dict]:
         if not _use_supabase():

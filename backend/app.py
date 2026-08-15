@@ -4,6 +4,7 @@ import os
 import re
 import socket
 import time
+import urllib.error
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from functools import wraps
@@ -610,16 +611,15 @@ def create_app() -> Flask:
         role = "superadmin" if is_superadmin() else "admin"
         patch["local_updated_by"] = f"{target}/{role}"
         patch["local_updated_at"] = datetime.now(timezone.utc).isoformat()
-        old = alarms_store.load(department=target)
-        old_row = next((a for a in old if a["code"] == code and a.get("device_model") == device_model), None)
+        old_row = alarms_store.get_one(department=target, match={"device_model": device_model, "code": code})
         if old_row is None:
             abort(404, "找不到此警報代碼")
         row = alarms_store.patch_one(department=target,
                                      match={"device_model": device_model, "code": code}, patch=patch)
         if row is None:
-            # patch_one() 打不到任何列——警報在上面 load() 查完之後被刪除
-            # 的競態，或 PostgREST 過濾條件沒匹配到（不該發生，但 PATCH
-            # 打空不報錯，靜默回 None 比讓前端以為改成功了更安全，見
+            # patch_one() 打不到任何列——警報在上面 get_one() 查完之後被
+            # 刪除的競態，或 PostgREST 過濾條件沒匹配到（不該發生，但
+            # PATCH 打空不報錯，靜默回 None 比讓前端以為改成功了更安全，見
             # 外部審查提醒：這類「看似合理的預設值」是這個系統反覆踩過的坑）
             abort(404, "找不到此警報代碼")
         audit_logger.log("local_update", department=target, new_data=row, old_data=old_row)
@@ -639,20 +639,32 @@ def create_app() -> Flask:
         if not suggestion:
             abort(400, "suggestion 為必填")
         reason = (body.get("reason") or "").strip() or None
-        items = alarms_store.load(department=target)
-        if not any(a["code"] == code and a.get("device_model") == device_model for a in items):
+        if alarms_store.get_one(department=target, match={"device_model": device_model, "code": code}) is None:
             abort(404, "找不到此警報代碼")
         # 防止同一筆警報已有待審建議時又重複提交——不區分是不是同一人
         # 提的，因為部門共用密碼追不到個人（見 PLAN_local_solution.md 9
-        # 節已知限制），只要這筆警報已經有人在排隊審核，就不該再疊一筆
-        pending = alarm_suggestion_store.list_pending(department=target)
-        if any(s["device_model"] == device_model and s["code"] == code for s in pending):
+        # 節已知限制），只要這筆警報已經有人在排隊審核，就不該再疊一筆。
+        # 這裡只是給友善 409 訊息的第一線，真正防競態（兩人同時提交、
+        # 同一人連點兩下）的是資料庫的部分唯一索引（005 遷移），兩者
+        # 不衝突——外部審查第四輪指出應用層檢查有 check-then-insert
+        # 的競態視窗，資料庫層才是真正的保險。
+        if alarm_suggestion_store.has_pending(target, device_model, code):
             abort(409, "這筆警報已有待審核的建議，請等管理員處理後再提交")
         role = "superadmin" if is_superadmin() else ("admin" if is_admin() else "user")
-        row = alarm_suggestion_store.create(
-            department=target, device_model=device_model, code=code,
-            suggestion=suggestion, reason=reason, submitted_by=f"{target}/{role}",
-        )
+        try:
+            row = alarm_suggestion_store.create(
+                department=target, device_model=device_model, code=code,
+                suggestion=suggestion, reason=reason, submitted_by=f"{target}/{role}",
+            )
+        except urllib.error.HTTPError as e:
+            if e.code == 409:
+                # has_pending() 已經檢查過，這裡仍撞到 005 遷移的部分唯一
+                # 索引，代表競態確實發生（兩人同時提交，或 has_pending()
+                # 查完之後、create() 送出之前有別人搶先送出）——資料庫層
+                # 的保險生效了，接住轉成乾淨的應用層 409，不要讓 PostgREST
+                # 的原始 HTTPError 往上炸成未預期的 500。
+                abort(409, "這筆警報已有待審核的建議，請等管理員處理後再提交")
+            raise
         return jsonify(row), 201
 
     @app.get("/api/admin/suggestions")
