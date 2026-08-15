@@ -2053,4 +2053,16 @@ FORBIDDEN regex 新增 `throttle`/`rate_limit`/`fallthrough` 三個關鍵字（�
 
 **影響範圍**：Render 正式環境從 `e3aacb0`（storage.py 完成）→ `95adfbf`（app.py + 前端全部改動）完成部署，隔離機制正式在正式環境生效；Render Dashboard 新增 `SUPERADMIN_PASSWORD` 環境變數（先前遺漏）；`render.yaml` 補上這個 key（commit `5b02224`，待下次一併 push）；新增 `frontend/sw-kill.js`（止血用，未部署，未進版本控制討論範圍，僅供緊急情況覆蓋 `sw.js` 使用）；`testing/architecture_review_20260814.md`（本輪整理給外部專家審查的架構文件，未加入 `.gitignore`，視需要決定是否保留在版本庫）。至此 PLAN 第 7 節部署順序的十個步驟（加欄位→遷移腳本→約束切換→storage.py→app.py→哨兵驗證→前端→批次匯入建第二部門→建立登入帳號→purge 哨兵）已完成前七步；第 8-10 步（建立真實第二部門、匯入資料、purge 哨兵部門）依 PLAN 既有決定維持延後，非本輪範圍。
 
+---
+
+第三十九輪：**cron-job.org 防休眠排程指向舊網域，補上第十二輪的懸而未決事項**
+
+**背景**：維護窗口結束後，使用者回報「服務一直休眠，需要手動喚醒訪問」——這與 PLAN 既定的「免費層 + cron-job.org 防休眠」方案（見第十二輪）矛盾，若排程正常運作，服務不該需要手動喚醒。
+
+**根因**：第十二輪部署平台由 Railway 改回 Render 時，就已明確記錄「`cron-job.org` 的排程設定需要指向新的 Render 網域（若網域跟先前的臨時部署不同）」這件待確認事項，但 PLAN 全文再無後續記錄顯示這件事真的執行過。本輪查證確認：cron-job.org 的 "Alarm System Keep-Alive" 排程當時設定的 URL 是 `https://alarm-system-j9dl.onrender.com/ping`（舊網域，Failed Cronjobs 列表顯示 HTTP error），而實際運作中的服務網域是 `https://alarm-system-1.onrender.com`——舊網域已不存在，排程每次執行都直接失敗，服務因此從未被真正喚醒過，只能靠使用者手動訪問觸發冷啟動。
+
+**修正**：使用者登入 cron-job.org 手動把 URL 改成 `https://alarm-system-1.onrender.com/ping`，執行 Test run 驗證：`200 OK`，558ms，`x-render-origin-server: gunicorn` 確認正確打到 Render 服務。第十二輪待辦至此正式收尾。
+
+**影響範圍**：無程式碼異動，純外部平台（cron-job.org）設定修正，不涉及 git commit。這是本專案第二次遇到「網域/服務位址變更後，外部相依服務的設定沒有同步更新」的情況（第一次是 Railway→Render 平台遷移本身），值得記錄的通用教訓：**服務網域一旦變更，除了程式碼裡的環境變數（`RENDER_EXTERNAL_URL` 是自動注入不受影響），還要盤點所有外部指向該網域的設定**（本例是 cron-job.org，未來若有其他外部服務——例如 webhook、監控告警——同樣要檢查）。
+
 **影響範圍**：`backend/storage.py`（新增 `SupabaseStore.probe()`/`JsonStore.probe()`）；`backend/app.py`（`/ping` 改呼叫 `probe()`）；`tests/test_no_fake_isolation_claims.py`（完整重寫：`rglob`、類別名匹配、`purge` 出口說明、`throttle`/`fallthrough` 關鍵字、九項機制清單 docstring）；61 個既有 pytest 全數通過；用真實 Supabase 連線驗證 `/ping` 回應時間（0.4-0.5 秒，較撈整張表明顯更快）；`grep` 確認 `dashboard.html` 不存在同類動態綁定陷阱，Vue `@click` 指令機制天生免疫。三個 commit（`b47feda`/`1be67fa`/`51d2de6`）確認皆不擋部署，本輪修正尚未 commit。
