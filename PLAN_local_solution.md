@@ -168,61 +168,50 @@ if not patch:
 
 ### 4.5 缺處置清單的排序邏輯
 
-不是「所有空白的都列出來」，而是**依實際造成的困擾排序**：
+**【第三輪外部審查：發現原始設計依賴的資料結構不存在，最終定案為第一版不做排序】**
 
-```sql
-select a.device_model, a.code, a.description,
-       count(s.id) as scan_count,
-       (a.solution is null or a.solution = '') as no_vendor
-from alarms a
-left join ai_scans s
-  on s.department = a.department
- and s.device_model = a.device_model
- and s.detected_code = a.code
-where a.department = :dept
-  and (a.local_solution is null or a.local_solution = '')
-group by a.device_model, a.code, a.description, a.solution
-order by no_vendor desc, scan_count desc
-limit 50;
+原始構想是「無原廠也無現場」優先、其次依「掃描次數」排序。第二輪審查先指出排序 SQL 是原生跨表 `JOIN`，PostgREST 跑不起來，建議改用 view。但用真實 Supabase 連線查證 `ai_scans` 實際 schema 後，發現問題比 SQL 語法更根本：
+
+```json
+// ai_scans 一筆記錄的實際結構
+{
+  "scan_id": "...",
+  "model": "TFM002",
+  "alarms": "[{\"code\":\"0003\",\"conf\":98},{\"code\":\"1985\",\"conf\":98}, ...]",  // JSON 陣列字串，非單一欄位
+  "tier": "success_high",
+  "department": null
+}
 ```
 
-排序原則：**無原廠也無現場**的排最前面（真的沒有任何指引），其次依**掃描次數**（常發生的優先補，掃描 0 次的可能根本不會發生）。
+`ai_scans` 根本沒有 `detected_code` 這種單一代碼欄位——一次掃描的 `alarms` 是 **AI 回傳的候選清單**（可能同時包含好幾個候選代碼、各帶信心分數），不是「一次掃描對應一個實際發生的代碼」。這解釋了為什麼現有的 `GET /api/admin/scan-ranking`（`app.py` 771 行）從一開始就只按 `model`（機種）分組，從未按單一代碼統計過——不是疏漏，是這個資料結構在語意上本來就只適合按機種分組。
 
-**🔴【第二輪外部審查發現，會在階段 1 就卡住】上面這句 SQL 在這個系統實際跑不起來。** `storage.py` 全部走 PostgREST REST API，不是直連 Postgres——PLAN_department_isolation.md 第三十九輪已經確認這個專案刻意不裝 `psql`/直連字串，只用 Dashboard SQL Editor 手動執行一次性腳本。PostgREST 本身不支援跨表 `JOIN` + `GROUP BY` 這種查詢，`storage.py` 沒有、也不該有能直接下這句 SQL 的路徑。
+**更關鍵的是：就算解決了 JSON 陣列展開的技術問題，這個指標測的方向也是錯的。** 若把 `alarms` 陣列展開計數，一次掃描會讓陣列裡的每個候選代碼各 +1——辨識越不準、候選越多的情況，貢獻的計數反而越多。得到的排序會是「AI 多常猜到這個代碼」，不是「這個警報多常真的發生」，兩者方向相反。
 
-三個可行解法，**採用 (a)**：
-
-**(a) 建一個 Postgres view，PostgREST 就能當表查（採用）**
+**曾考慮的替代方案：改用 `alarm_views`**（使用者確認並點開查看警報詳情，語意正確、天然按代碼記錄、已在支撐 Dashboard Top10，且用真實連線確認是事件表非計數表）：
 
 ```sql
+-- 曾考慮但最終未採用的版本
 create view alarms_missing_local as
 select a.department, a.device_model, a.code, a.description,
        (a.solution is null or a.solution = '') as no_vendor,
-       count(s.id) as scan_count
+       coalesce(v.view_count, 0) as view_count
 from alarms a
-left join ai_scans s
-  on s.department = a.department
- and s.device_model = a.device_model
- and s.detected_code = a.code
-where a.local_solution is null or a.local_solution = ''
-group by a.department, a.device_model, a.code, a.description, a.solution;
+left join (
+  select department, device_model, code, count(*) as view_count
+  from alarm_views
+  group by department, device_model, code
+) v
+  on v.department = a.department
+ and v.device_model = a.device_model
+ and v.code       = a.code
+where a.local_solution is null or a.local_solution = '';
 ```
 
-`GET /admin/alarms/missing` 端點內部改呼叫 `GET /alarms_missing_local?department=eq.<dept>&order=no_vendor.desc,scan_count.desc&limit=50`，跟現有 `storage.py` 對 PostgREST 的呼叫模式完全一致，不需要新的存取層。
+這個版本技術上可行，但發現兩個限制：(1) `department` 有 NULL 的歷史孤兒列（1.5 節刻意保留），`eq` 匹配不到 NULL，改造前累積的瀏覽記錄完全不計入，初期數字會很小；(2) 建這個 view 仍然是為了一個「錦上添花」的排序維度，付出的複雜度（額外的表、額外的部署步驟、RLS 開啟時要記得處理）與帶來的價值不成比例。
 
-⚠️ **這個 view 沒有 RLS**，但現在整個系統也還沒開 RLS（`PLAN_department_isolation.md` 4.9 節列為長期強化項目），過濾依然靠應用層在呼叫時加 `department=eq.`——跟現有所有查詢的做法一致，沒有新增風險。但**日後若真的開了 RLS，這個 view 要一併處理**，否則會變成繞過 RLS 的後門，必須記在那次開 RLS 的檢查清單裡。
+**最終決定：第一版完全不做排序，也不建任何 view。** `no_vendor`（有沒有原廠處置）已經是最重要的判準，而且是 `alarms` 表上的純欄位判斷——不需要 join、不需要跨表查詢、不需要 view，直接在既有的 `GET /api/alarms` 加一個 `?missing_local=true` 篩選參數（`local_solution is null or local_solution = ''`）就完成。`alarm_views` 排序這個維度留到日後真的有需要、且累積了足夠改造後的資料時再單獨評估加回來——view 隨時可以事後補，不影響現在的實作。
 
-(b) 建 RPC function（`create function ... returns table`，PostgREST 用 `POST /rpc/xxx` 呼叫）：彈性更高但多一層抽象，這次用不到，不採用。
-
-(c) 在 Python 端做記憶體 join（`GET alarms?local_solution=is.null` + `GET ai_scans`，程式碼裡合併）：以現有 1759 筆規模跑得動，但要處理 `_paginated_get` 分頁，且部門變多後會變慢，不如 view 乾淨，不採用。
-
-**🟡 join 條件 `s.detected_code = a.code` 可能低估辨識錯誤率高的警報**：`detected_code` 是 AI 辨識出的原始值，若使用者按過「修正」，正確代碼會落在 `ai_corrections.corrected_code`，這筆掃描不會被算進對應正確代碼的 `scan_count`。**動工前先查一次修正比例**：
-
-```sql
-select count(*) from ai_scans where is_corrected = true;
-```
-
-依目前基準值（回饋僅 3 筆，`PLAN_department_isolation.md` 第三十四輪記錄），這個比例很可能很低，若確認如此，直接用 `detected_code`、在 view 或本文件註記一句「已知：修正後的掃描次數未回補到原代碼」即可，不需要為此把 `ai_corrections` 也拉進 join，增加複雜度。若比例偏高才需要重新設計 join 邏輯。
+**連帶影響**：階段 1 的資料庫改動回到最單純的「加四個欄位 + 建 `alarm_suggestions` 表」，不需要建 view；4.2 節的 `GET /api/admin/alarms/missing` 端點改為 `GET /api/alarms?missing_local=true`（沿用既有讀取端點加篩選參數，不算新端點，`ROUTE_AUTH_REGISTRY` 不需要為此新增項目，只是既有路由的行為擴充）。
 
 ---
 
@@ -331,12 +320,12 @@ E108：確認風扇運轉並清潔濾網
 
 | 階段 | 內容 | 產生的價值 |
 |---|---|---|
-| 1 | 加四個欄位 ＋ 建 `alarm_suggestions` 表 ＋ 建 `alarms_missing_local` view（見 4.5 節第二輪審查修正） | 零行為變更 |
+| 1 | 加四個欄位 ＋ 建 `alarm_suggestions` 表（第三輪審查後：不建 view，見 4.5 節） | 零行為變更 |
 | 2 | `PUT .../local` 端點 ＋ 白名單 ＋ 稽核 | 後端就緒 |
 | 3 | 前台詳情卡片顯示兩層 | **既有知識可見** |
 | 4 | 前台管理員編輯入口 ＋ 預填情境 | **知識開始累積** |
 | 5 | 一般使用者建議 ＋ 待審表 ＋ 後台審核 | 擴大來源 |
-| 6 | 缺處置清單排序（改用階段 1 建的 view） | 補資料有優先序 |
+| 6 | 缺處置清單（`GET /api/alarms?missing_local=true` 篩選參數，不做排序，見 4.5 節） | 補資料有優先序 |
 | 7 | AI 第一關分級 ＋ 差異摘要 | 降低審核負擔 |
 
 **🟡【第二輪外部審查提醒】哨兵資料同步要併進 seed 檔本身，不能單獨手動執行**：8.1 節的 `[SENTINEL]` `UPDATE` 語句必須寫進 `sentinel_pack/01_seed_sentinel.sql`（而非只在 Dashboard 手動跑一次）。`sentinel_pack` 的設計原則是「可重複執行、隨時能重建」（`PLAN_department_isolation.md` 第七節 purge 時機的判斷邏輯依賴這一點）——若 `local_solution` 只在外面手動下一次 SQL，之後任何人重跑 seed 腳本，T-15～T-17 會安靜失效（哨兵資料被清空重建，`[SENTINEL]` 標記的 `local_solution` 卻沒有一併重建），而且不會報錯，只是這三項測試從此測不到東西——這正是 `PLAN_department_isolation.md` 第三十六輪那個「假通過測試」問題的同一種模式：測試綠燈，但已經沒有在驗證原本要驗證的機制。
@@ -421,10 +410,10 @@ where department = 'zztest' and device_model = 'ACM001' and code = 'ZZC001';
 4. AI 審核是獨立呼叫路徑，不沿用 `ai_pipeline.py` 既有函式（6.4 節）
 5. 審核者角色第一版用 admin，不新增角色（2.2、9 節）
 
-**第二輪外部審查發現一個會在階段 1 就卡住的問題**，已整合進對應章節（標註「【第二輪外部審查...】」）：
-1. **🔴 4.5 節的排序 SQL 是原生跨表 JOIN，但系統走 PostgREST，不支援這種查詢**——改為建 `alarms_missing_local` view 讓 PostgREST 當表查，階段 1 補這一項（4.5、七節）
-2. 🟡 join 條件 `detected_code` 可能低估辨識錯誤率高的警報，動工前先查修正比例，比例低則已知誤差記一句即可（4.5 節）
-3. 🟡 哨兵資料的 `[SENTINEL]` local_solution 必須寫進 `01_seed_sentinel.sql` 本身，不能只手動下一次 SQL，否則之後重跑 seed 會讓 T-15~T-17 安靜失效（七節）
-4. 提醒：若原廠文件缺口比例確認偏高，會牽動目前只是佔位的「PDF/Word→CSV 抽取流程」待辦，需要先補實質內容才能真的動手補匯入（九節）
+**第二輪外部審查**發現 4.5 節排序 SQL 是原生跨表 JOIN、PostgREST 跑不起來，建議改建 view；同時指出哨兵資料同步、辨識修正比例等提醒（已部分被第三輪取代，見下）：
+3. 🟡 哨兵資料的 `[SENTINEL]` local_solution 必須寫進 `01_seed_sentinel.sql` 本身，不能只手動下一次 SQL，否則之後重跑 seed 會讓 T-15~T-17 安靜失效（七節，此點仍成立）
+4. 提醒：若原廠文件缺口比例確認偏高，會牽動目前只是佔位的「PDF/Word→CSV 抽取流程」待辦，需要先補實質內容才能真的動手補匯入（九節，此點仍成立）
 
-**下一步**：查清楚第九節「原廠文件缺口比例」，之後再排實際動工時間。動工時建議延續 `PLAN_department_isolation.md` 的節奏——分階段、每階段可獨立驗證、重要決策前先問過一輪外部意見。
+**第三輪外部審查發現比 SQL 語法更根本的問題，4.5 節整段改寫**：用真實 Supabase 連線查證後，`ai_scans.alarms` 是 JSON 陣列（AI 一次掃描的候選代碼清單，非單一代碼欄位），`detected_code` 這個欄位根本不存在。就算解決 JSON 展開的技術問題，這個指標測的也是「AI 多常猜到這個代碼」而非「這個警報多常發生」，方向是錯的。曾考慮改用語意正確的 `alarm_views`，但該表有 `department IS NULL` 的孤兒列問題（改造前資料不計入）且複雜度與價值不成比例。**最終決定：第一版完全不做排序，也不建任何 view**——`no_vendor` 判斷直接用 `GET /api/alarms?missing_local=true` 篩選參數完成，階段 1 回到最單純的「加四個欄位＋建 `alarm_suggestions` 表」（4.5、七節）。
+
+**下一步**：查清楚第九節「原廠文件缺口比例」，之後再排實際動工時間。動工時建議延續 `PLAN_department_isolation.md` 的節奏——分階段、每階段可獨立驗證、重要決策前先問過一輪外部意見。這次三輪審查也印證了同一個模式：**憑合理推測寫的 SQL，一旦用真實資料查證，經常會發現資料結構跟假設不符**——跟 `PLAN_department_isolation.md` 第十一輪「devices 表欄位名稱與全文假設不符」是同一類教訓。
