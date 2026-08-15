@@ -651,7 +651,7 @@
       cursor: pointer; font-size: 15px; font-family: inherit;
     }
 
-    /* 本廠做法編輯 dialog（沿用 model-picker 的 backdrop/bottom-sheet 殼） */
+    /* 現場方案編輯 dialog（沿用 model-picker 的 backdrop/bottom-sheet 殼） */
     .local-sol-editor { max-height: 88vh; overflow-y: auto; }
     .local-sol-editor-label { font-size: 12px; font-weight: 700; color: var(--muted); }
     .local-sol-editor-vendor { padding: 10px 12px; background: var(--surface-hover); border-radius: var(--radius-sm); display: flex; flex-direction: column; gap: 4px; }
@@ -1058,7 +1058,7 @@
             </template>
           </template>
           <template v-else-if="selected.local_solution">
-            <dt>本廠做法</dt>
+            <dt>現場方案</dt>
             <dd>
               <div class="local-sol-block">
                 <div class="local-sol-body">{{ selected.local_solution }}</div>
@@ -1075,14 +1075,14 @@
             <dt>解決方案</dt>
             <dd>
               {{ selected.solution }}
-              <button v-if="whoami.admin" class="local-sol-edit-btn" @click="openLocalSolutionEditor">💡 補充本廠做法</button>
+              <button v-if="whoami.admin" class="local-sol-edit-btn" @click="openLocalSolutionEditor">💡 補充現場方案</button>
             </dd>
           </template>
           <template v-else>
             <dt>解決方案</dt>
             <dd>
               <span class="no-solution-hint">這筆還沒有處置方式</span>
-              <button v-if="whoami.admin" class="local-sol-edit-btn" @click="openLocalSolutionEditor">💡 補充本廠做法</button>
+              <button v-if="whoami.admin" class="local-sol-edit-btn" @click="openLocalSolutionEditor">💡 補充現場方案</button>
             </dd>
           </template>
           <dt>關鍵字</dt><dd>{{ (selected.keywords || []).join('、') || '—' }}</dd>
@@ -1104,18 +1104,18 @@
 
     <div v-if="localEdit.show" class="model-picker-backdrop" @click.self="closeLocalSolutionEditor">
       <div class="model-picker local-sol-editor">
-        <div class="model-picker-title">補充本廠做法</div>
+        <div class="model-picker-title">補充現場方案</div>
         <div class="model-picker-sub">{{ localEdit.device_model }} · {{ localEdit.code }} · {{ localEdit.description }}</div>
         <div v-if="localEdit.vendorSolution" class="local-sol-editor-vendor">
           <div class="local-sol-editor-label">原廠建議</div>
           <div class="local-sol-editor-vendor-body">{{ localEdit.vendorSolution }}</div>
         </div>
-        <label class="local-sol-editor-label" for="local-sol-input">本廠做法</label>
+        <label class="local-sol-editor-label" for="local-sol-input">現場方案</label>
         <textarea id="local-sol-input" class="local-sol-editor-input" rows="4" v-model="localEdit.local_solution" placeholder="實際在現場怎麼處理這個警報"></textarea>
         <label class="local-sol-editor-label" for="local-reason-input">為什麼不同（選填）</label>
         <textarea id="local-reason-input" class="local-sol-editor-input" rows="3" v-model="localEdit.local_reason" placeholder="與原廠建議不同的原因"></textarea>
         <div v-if="localEdit.references.length" class="local-sol-editor-refs">
-          <div class="local-sol-editor-label">同機種其他警報的本廠做法（參考）</div>
+          <div class="local-sol-editor-label">同機種其他警報的現場方案（參考）</div>
           <div class="local-sol-editor-ref-item" v-for="r in localEdit.references" :key="r.code">
             <strong>{{ r.code }}</strong>：{{ r.local_solution }}
           </div>
@@ -1282,7 +1282,7 @@
         async saveLocalSolution() {
           const e = this.localEdit;
           if (!e.local_solution || !e.local_solution.trim()) {
-            e.error = '請填寫本廠做法';
+            e.error = '請填寫現場方案';
             return;
           }
           e.saving = true;
