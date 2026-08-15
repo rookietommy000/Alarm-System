@@ -601,6 +601,7 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
                     </span>
                   </td>
                   <td style="text-align:right; white-space:nowrap">
+                    <button class="btn btn-ghost" @click="openEditDept(d)">編輯</button>
                     <button class="btn btn-ghost" @click="openResetPw(d)">重設密碼</button>
                     <button class="btn btn-ghost" @click="openToggleActive(d)">{{ d.active ? '停用' : '啟用' }}</button>
                     <button v-if="d.purgeable" class="btn btn-ghost btn-danger" @click="openDeleteDept(d)">刪除</button>
@@ -698,6 +699,32 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
         <div style="display:flex; gap:8px">
           <button class="btn btn-secondary" @click="closeDeptDialog">取消</button>
           <button class="btn btn-primary" @click="createDept">建立部門</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 編輯部門 Dialog -->
+  <div class="dialog-backdrop" v-if="deptDialog === 'edit'" @click.self="closeDeptDialog">
+    <div class="dialog blueprint" style="width:min(480px,100%)">
+      <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+      <div class="dialog-title">編輯部門</div>
+      <div class="field">
+        <label>部門識別碼</label>
+        <input class="input" :value="deptTargetId" disabled style="font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace; opacity:0.6" />
+        <span style="font-size:13px; color:color-mix(in srgb, var(--color-text) 60%, transparent); display:block; margin-top:4px">建立後不可更改。</span>
+      </div>
+      <div class="field">
+        <label>顯示名稱</label>
+        <input class="input" v-model="deptEditDraft.name" />
+        <span style="font-size:13px; color:color-mix(in srgb, var(--color-text) 60%, transparent); display:block; margin-top:4px">現場人員在登入頁看到的名稱。</span>
+      </div>
+      <p v-if="deptError" style="color:#a23b3b; font-size:13px; margin:0">{{ deptError }}</p>
+      <div class="dialog-actions">
+        <div></div>
+        <div style="display:flex; gap:8px">
+          <button class="btn btn-secondary" @click="closeDeptDialog">取消</button>
+          <button class="btn btn-primary" @click="saveDeptEdit">儲存</button>
         </div>
       </div>
     </div>
@@ -864,6 +891,7 @@ createApp({
       // ── 部門管理 dialog 狀態 ──
       deptDialog: null, deptTargetId: null, deptError: '',
       deptCreateDraft: { id: '', name: '', password: '', admin_password: '' },
+      deptEditDraft: { name: '' },
       deptResetDraft: { password: '', admin_password: '' },
       delStep: 1, delConfirmText: '',
       deptImpactLoading: false, deptImpactError: '', deptImpactCounts: null, deptDeletedCounts: null,
@@ -1182,6 +1210,22 @@ createApp({
       await this.loadDepartments();
       this.closeDeptDialog();
       this.showToast(`已建立部門 ${name}`);
+    },
+    openEditDept(d) {
+      this.deptTargetId = d.id;
+      this.deptEditDraft = { name: d.name };
+      this.deptError = '';
+      this.deptDialog = 'edit';
+    },
+    async saveDeptEdit() {
+      this.deptError = '';
+      const name = this.deptEditDraft.name.trim();
+      if (!name) { this.deptError = '顯示名稱不可為空'; return; }
+      const r = await AlarmApi.put(`/api/admin/departments/${encodeURIComponent(this.deptTargetId)}`, { name });
+      if (!r.ok) { this.deptError = (await r.json()).error || '儲存失敗'; return; }
+      await this.loadDepartments();
+      this.closeDeptDialog();
+      this.showToast('部門名稱已更新');
     },
     openResetPw(d) {
       this.deptTargetId = d.id;
