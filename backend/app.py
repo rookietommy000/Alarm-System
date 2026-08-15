@@ -253,16 +253,37 @@ def create_app() -> Flask:
     def _client_ip() -> str:
         return request.headers.get("X-Forwarded-For", request.remote_addr or "unknown").split(",")[0].strip()
 
+    _TS_FRAC_RE = re.compile(r"^(.*\.\d+)([+-]\d{2}:\d{2})$")
+
+    def _parse_pg_timestamp(ts: str) -> datetime:
+        """PostgREST 回傳的 timestamptz 微秒尾端為 0 時會被裁切成非 6 位數
+        （例如 .78161 而非 .781610），Python 的 datetime.fromisoformat() 只
+        接受精確 3 或 6 位微秒，其餘位數一律拋 ValueError——這裡先補齊到
+        6 位再解析，不依賴資料庫回傳字串剛好符合 fromisoformat 的嚴格格式。"""
+        s = ts.replace("Z", "+00:00")
+        m = _TS_FRAC_RE.match(s)
+        if m:
+            head, tz = m.groups()
+            int_part, _, frac = head.partition(".")
+            s = f"{int_part}.{frac.ljust(6, '0')[:6]}{tz}"
+        return datetime.fromisoformat(s)
+
     def _remaining_delay(n: int, last_failure_at: Optional[str], n_threshold: int, n_offset: int) -> int:
         """delay 是相對「最後一次失敗時間」的倒數計時，不是「N>=門檻就永久節流」——
         過了 2**effective_n 秒窗口，同一個 N 不再節流，直到下一次失敗才會觸發下一輪
-        （且下一輪的 N 會遞增，delay 也隨之變長）。"""
+        （且下一輪的 N 會遞增，delay 也隨之變長）。
+
+        【第四輪外部審查發現的既有 bug】原本用 datetime.fromisoformat() 直接解析
+        last_failure_at，遇到微秒非 3/6 位（PostgREST 常見輸出，尾端 0 被裁切）
+        會拋例外，except 分支回傳「完整延遲」而非「剩餘延遲」——不管實際已經
+        過了多久，永遠回報同一個固定秒數，等同節流視窗形同虛設地變長。改用
+        _parse_pg_timestamp() 容忍任意位數微秒，不再依賴嚴格格式。"""
         if n < n_threshold or last_failure_at is None:
             return 0
         effective_n = n if n_offset == 0 else (n - n_offset)
         full_delay = min(2 ** effective_n, 60)
         try:
-            last_dt = datetime.fromisoformat(last_failure_at.replace("Z", "+00:00"))
+            last_dt = _parse_pg_timestamp(last_failure_at)
         except Exception:
             return full_delay
         elapsed = (datetime.now(timezone.utc) - last_dt).total_seconds()
