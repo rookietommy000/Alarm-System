@@ -188,6 +188,42 @@ limit 50;
 
 排序原則：**無原廠也無現場**的排最前面（真的沒有任何指引），其次依**掃描次數**（常發生的優先補，掃描 0 次的可能根本不會發生）。
 
+**🔴【第二輪外部審查發現，會在階段 1 就卡住】上面這句 SQL 在這個系統實際跑不起來。** `storage.py` 全部走 PostgREST REST API，不是直連 Postgres——PLAN_department_isolation.md 第三十九輪已經確認這個專案刻意不裝 `psql`/直連字串，只用 Dashboard SQL Editor 手動執行一次性腳本。PostgREST 本身不支援跨表 `JOIN` + `GROUP BY` 這種查詢，`storage.py` 沒有、也不該有能直接下這句 SQL 的路徑。
+
+三個可行解法，**採用 (a)**：
+
+**(a) 建一個 Postgres view，PostgREST 就能當表查（採用）**
+
+```sql
+create view alarms_missing_local as
+select a.department, a.device_model, a.code, a.description,
+       (a.solution is null or a.solution = '') as no_vendor,
+       count(s.id) as scan_count
+from alarms a
+left join ai_scans s
+  on s.department = a.department
+ and s.device_model = a.device_model
+ and s.detected_code = a.code
+where a.local_solution is null or a.local_solution = ''
+group by a.department, a.device_model, a.code, a.description, a.solution;
+```
+
+`GET /admin/alarms/missing` 端點內部改呼叫 `GET /alarms_missing_local?department=eq.<dept>&order=no_vendor.desc,scan_count.desc&limit=50`，跟現有 `storage.py` 對 PostgREST 的呼叫模式完全一致，不需要新的存取層。
+
+⚠️ **這個 view 沒有 RLS**，但現在整個系統也還沒開 RLS（`PLAN_department_isolation.md` 4.9 節列為長期強化項目），過濾依然靠應用層在呼叫時加 `department=eq.`——跟現有所有查詢的做法一致，沒有新增風險。但**日後若真的開了 RLS，這個 view 要一併處理**，否則會變成繞過 RLS 的後門，必須記在那次開 RLS 的檢查清單裡。
+
+(b) 建 RPC function（`create function ... returns table`，PostgREST 用 `POST /rpc/xxx` 呼叫）：彈性更高但多一層抽象，這次用不到，不採用。
+
+(c) 在 Python 端做記憶體 join（`GET alarms?local_solution=is.null` + `GET ai_scans`，程式碼裡合併）：以現有 1759 筆規模跑得動，但要處理 `_paginated_get` 分頁，且部門變多後會變慢，不如 view 乾淨，不採用。
+
+**🟡 join 條件 `s.detected_code = a.code` 可能低估辨識錯誤率高的警報**：`detected_code` 是 AI 辨識出的原始值，若使用者按過「修正」，正確代碼會落在 `ai_corrections.corrected_code`，這筆掃描不會被算進對應正確代碼的 `scan_count`。**動工前先查一次修正比例**：
+
+```sql
+select count(*) from ai_scans where is_corrected = true;
+```
+
+依目前基準值（回饋僅 3 筆，`PLAN_department_isolation.md` 第三十四輪記錄），這個比例很可能很低，若確認如此，直接用 `detected_code`、在 view 或本文件註記一句「已知：修正後的掃描次數未回補到原代碼」即可，不需要為此把 `ai_corrections` 也拉進 join，增加複雜度。若比例偏高才需要重新設計 join 邏輯。
+
 ---
 
 ## 五、⬜ 前端改動
@@ -295,13 +331,15 @@ E108：確認風扇運轉並清潔濾網
 
 | 階段 | 內容 | 產生的價值 |
 |---|---|---|
-| 1 | 加四個欄位 ＋ 建 `alarm_suggestions` 表 | 零行為變更 |
+| 1 | 加四個欄位 ＋ 建 `alarm_suggestions` 表 ＋ 建 `alarms_missing_local` view（見 4.5 節第二輪審查修正） | 零行為變更 |
 | 2 | `PUT .../local` 端點 ＋ 白名單 ＋ 稽核 | 後端就緒 |
 | 3 | 前台詳情卡片顯示兩層 | **既有知識可見** |
 | 4 | 前台管理員編輯入口 ＋ 預填情境 | **知識開始累積** |
 | 5 | 一般使用者建議 ＋ 待審表 ＋ 後台審核 | 擴大來源 |
-| 6 | 缺處置清單排序 | 補資料有優先序 |
+| 6 | 缺處置清單排序（改用階段 1 建的 view） | 補資料有優先序 |
 | 7 | AI 第一關分級 ＋ 差異摘要 | 降低審核負擔 |
+
+**🟡【第二輪外部審查提醒】哨兵資料同步要併進 seed 檔本身，不能單獨手動執行**：8.1 節的 `[SENTINEL]` `UPDATE` 語句必須寫進 `sentinel_pack/01_seed_sentinel.sql`（而非只在 Dashboard 手動跑一次）。`sentinel_pack` 的設計原則是「可重複執行、隨時能重建」（`PLAN_department_isolation.md` 第七節 purge 時機的判斷邏輯依賴這一點）——若 `local_solution` 只在外面手動下一次 SQL，之後任何人重跑 seed 腳本，T-15～T-17 會安靜失效（哨兵資料被清空重建，`[SENTINEL]` 標記的 `local_solution` 卻沒有一併重建），而且不會報錯，只是這三項測試從此測不到東西——這正是 `PLAN_department_isolation.md` 第三十六輪那個「假通過測試」問題的同一種模式：測試綠燈，但已經沒有在驗證原本要驗證的機制。
 
 **階段 3–4 是價值最高的一段**，做完就能讓管理員在現場順手記錄。
 
@@ -357,6 +395,8 @@ where department = 'zztest' and device_model = 'ACM001' and code = 'ZZC001';
 - ⬜ **缺處置的警報中，有多少是「原廠文件其實有、但當初沒匯進來」？**（使用者估計約一半一半，比例不低）若確認比例高，補匯入的效率會比人工填寫高一個量級，應排在階段 4 前面（見第七節建議）
 - 差異較大的（AI 標 🔴）是否需要更資深的人確認？（與審核者角色待辦同一類，暫不處理）
 
+**🟡【第二輪外部審查提醒】若原廠文件缺口比例確認偏高，會連帶牽動一件目前只是佔位、沒有實質內容的待辦**：`PLAN_department_isolation.md` 目前有一節提到「PDF／Word → 標準 CSV 的抽取流程」，但只佔了位置、沒有實際規劃。若查清楚後決定走批次補匯入這條路，那個抽取流程要先補上實質內容（怎麼從原廠文件擷取結構化資料），否則「查完比例、決定要補匯入」和「真的能動手補匯入」之間還有一段沒規劃的距離。這件事排在完成第九節那項待確認之後，不是本輪範圍，但值得先記下來，避免查完比例後才發現卡在這裡。
+
 ---
 
 ## 十、刻意不做的事
@@ -370,15 +410,21 @@ where department = 'zztest' and device_model = 'ACM001' and code = 'ZZC001';
 
 ---
 
-## 十一、第一輪可行性檢查小結
+## 十一、可行性檢查小結（兩輪）
 
 **整體判斷：設計方向正確，可行。** 「原廠 vs 現場做法並存、不覆蓋」的核心決策，與 `PLAN_department_isolation.md` 一路貫徹的原則一致（保留可追溯性、明確白名單優於信任前端、單一職責的轉換點）。
 
-本輪檢查確認/修正的五點，已整合進對應章節（標註「【第一輪可行性檢查...】」）：
+**第一輪檢查**確認/修正五點，已整合進對應章節（標註「【第一輪可行性檢查...】」）：
 1. `normalize()` 不動、新欄位走獨立白名單（4.1、4.3 節）
 2. `local_updated_by` 用 `resolve_target_department()` 而非 `_confirmed_by()`（4.4 節）
 3. 編輯入口要同時涵蓋搜尋結果與 AI 辨識結果兩種詳情卡片路徑（5.2 節）
 4. AI 審核是獨立呼叫路徑，不沿用 `ai_pipeline.py` 既有函式（6.4 節）
 5. 審核者角色第一版用 admin，不新增角色（2.2、9 節）
+
+**第二輪外部審查發現一個會在階段 1 就卡住的問題**，已整合進對應章節（標註「【第二輪外部審查...】」）：
+1. **🔴 4.5 節的排序 SQL 是原生跨表 JOIN，但系統走 PostgREST，不支援這種查詢**——改為建 `alarms_missing_local` view 讓 PostgREST 當表查，階段 1 補這一項（4.5、七節）
+2. 🟡 join 條件 `detected_code` 可能低估辨識錯誤率高的警報，動工前先查修正比例，比例低則已知誤差記一句即可（4.5 節）
+3. 🟡 哨兵資料的 `[SENTINEL]` local_solution 必須寫進 `01_seed_sentinel.sql` 本身，不能只手動下一次 SQL，否則之後重跑 seed 會讓 T-15~T-17 安靜失效（七節）
+4. 提醒：若原廠文件缺口比例確認偏高，會牽動目前只是佔位的「PDF/Word→CSV 抽取流程」待辦，需要先補實質內容才能真的動手補匯入（九節）
 
 **下一步**：查清楚第九節「原廠文件缺口比例」，之後再排實際動工時間。動工時建議延續 `PLAN_department_isolation.md` 的節奏——分階段、每階段可獨立驗證、重要決策前先問過一輪外部意見。
