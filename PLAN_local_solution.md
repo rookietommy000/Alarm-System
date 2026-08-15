@@ -2,9 +2,11 @@
 
 ## 狀態
 
-🟡 **實作中——階段 1-2（資料庫＋後端）已完成並通過真實環境驗證，階段 3 起（前端）尚未開始。**
+🟡 **實作中——階段 1-3 已完成，階段 4 起尚未開始。**
 
-**下一個 session 接手時，從這裡開始：** 第七節「執行順序」表格的階段 3（前台詳情卡片顯示兩層）。階段 1-2 的所有程式碼已 commit 並 push 到 `main`，`verify_isolation.sh` 對正式 Render 環境跑出 **48 通過、0 失敗**（含新增的 T-15~T-17），70 個 pytest 全數通過。詳細過程見第十二節「第四輪外部審查與階段 1-2 收尾」。
+**下一個 session 接手時，從這裡開始：** 第七節「執行順序」表格的階段 4（前台管理員編輯入口）。階段 1-2 的所有程式碼已 commit 並 push 到 `main`，`verify_isolation.sh` 對正式 Render 環境跑出 **48 通過、0 失敗**（含新增的 T-15~T-17），70 個 pytest 全數通過。詳細過程見第十二節「第四輪外部審查與階段 1-2 收尾」。
+
+**階段 3（前台詳情卡片顯示兩層）已完成**：`frontend/index.html` 的詳情卡片改為四分支（`sol_steps` 結構化步驟優先 → 有 `local_solution` 顯示本廠做法＋原廠收合 → 只有 `solution` 原樣顯示 → 兩者皆無顯示「這筆還沒有處置方式」），純文字插值無 `v-html`，已過安全 review（SAFE TO COMMIT）。純前端改動，不需要後端配合，尚未 commit。
 
 與 `PLAN_department_isolation.md`（多部門隔離工程）的關係：**依賴**該工程已完成的部分——`alarms` 表的 `department` 欄位、複合主鍵 `(department, device_model, code)`、`scope_department()`/`resolve_target_department()`/三段式路由、`ROUTE_AUTH_REGISTRY`、`sentinel_pack` 驗證機制——全部直接沿用，不重新設計。本文件只記錄這個功能本身新增的部分。
 
@@ -217,9 +219,9 @@ where a.local_solution is null or a.local_solution = '';
 
 ---
 
-## 五、⬜ 前端改動
+## 五、🟡 前端改動
 
-### 5.1 詳情卡片顯示兩層
+### 5.1 ✅ 詳情卡片顯示兩層
 
 - 有 `local_solution` → 顯示「本廠做法」，原廠收合在下方
 - 只有 `solution` → 直接顯示原廠內容，不特別標示（避免既有畫面大幅變動）
@@ -324,7 +326,7 @@ E108：確認風扇運轉並清潔濾網
 |---|---|---|
 | 1 | 加四個欄位 ＋ 建 `alarm_suggestions` 表（第三輪審查後：不建 view，見 4.5 節） | 零行為變更 |
 | 2 | `PUT .../local` 端點 ＋ 白名單 ＋ 稽核 | 後端就緒 |
-| 3 | 前台詳情卡片顯示兩層 | **既有知識可見** |
+| 3 | ✅ 前台詳情卡片顯示兩層 | **既有知識可見** |
 | 4 | 前台管理員編輯入口 ＋ 預填情境 | **知識開始累積** |
 | 5 | 一般使用者建議 ＋ 待審表 ＋ 後台審核 | 擴大來源 |
 | 6 | 缺處置清單（`GET /api/alarms?missing_local=true` 篩選參數，不做排序，見 4.5 節） | 補資料有優先序 |

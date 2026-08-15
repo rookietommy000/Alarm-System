@@ -360,6 +360,11 @@
     .old-sol-toggle { background: none; border: none; color: var(--muted); font-size: 12px; cursor: pointer; padding: 4px 0; font-family: inherit; }
     .old-sol-toggle:hover { color: var(--text); }
     .old-sol-body { margin-top: 6px; font-size: 13px; color: var(--muted); white-space: pre-wrap; line-height: 1.6; padding: 10px 12px; background: var(--surface-hover); border-radius: var(--radius-sm); }
+    .local-sol-block { margin: 0 0 10px; padding: 10px 12px; background: var(--surface-hover); border-left: 3px solid var(--primary); border-radius: var(--radius-sm); }
+    .local-sol-label { font-size: 12px; font-weight: 700; color: var(--primary); margin-bottom: 4px; }
+    .local-sol-body { font-size: 14px; line-height: 1.6; white-space: pre-wrap; color: var(--text); }
+    .local-sol-reason { margin-top: 6px; font-size: 12px; color: var(--muted); white-space: pre-wrap; line-height: 1.5; }
+    .no-solution-hint { font-size: 13px; color: var(--muted); }
 
     /* ── 拍照頁 ── */
     .page-camera { display: flex; flex-direction: column; height: calc(100vh - 56px - 64px); overflow: hidden; background: var(--bg); position: relative; }
@@ -1023,8 +1028,25 @@
               </dd>
             </template>
           </template>
+          <template v-else-if="selected.local_solution">
+            <dt>本廠做法</dt>
+            <dd>
+              <div class="local-sol-block">
+                <div class="local-sol-body">{{ selected.local_solution }}</div>
+                <div v-if="selected.local_reason" class="local-sol-reason">為什麼不同：{{ selected.local_reason }}</div>
+              </div>
+              <button v-if="selected.solution" class="old-sol-toggle" @click="showOldSolution = !showOldSolution">
+                {{ showOldSolution ? '▲ 收起原廠建議做法' : '▼ 原廠建議做法' }}
+              </button>
+              <div v-if="showOldSolution && selected.solution" class="old-sol-body">{{ selected.solution }}</div>
+            </dd>
+          </template>
+          <template v-else-if="selected.solution">
+            <dt>解決方案</dt><dd>{{ selected.solution }}</dd>
+          </template>
           <template v-else>
-            <dt>解決方案</dt><dd>{{ selected.solution || '—' }}</dd>
+            <dt>解決方案</dt>
+            <dd><span class="no-solution-hint">這筆還沒有處置方式</span></dd>
           </template>
           <dt>關鍵字</dt><dd>{{ (selected.keywords || []).join('、') || '—' }}</dd>
         </dl>
