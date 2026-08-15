@@ -107,6 +107,30 @@ class JsonStore:
                 json.dump(remaining, f, ensure_ascii=False, indent=2)
             tmp.replace(self.path)
 
+    def patch_one(self, department: Optional[str] = None, match: dict = None,
+                  patch: dict = None) -> Optional[dict]:
+        match = match or {}
+        patch = patch or {}
+        with self._lock:
+            raw = []
+            if self.path.exists():
+                with self.path.open("r", encoding="utf-8") as f:
+                    raw = json.load(f)
+            updated = None
+            for row in raw:
+                if all(row.get(k) == v for k, v in match.items()):
+                    row.update(patch)
+                    updated = row
+                    break
+            if updated is None:
+                return None
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_suffix(".tmp")
+            with tmp.open("w", encoding="utf-8") as f:
+                json.dump(raw, f, ensure_ascii=False, indent=2)
+            tmp.replace(self.path)
+        return updated
+
 
 def _row_to_device(row: dict) -> dict:
     """devices 表的欄位叫 model，但 API 對外同時提供兩個 key。
@@ -294,6 +318,20 @@ class SupabaseStore:
             qs_parts.append(f"{k}=eq.{urllib.parse.quote(str(v), safe='')}")
         qs = "&".join(qs_parts)
         self._req("DELETE", f"{self.table}?{qs}", extra_headers={"Prefer": "return=minimal"})
+
+    def patch_one(self, department: str, match: dict, patch: dict) -> Optional[dict]:
+        """單筆部分更新（PLAN_local_solution.md 4.3 節：只改呼叫端明確給的
+        欄位，其餘欄位不動）。match 為精確比對條件、一律含 department，
+        跟 delete_one() 同樣的定位方式；不用 upsert_one()，因為那是整筆
+        覆蓋語意，這裡只想動 patch 裡列出的欄位，不想動到其他欄位（也不需要
+        呼叫端先讀出整筆再合併）。找不到符合 match 的列時回傳 None。"""
+        qs_parts = [f"department=eq.{urllib.parse.quote(department, safe='')}"]
+        for k, v in match.items():
+            qs_parts.append(f"{k}=eq.{urllib.parse.quote(str(v), safe='')}")
+        qs = "&".join(qs_parts)
+        result = self._req("PATCH", f"{self.table}?{qs}", patch,
+                           extra_headers={"Prefer": "return=representation"})
+        return result[0] if result else None
 
 
 def _use_supabase() -> bool:
@@ -782,6 +820,87 @@ class AiScanStore:
         return removed
 
 
+class AlarmSuggestionStore:
+    """alarm_suggestions 表的讀寫（PLAN_local_solution.md 3.2/4.2 節）。
+
+    只服務 Supabase——這張表本身就是多部門功能（一般使用者提交建議、
+    管理員依部門審核），JsonStore 環境測不到跨部門隔離，這裡不假裝
+    支援，比照 AiScanStore/LoginAttemptStore 的既有模式：
+    _use_supabase()=False 時讀回空清單、寫入 no-op。
+    """
+
+    _TABLE = "alarm_suggestions"
+
+    def _base_key(self):
+        base = os.environ.get("SUPABASE_URL", "").rstrip("/")
+        key = os.environ.get("SUPABASE_KEY", "")
+        return base, key
+
+    def _req(self, method: str, path: str, body=None, extra_headers: Optional[dict] = None):
+        base, key = self._base_key()
+        headers = {
+            "apikey": key,
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+        }
+        if extra_headers:
+            headers.update(extra_headers)
+        data = json.dumps(body).encode() if body is not None else None
+        req = urllib.request.Request(f"{base}/rest/v1/{path}", data=data,
+                                     headers=headers, method=method)
+        with urllib.request.urlopen(req) as r:
+            raw = r.read().decode()
+            return json.loads(raw) if raw.strip() else []
+
+    def create(self, department: str, device_model: str, code: str,
+               suggestion: str, reason: Optional[str], submitted_by: str) -> dict:
+        """一般使用者提交建議，狀態固定為 pending，不直接寫入 alarms
+        （PLAN_local_solution.md 2.2 節：一個人改、全部門立刻看到，
+        工廠環境風險過高，所以只能建議、由管理員審核後才生效）。"""
+        if not _use_supabase():
+            return {}
+        body = {
+            "department": department, "device_model": device_model, "code": code,
+            "suggestion": suggestion, "reason": reason, "submitted_by": submitted_by,
+        }
+        result = self._req("POST", f"{self._TABLE}",
+                           [{k: v for k, v in body.items() if v is not None}],
+                           extra_headers={"Prefer": "return=representation"})
+        return result[0] if result else {}
+
+    def list_pending(self, department: Optional[str]) -> list:
+        """待審清單，依 scope_department() 過濾（department=None 是總管
+        不過濾的明確選擇，見 PLAN_department_isolation.md 3.6 節同一原則）。"""
+        if not _use_supabase():
+            return []
+        qs = "select=*&status=eq.pending&order=submitted_at.desc"
+        if department is not None:
+            qs += f"&department=eq.{urllib.parse.quote(department, safe='')}"
+        return self._req("GET", f"{self._TABLE}?{qs}")
+
+    def get_by_id(self, suggestion_id: int) -> Optional[dict]:
+        if not _use_supabase():
+            return None
+        result = self._req("GET", f"{self._TABLE}?id=eq.{suggestion_id}&select=*")
+        return result[0] if result else None
+
+    def review(self, suggestion_id: int, status: str, reviewed_by: str,
+               review_note: Optional[str]) -> Optional[dict]:
+        """接受或退回一筆建議，status 只接受 accepted/rejected（由呼叫端
+        app.py 驗證，這裡不重複檢查，維持 store 層單純負責存取）。"""
+        if not _use_supabase():
+            return None
+        patch = {
+            "status": status, "reviewed_by": reviewed_by,
+            "reviewed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if review_note is not None:
+            patch["review_note"] = review_note
+        result = self._req("PATCH", f"{self._TABLE}?id=eq.{suggestion_id}", patch,
+                           extra_headers={"Prefer": "return=representation"})
+        return result[0] if result else None
+
+
 class LoginAttemptStore:
     """login_attempts 表的讀寫（PLAN 2.2.1~2.2.4 節）。以資料庫為唯一真實
     來源，不使用行程內狀態——多 worker/重啟/擴容下退避次數才不會被稀釋。
@@ -891,6 +1010,7 @@ else:
 
 department_store = DepartmentStore()
 login_attempt_store = LoginAttemptStore()
+alarm_suggestion_store = AlarmSuggestionStore()
 feedback_store = FeedbackStore()
 view_store = ViewStore()
 audit_logger = AuditLogger()

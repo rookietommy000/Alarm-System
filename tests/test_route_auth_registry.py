@@ -26,6 +26,12 @@ ROUTE_AUTH_REGISTRY = {
     ("/api/alarms/<department>/<device_model>/<code>", "PUT"): "admin",
     ("/api/alarms/<department>/<device_model>/<code>", "DELETE"): "admin",
 
+    # 現場處置做法（PLAN_local_solution.md）
+    ("/api/alarms/<department>/<device_model>/<code>/local", "PUT"): "admin",
+    ("/api/alarms/<department>/<device_model>/<code>/suggestions", "POST"): "login",
+    ("/api/admin/suggestions", "GET"): "admin",
+    ("/api/admin/suggestions/<int:suggestion_id>", "PUT"): "admin",
+
     ("/api/devices", "GET"): "login",
     ("/api/devices/<department>", "POST"): "admin",
     ("/api/devices/<department>/<device_model>", "GET"): "login",

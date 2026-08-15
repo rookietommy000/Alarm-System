@@ -18,7 +18,7 @@ from flask_cors import CORS
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from storage import (
-    ai_scan_store, alarms_store, audit_logger, department_store,
+    ai_scan_store, alarm_suggestion_store, alarms_store, audit_logger, department_store,
     devices_store, feedback_store, login_attempt_store, view_store, _use_supabase,
 )
 
@@ -430,12 +430,15 @@ def create_app() -> Flask:
         q = request.args.get("q", "").strip().lower()
         device = request.args.get("device", "").strip()
         severity = request.args.get("severity", "").strip()
+        missing_local = request.args.get("missing_local", "").strip().lower() == "true"
         items = alarms_store.load(department=(dept if scope == DeptScope.DEPT else None))
 
         def match(a: dict) -> bool:
             if device and a.get("device_model") != device:
                 return False
             if severity and a.get("severity") != severity:
+                return False
+            if missing_local and (a.get("local_solution") or "").strip():
                 return False
             if q:
                 hay = " ".join([
@@ -577,6 +580,102 @@ def create_app() -> Flask:
         alarms_store.delete_one(department=target, match={"device_model": device_model, "code": code})
         audit_logger.log("DELETE", department=target, old_data=old)
         return "", 204
+
+    # ── 現場處置做法 local_solution（PLAN_local_solution.md）─────────
+
+    LOCAL_EDITABLE = {"local_solution", "local_reason"}
+
+    @app.put("/api/alarms/<department>/<device_model>/<code>/local")
+    @admin_required
+    def update_local_solution(department: str, device_model: str, code: str):
+        """管理員直接編輯現場做法。只接受 local_solution/local_reason，
+        其餘欄位一律忽略——這是防止原廠欄位（solution）被覆寫的最後一道
+        （PLAN_local_solution.md 4.3 節），不能省。department 必須用
+        resolve_target_department() 的目標部門，不能沿用 _confirmed_by()
+        （那個服務的是無路徑部門段的端點，語意不同，見 4.4 節）。"""
+        target = resolve_target_department(department)
+        body = request.get_json(silent=True) or {}
+        patch = {k: v for k, v in body.items() if k in LOCAL_EDITABLE}
+        if not patch:
+            abort(400, "沒有可更新的欄位")
+        role = "superadmin" if is_superadmin() else "admin"
+        patch["local_updated_by"] = f"{target}/{role}"
+        patch["local_updated_at"] = datetime.now(timezone.utc).isoformat()
+        old = alarms_store.load(department=target)
+        old_row = next((a for a in old if a["code"] == code and a.get("device_model") == device_model), None)
+        if old_row is None:
+            abort(404, "找不到此警報代碼")
+        row = alarms_store.patch_one(department=target,
+                                     match={"device_model": device_model, "code": code}, patch=patch)
+        audit_logger.log("local_update", department=target, new_data=row, old_data=old_row)
+        return jsonify(row)
+
+    @app.post("/api/alarms/<department>/<device_model>/<code>/suggestions")
+    @login_required
+    def submit_local_suggestion(department: str, device_model: str, code: str):
+        """一般使用者提交現場做法建議，寫進待審表，不直接改 alarms
+        （PLAN_local_solution.md 2.2 節）。department 一律來自 session，
+        沒有路徑部門段的寫入語意在這裡不適用——但這個端點確實有路徑段，
+        所以仍走 resolve_target_department()，跟其他三段式路由一致，
+        超管走這個端點沒有意義（不屬於任何部門），維持既有配套規則。"""
+        target = resolve_target_department(department)
+        body = request.get_json(silent=True) or {}
+        suggestion = (body.get("suggestion") or "").strip()
+        if not suggestion:
+            abort(400, "suggestion 為必填")
+        reason = (body.get("reason") or "").strip() or None
+        items = alarms_store.load(department=target)
+        if not any(a["code"] == code and a.get("device_model") == device_model for a in items):
+            abort(404, "找不到此警報代碼")
+        role = "superadmin" if is_superadmin() else ("admin" if is_admin() else "user")
+        row = alarm_suggestion_store.create(
+            department=target, device_model=device_model, code=code,
+            suggestion=suggestion, reason=reason, submitted_by=f"{target}/{role}",
+        )
+        return jsonify(row), 201
+
+    @app.get("/api/admin/suggestions")
+    @admin_required
+    def list_suggestions():
+        scope, dept = scope_department()
+        rows = alarm_suggestion_store.list_pending(department=(dept if scope == DeptScope.DEPT else None))
+        return jsonify(rows)
+
+    @app.put("/api/admin/suggestions/<int:suggestion_id>")
+    @admin_required
+    def review_suggestion(suggestion_id: int):
+        """接受寫入 local_solution（沿用 update_local_solution 同一支
+        patch_one() 呼叫，稽核軌跡同樣記 local_update）；退回只更新
+        alarm_suggestions 本身的狀態，不動 alarms。"""
+        row = alarm_suggestion_store.get_by_id(suggestion_id)
+        if row is None:
+            abort(404, "找不到此建議")
+        scope, dept = scope_department()
+        if scope == DeptScope.DEPT and row["department"] != dept:
+            abort(404)  # 不透露其他部門的建議存在（同三段式路由 404 而非 403 的一貫做法）
+        body = request.get_json(silent=True) or {}
+        action = body.get("action")
+        if action not in ("accept", "reject"):
+            abort(400, "action 必須是 accept 或 reject")
+        role = "superadmin" if is_superadmin() else "admin"
+        reviewer = f"{row['department']}/{role}" if scope == DeptScope.DEPT else f"{dept or row['department']}/{role}"
+        note = (body.get("review_note") or "").strip() or None
+        if action == "accept":
+            patch = {"local_solution": row["suggestion"], "local_updated_by": reviewer,
+                     "local_updated_at": datetime.now(timezone.utc).isoformat()}
+            if row.get("reason"):
+                patch["local_reason"] = row["reason"]
+            old = alarms_store.load(department=row["department"])
+            old_row = next((a for a in old if a["code"] == row["code"]
+                            and a.get("device_model") == row["device_model"]), None)
+            new_row = alarms_store.patch_one(department=row["department"],
+                                             match={"device_model": row["device_model"], "code": row["code"]},
+                                             patch=patch)
+            audit_logger.log("local_update", department=row["department"], new_data=new_row, old_data=old_row)
+            updated = alarm_suggestion_store.review(suggestion_id, "accepted", reviewer, note)
+        else:
+            updated = alarm_suggestion_store.review(suggestion_id, "rejected", reviewer, note)
+        return jsonify(updated)
 
     @app.post("/api/feedback")
     @login_required
