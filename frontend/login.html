@@ -91,6 +91,8 @@
       flex-direction: column;
       gap: 6px;
       margin-bottom: 20px;
+      max-height: 244px; /* 約 4 張卡片高度，超過才出現捲軸，不牽動整頁高度 */
+      overflow-y: auto;
     }
     .dept-option {
       display: flex;
@@ -307,11 +309,22 @@
       selectDept(btn.dataset.deptCode, btn);
     });
 
+    // 記住這台裝置上次成功登入的部門，下次自動置頂＋預選——共用平板場景下
+    // 同一台裝置通常每天登入同一個部門，這比清單排序或搜尋框更貼近實際
+    // 使用模式（外部審查建議，見 PLAN）。純前端排序提示，不影響安全性：
+    // 密碼仍要輸入，且完整清單依然在下方，換部門一樣點得到。
+    const LAST_DEPT_KEY = 'alarmSystem.lastDept';
+
     fetch('/api/departments/public').then(r => r.ok ? r.json() : []).then(depts => {
       deptList.innerHTML = '';
       if (!depts.length) {
         deptList.innerHTML = '<div class="dept-empty">目前沒有可用的部門，請聯絡系統管理員</div>';
         return;
+      }
+      const lastId = localStorage.getItem(LAST_DEPT_KEY);
+      if (lastId) {
+        const idx = depts.findIndex(d => d.id === lastId);
+        if (idx > 0) depts.unshift(depts.splice(idx, 1)[0]);
       }
       depts.forEach((d, i) => {
         const btn = document.createElement('button');
@@ -324,6 +337,13 @@
       });
     }).catch(() => {
       deptList.innerHTML = '<div class="dept-empty">部門清單載入失敗，請重新整理頁面</div>';
+    });
+
+    // 送出前記住這次選的部門——原生表單送出會整頁跳轉，必須在跳轉前寫入。
+    // 登入密碼是否正確跟這個記錄無關：就算密碼錯誤重新導回登入頁，記住的
+    // 仍是使用者「想登入」的部門，下次還是幫他置頂，這是預期行為。
+    document.getElementById('loginForm').addEventListener('submit', () => {
+      if (selectedDept) localStorage.setItem(LAST_DEPT_KEY, selectedDept);
     });
 
     // 「重新選擇部門」：舊版單部門系統遺留的「返回入口」按鈕原本連到 /，

@@ -84,7 +84,13 @@
     .btn-dark:disabled { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.1); color: #64748b; }
     .small.text-muted { color: #64748b !important; }
 
-    .dept-select-wrap { display: flex; flex-direction: column; gap: 6px; }
+    .dept-select-wrap {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-height: 280px; /* 約 4 張卡片＋分隔線＋系統管理員選項，超過才捲動 */
+      overflow-y: auto;
+    }
     .dept-option {
       display: flex;
       align-items: center;
@@ -240,17 +246,26 @@
       el.classList.add('selected');
     }
 
-    // 事件委派：綁在容器上、不逐一綁在動態按鈕上。
-    // 避免按鈕在 Bootstrap modal 淡入動畫／focus trap 初始化期間才被插入時，
-    // 各自綁定的 click listener 可能落在動畫尚未完成定位的座標上而點擊不到。
+    // 事件委派：綁在容器上、不逐一綁在動態按鈕上（PLAN 第三十七輪修正：
+    // 早期以為是動畫時序問題，實際原因不明——委派本身能繞開「listener
+    // 綁在會被重繪／延後插入的節點上」這整類問題，不論真正成因是哪一種）。
     deptList.addEventListener('click', (e) => {
       const btn = e.target.closest('.dept-option');
       if (!btn) return;
       selectDept(btn.dataset.deptCode, btn);
     });
 
+    // 記住上次選擇的部門並置頂，同 login.html（見該檔案說明）。
+    // __super__ 是固定的特例選項（跨部門、獨立樣式與分隔線），不參與排序。
+    const LAST_DEPT_KEY = 'alarmSystem.lastDept';
+
     fetch('/api/departments/public').then(r => r.ok ? r.json() : []).then(depts => {
       deptList.innerHTML = '';
+      const lastId = localStorage.getItem(LAST_DEPT_KEY);
+      if (lastId) {
+        const idx = depts.findIndex(d => d.id === lastId);
+        if (idx > 0) depts.unshift(depts.splice(idx, 1)[0]);
+      }
       depts.forEach((d, i) => {
         const btn = document.createElement('button');
         btn.type = 'button';
@@ -281,6 +296,13 @@
       if (!depts.length) selectDept('__super__', sysBtn);
     }).catch(() => {
       deptList.innerHTML = '<div class="text-muted small">部門清單載入失敗，請重新整理頁面</div>';
+    });
+
+    // 送出前記住這次選的部門（僅真實部門，__super__ 不記錄——它本來就
+    // 固定顯示在清單最後，不需要也不該被排到前面）。
+    document.getElementById('adminLoginForm').addEventListener('submit', () => {
+      const code = deptField.value;
+      if (code && code !== '__super__') localStorage.setItem(LAST_DEPT_KEY, code);
     });
 
     // ── 429 節流倒數（同 login.html 的漸進增強邏輯）──────────────────
