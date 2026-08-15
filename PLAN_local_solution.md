@@ -2,7 +2,9 @@
 
 ## 狀態
 
-⬜ **規劃階段，尚未動工**。本文件記錄第一輪可行性檢查的結論與待確認事項，實作時間未定。
+🟡 **實作中——階段 1-2（資料庫＋後端）已完成並通過真實環境驗證，階段 3 起（前端）尚未開始。**
+
+**下一個 session 接手時，從這裡開始：** 第七節「執行順序」表格的階段 3（前台詳情卡片顯示兩層）。階段 1-2 的所有程式碼已 commit 並 push 到 `main`，`verify_isolation.sh` 對正式 Render 環境跑出 **48 通過、0 失敗**（含新增的 T-15~T-17），70 個 pytest 全數通過。詳細過程見第十二節「第四輪外部審查與階段 1-2 收尾」。
 
 與 `PLAN_department_isolation.md`（多部門隔離工程）的關係：**依賴**該工程已完成的部分——`alarms` 表的 `department` 欄位、複合主鍵 `(department, device_model, code)`、`scope_department()`/`resolve_target_department()`/三段式路由、`ROUTE_AUTH_REGISTRY`、`sentinel_pack` 驗證機制——全部直接沿用，不重新設計。本文件只記錄這個功能本身新增的部分。
 
@@ -417,3 +419,92 @@ where department = 'zztest' and device_model = 'ACM001' and code = 'ZZC001';
 **第三輪外部審查發現比 SQL 語法更根本的問題，4.5 節整段改寫**：用真實 Supabase 連線查證後，`ai_scans.alarms` 是 JSON 陣列（AI 一次掃描的候選代碼清單，非單一代碼欄位），`detected_code` 這個欄位根本不存在。就算解決 JSON 展開的技術問題，這個指標測的也是「AI 多常猜到這個代碼」而非「這個警報多常發生」，方向是錯的。曾考慮改用語意正確的 `alarm_views`，但該表有 `department IS NULL` 的孤兒列問題（改造前資料不計入）且複雜度與價值不成比例。**最終決定：第一版完全不做排序，也不建任何 view**——`no_vendor` 判斷直接用 `GET /api/alarms?missing_local=true` 篩選參數完成，階段 1 回到最單純的「加四個欄位＋建 `alarm_suggestions` 表」（4.5、七節）。
 
 **下一步**：查清楚第九節「原廠文件缺口比例」，之後再排實際動工時間。動工時建議延續 `PLAN_department_isolation.md` 的節奏——分階段、每階段可獨立驗證、重要決策前先問過一輪外部意見。這次三輪審查也印證了同一個模式：**憑合理推測寫的 SQL，一旦用真實資料查證，經常會發現資料結構跟假設不符**——跟 `PLAN_department_isolation.md` 第十一輪「devices 表欄位名稱與全文假設不符」是同一類教訓。
+
+---
+
+## 十二、第四輪外部審查與階段 1-2 收尾（實際動工開始）
+
+**背景**：使用者決定不再等第九節的原廠文件缺口比例查清楚，直接開始動工。依第七節執行順序，完成階段 1（資料庫）與階段 2（後端端點），過程中經歷四輪外部審查，並意外牽出兩個既有系統的結構性問題（登入節流的時間戳解析 bug、哨兵密碼與 seed 腳本的耦合問題）。
+
+### 12.1 階段 1：資料庫改動（已對正式 Supabase 執行）
+
+`backend/migrations/004_add_local_solution.sql`：`alarms` 加四個 nullable 欄位（`local_solution`/`local_reason`/`local_updated_by`/`local_updated_at`），新建 `alarm_suggestions` 表（複合外鍵指向 `alarms` 的 `(department, device_model, code)`，`on delete cascade`）。真實連線驗證：四個新欄位皆為 `null`、`alarm_suggestions` 空表、`mf4d` 部門警報數仍 1759 筆，既有資料未受影響。
+
+`backend/migrations/005_add_pending_suggestion_constraint.sql`（第四輪審查後補）：`alarm_suggestions` 加部分唯一索引 `uniq_pending_suggestion (department, device_model, code) WHERE status='pending'`，防止同一筆警報被重複提交建議——只約束 `pending` 狀態，已審核的歷史記錄不受影響。
+
+### 12.2 階段 2：後端端點（已對正式 Supabase 端到端驗證）
+
+**`storage.py` 新增**：
+- `SupabaseStore.patch_one()`/`JsonStore.patch_one()`：單筆部分更新，只改呼叫端明確給的欄位，不用整筆覆蓋的 `upsert_one()`
+- `SupabaseStore.get_one()`/`JsonStore.get_one()`（第四輪審查後補）：單筆精確查詢，取代原本為了取一列而 `load()` 整個部門（`mf4d` 1759 筆，兩次分頁 HTTP 往返）的效能問題
+- `AlarmSuggestionStore`（`create`/`list_pending`/`get_by_id`/`review`/`has_pending`）：只服務 Supabase，比照 `DepartmentStore` 既有模式。`has_pending()`（第四輪審查後補）用 `Range: 0-0` + `Prefer: count=exact` 只確認存在性，取代原本為了檢查一筆而撈全部門待審清單的問題
+
+**`app.py` 新增四個端點**：
+- `PUT /api/alarms/<department>/<device_model>/<code>/local`（`admin`）：白名單 `LOCAL_EDITABLE = {"local_solution", "local_reason"}`，其餘欄位一律忽略——防止原廠 `solution` 被覆寫的最後一道防線
+- `POST /api/alarms/<department>/<device_model>/<code>/suggestions`（`login`）：一般使用者提交建議
+- `GET /api/admin/suggestions`（`admin`）：待審清單，依 `scope_department()` 過濾
+- `PUT /api/admin/suggestions/<id>`（`admin`）：接受寫入 `local_solution`／退回只改狀態
+
+`GET /api/alarms` 加 `missing_local` 篩選參數（沿用既有讀取端點，非新路由）。稽核軌跡 `local_updated_by` 用 `resolve_target_department()` 的目標部門組成，不信任前端傳值，不沿用 `_confirmed_by()`（後者服務的是無路徑部門段的端點，語意不同）。四個新端點與 `missing_local` 篩選皆已加進 `ROUTE_AUTH_REGISTRY`。
+
+### 12.3 第四輪外部審查：四個真實 bug（自查清單抓出，非審查者直接指出）
+
+專家因程式碼未附上無法直接審查，改給一份自查清單，逐項核對後確認四個問題屬實並修正：
+
+1. **`patch_one()` 回 `None` 時沒有防護**——`PATCH` 打空不報錯，兩處呼叫端原本直接把 `None` 餵給 `audit_logger.log()` 和 `jsonify()`，前端會收到 `null` 卻以為成功。修正：`patch_one()` 回 `None` 時明確 404
+2. **`POST .../suggestions` 沒有防重複提交**——已用資料庫部分唯一索引（12.1 節）+ 應用層 `has_pending()` 檢查雙重防護
+3. **`PUT /api/admin/suggestions/<id>` 沒有防重複審核**——已 `accepted`/`rejected` 的建議可以再審一次、重複寫入 `local_solution`。修正：檢查 `row["status"]`，非 `pending` 直接 409
+4. **`reviewer` 組成邏輯依 `scope` 在 `row["department"]` 和 `dept` 之間切換**——外部審查指出這段不必要地繞。簡化為永遠用 `row["department"]`（建議所屬部門，這次寫入實際影響的對象，不是審核者當下的檢視範圍）
+
+### 12.4 意外發現並修復：登入節流既有 bug（與本次功能無關）
+
+實作過程中用真實密碼端到端測試時，一般使用者登入卡在 `throttled=4` 超過 4 分鐘不下降。追查發現 `_remaining_delay()` 用 `datetime.fromisoformat()` 解析 `last_failure_at`，PostgREST 回傳的微秒尾端為 0 時會被裁切成非 3/6 位（例如 `.78161` 而非 `.781610`），Python 3.9 解析失敗，`except` 分支回傳「完整延遲」而非根據實際經過時間算出的「剩餘延遲」——不管過了多久都卡在同一秒數。
+
+外部審查介入後修法加固：
+- 除微秒位數外，一併處理時區標記變體（`+00:00`/`+00`/`Z`）
+- `except` 分支改為 **fail-closed**（往外拋），不再靜默回傳「完整延遲」這種看似合理的預設值——節流是安全機制，解析失敗該被立刻發現
+- 補上 naive datetime 的 `tzinfo` 防護（跟 `utcnow()` 相減會 `TypeError`）
+- `_parse_pg_timestamp()` 從 `create_app()` 內部閉包搬到模組層級，讓它能被 pytest 直接測到（純函式邏輯關在閉包裡是這次才發現測不到的結構問題）；新增 `tests/test_timestamp_parsing.py` 九個測試案例
+
+**過程中的教訓**：新測試檔案第一版在模組頂層 `from app import ...`，搶在 `test_api.py` 的 `client` fixture 設定 `ALARM_DATA_DIR` 之前執行，污染 `sys.modules` 快取，導致 `test_ai_pipeline.py` 讀到真實 Supabase 的 14 筆歷史資料而斷言失敗（不是隔離機制壞了，是測試檔案自己的 import 時機沒有遵守既有規則）。修正為延遲 import（各測試函式內部才 import）。
+
+### 12.5 意外發現並修復：哨兵密碼與 seed 腳本的結構性耦合問題
+
+補上 T-15~T-17（`local_solution` 隔離驗證）需要哨兵資料的 `local_solution` 也標記 `[SENTINEL]`，因此重跑了 `01_seed_sentinel.sql`。重跑後 `verify_isolation.sh` 出現 T-00（哨兵資料存在性）與 T-03c（反向刪除應 404 卻回 403）兩項失敗。
+
+**根因**：`01_seed_sentinel.sql` 開頭的 `DELETE FROM departments WHERE id='zztest'` + `INSERT` 會把密碼**重置回 SQL 檔案裡寫死的雜湊**——但那組雜湊是第三十二輪替換完成後就沒再變過的固定值，跟第三十三輪（密碼遺失、重新產生）之後存進 `sentinel_pack/.env.sentinel` 的密碼已經不是同一組。任何人重跑 seed 都會靜默讓 `.env.sentinel` 裡的密碼失效，且失效表現是「`verify_isolation.sh` 一片紅字」——看起來像隔離邏輯壞了，實際上只是登入不了（T-03c 的 403 也是連鎖反應：`admin_required` 對「沒登入」與「登入了但非管理員」都回 403，`zz_admin` 登入失敗導致 cookie 是空的，打過去自然是 403，不透露任何額外資訊）。
+
+**修正（結構性，非一次性補丁）**：
+1. **`departments` 那筆從 seed 拆出來**，新增 `sentinel_pack/00b_create_sentinel_dept.sql`——只負責建立/更新哨兵部門帳號，`01_seed_sentinel.sql` 之後不再碰 `departments`，可以安全地隨時重跑而不動密碼
+2. **新增 `sentinel_pack/reset_sentinel_password.py`，取代並刪除舊的 `gen_hashes.py`**——舊工具的輸出格式「請把這兩個值貼進 SQL」本身就是誘因（曾經真的有人把雜湊直接寫回範本檔案，導致範本被污染、保護機制隨之失效）。新腳本把「填值」動作從人的手上拿掉：範本永遠保持佔位符狀態，替換只發生在記憶體裡，產物寫到 `/tmp`（不落在專案目錄），同時原子性地更新 `.env.sentinel`（含產生時間戳、當時 commit hash、一句提醒「T-00 失敗先查密碼同步而非隔離邏輯」的警語）
+3. **`00b_create_sentinel_dept.sql` 內建佔位符检查**（`do $$ ... position(...) ... raise exception`），防止有人跳過腳本直接貼未替換的範本——這層防護買到的不是攔截（那條路徑本來就會因格式錯誤失敗），是把一個指向錯誤方向的失敗訊息（登入失敗、隔離看起來壞了）換成明確的「佔位符未替換」
+4. **`00b` 的部門建立邏輯從 `DELETE + INSERT` 改為 `INSERT ... ON CONFLICT (id) DO UPDATE`**——第一次嘗試執行時撞上外鍵約束（`devices`/`alarms` 等子表仍有記錄指向 `zztest`，`DELETE FROM departments` 直接觸發 `23503 foreign key violation`）。這支腳本的目的單純是「設定/重設密碼」，用 `UPDATE` 精準改密碼欄位不需要整個部門砍掉重建
+
+**這次教訓與既有原則的呼應**：跟 `PLAN_department_isolation.md` 反覆出現的模式一致——「需要人記得做對的事」的流程，遲早會有人做錯（`department` 參數必填化、路由白名單比對實際裝飾器標記、這次的 seed 腳本範本保護），解法都是「把『記得』換成『做不到』」，只是這次出現在維運腳本而非應用程式碼。
+
+### 12.6 最終驗證結果
+
+`verify_isolation.sh` 對正式 Render 環境：**48 通過，0 失敗**（T-13 依設計預設跳過）。新增的 T-15~T-17（`local_solution` 隔離）全數通過；密碼同步問題修正後 T-00/T-03c 恢復正常。70 個 pytest 全數通過（61 既有 + 9 個新增的時間戳解析測試）。
+
+**Commit 記錄**（依序）：
+- `99c84d0` — feat: 階段 1-2 資料庫改動與後端端點
+- `510a7fd` — fix: 登入節流時間戳解析 bug（第一版修法）
+- `95724e2` — fix: 第四輪審查四個真實 bug + 節流修法加固 + 測試污染修正
+- `3ffbf03` — perf: `get_one()`/`has_pending()` 效能優化 + 部分唯一索引
+
+`sentinel_pack/` 不受 git 版本控制（獨立於 `testing/` repo 之外），以下檔案異動未進版本庫但已在本機/正式環境生效：
+- 新增 `00b_create_sentinel_dept.sql`、`reset_sentinel_password.py`
+- 刪除 `gen_hashes.py`
+- 修改 `01_seed_sentinel.sql`（移除 `departments` 段落、新增 `local_solution` 哨兵標記 UPDATE、自我檢查區塊補查詢）
+- 修改 `verify_isolation.sh`（新增 T-15~T-17）
+- `.env.sentinel` 已更新為最新一組密碼（腳本自動維護，含時間戳與警語）
+
+### 12.7 下一步（明確的接手點）
+
+**階段 3**（第七節）：前台詳情卡片顯示兩層——有 `local_solution` 時顯示「本廠做法」並將原廠 `solution` 收合在下方；只有 `solution` 時維持現狀不特別標示；兩者皆無時顯示補充入口。純前端改動，`index.html`，不需要碰後端。
+
+**階段 4**：前台管理員編輯入口（搜尋結果與 AI 辨識結果兩種詳情卡片路徑都要有，見 5.2 節第一輪審查確認）+ 對話框預填同機種其他警報的 `local_solution` 當參考範例（5.3 節）。
+
+**階段 5 起**：一般使用者建議入口、後台待審清單 UI、缺處置清單、AI 審核——見第七節表格，尚未開始。
+
+**仍未查清楚的事**：第九節「原廠文件缺口比例」——使用者決定先動工，這件事還沒查，但不阻塞階段 3-4（純前端顯示/編輯，不涉及批次匯入判斷）。真正需要這個答案的是階段 6（缺處置清單怎麼排優先序）之前。
