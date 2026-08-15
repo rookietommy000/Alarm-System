@@ -172,13 +172,16 @@
     }
 
     .back-btn {
+      font-family: inherit;
       font-size: 13px;
       color: #64748b;
       text-decoration: none;
+      background: none;
       border: 1px solid rgba(255,255,255,0.14);
       border-radius: 8px;
       padding: 8px 20px;
       display: inline-block;
+      cursor: pointer;
       transition: background 0.15s, color 0.15s;
     }
     .back-btn:hover { background: rgba(255,255,255,0.05); color: #e2e8f0; }
@@ -263,7 +266,7 @@
     </form>
 
     <div style="text-align:center; margin-top:16px; display:flex; gap:10px; justify-content:center;">
-      <a href="/" class="back-btn">← 返回入口</a>
+      <button type="button" class="back-btn" id="resetDeptBtn">← 重新選擇部門</button>
       <a href="/admin/login" class="back-btn">後台管理 →</a>
     </div>
 
@@ -321,6 +324,17 @@
       });
     }).catch(() => {
       deptList.innerHTML = '<div class="dept-empty">部門清單載入失敗，請重新整理頁面</div>';
+    });
+
+    // 「重新選擇部門」：舊版單部門系統遺留的「返回入口」按鈕原本連到 /，
+    // 但多部門改造後 / 只會重導到未登入時查不到資料的前台首頁，不是有意義
+    // 的返回點。改為清空目前選取狀態＋密碼欄，留在登入頁本身。
+    document.getElementById('resetDeptBtn').addEventListener('click', () => {
+      deptList.querySelectorAll('.dept-option').forEach(n => n.classList.remove('selected'));
+      selectedDept = '';
+      deptField.value = '';
+      document.getElementById('pw').value = '';
+      document.getElementById('pw').focus();
     });
 
     // ── 429 節流倒數（漸進增強：JS 掛掉時上面的靜態說明留著不動）───────
