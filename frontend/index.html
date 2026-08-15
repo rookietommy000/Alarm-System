@@ -651,6 +651,35 @@
       cursor: pointer; font-size: 15px; font-family: inherit;
     }
 
+    /* 本廠做法編輯 dialog（沿用 model-picker 的 backdrop/bottom-sheet 殼） */
+    .local-sol-editor { max-height: 88vh; overflow-y: auto; }
+    .local-sol-editor-label { font-size: 12px; font-weight: 700; color: var(--muted); }
+    .local-sol-editor-vendor { padding: 10px 12px; background: var(--surface-hover); border-radius: var(--radius-sm); display: flex; flex-direction: column; gap: 4px; }
+    .local-sol-editor-vendor-body { font-size: 13px; line-height: 1.6; white-space: pre-wrap; color: var(--muted); }
+    .local-sol-editor-input {
+      width: 100%; box-sizing: border-box; font-family: inherit; font-size: 14px; line-height: 1.6;
+      padding: 10px 12px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+      background: var(--bg); color: var(--text); resize: vertical;
+    }
+    .local-sol-editor-input:focus { outline: 2px solid var(--primary); }
+    .local-sol-editor-refs { display: flex; flex-direction: column; gap: 6px; max-height: 20vh; overflow-y: auto; padding: 10px 12px; background: var(--surface-hover); border-radius: var(--radius-sm); }
+    .local-sol-editor-ref-item { font-size: 13px; line-height: 1.6; color: var(--muted); }
+    .local-sol-editor-error { padding: 10px 14px; background: #fef2f2; border: 1px solid #fca5a5; border-radius: 8px; color: #b91c1c; font-size: 14px; }
+    .local-sol-editor-actions { display: flex; gap: 8px; }
+    .local-sol-editor-actions .model-picker-cancel { flex: 1; }
+    .local-sol-editor-save {
+      flex: 1; height: 48px; border: none; border-radius: var(--radius-sm, 0);
+      background: var(--primary); color: var(--primary-ink); cursor: pointer;
+      font-size: 15px; font-family: inherit; font-weight: 700;
+    }
+    .local-sol-editor-save:hover { filter: brightness(1.08); }
+    .local-sol-editor-save:disabled, .local-sol-editor-actions button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .local-sol-edit-btn {
+      display: block; margin-top: 8px; background: none; border: none; color: var(--primary);
+      font-size: 12px; font-weight: 700; cursor: pointer; padding: 4px 0; font-family: inherit;
+    }
+    .local-sol-edit-btn:hover { color: var(--primary-hover); }
+
     /* Placeholder */
     .page-placeholder {
       display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -1039,14 +1068,22 @@
                 {{ showOldSolution ? '▲ 收起原廠建議做法' : '▼ 原廠建議做法' }}
               </button>
               <div v-if="showOldSolution && selected.solution" class="old-sol-body">{{ selected.solution }}</div>
+              <button v-if="whoami.admin" class="local-sol-edit-btn" @click="openLocalSolutionEditor">✏️ 編輯</button>
             </dd>
           </template>
           <template v-else-if="selected.solution">
-            <dt>解決方案</dt><dd>{{ selected.solution }}</dd>
+            <dt>解決方案</dt>
+            <dd>
+              {{ selected.solution }}
+              <button v-if="whoami.admin" class="local-sol-edit-btn" @click="openLocalSolutionEditor">💡 補充本廠做法</button>
+            </dd>
           </template>
           <template v-else>
             <dt>解決方案</dt>
-            <dd><span class="no-solution-hint">這筆還沒有處置方式</span></dd>
+            <dd>
+              <span class="no-solution-hint">這筆還沒有處置方式</span>
+              <button v-if="whoami.admin" class="local-sol-edit-btn" @click="openLocalSolutionEditor">💡 補充本廠做法</button>
+            </dd>
           </template>
           <dt>關鍵字</dt><dd>{{ (selected.keywords || []).join('、') || '—' }}</dd>
         </dl>
@@ -1062,6 +1099,32 @@
           </span>
         </div>
         <button @click="selected = null">關閉</button>
+      </div>
+    </div>
+
+    <div v-if="localEdit.show" class="model-picker-backdrop" @click.self="closeLocalSolutionEditor">
+      <div class="model-picker local-sol-editor">
+        <div class="model-picker-title">補充本廠做法</div>
+        <div class="model-picker-sub">{{ localEdit.device_model }} · {{ localEdit.code }} · {{ localEdit.description }}</div>
+        <div v-if="localEdit.vendorSolution" class="local-sol-editor-vendor">
+          <div class="local-sol-editor-label">原廠建議</div>
+          <div class="local-sol-editor-vendor-body">{{ localEdit.vendorSolution }}</div>
+        </div>
+        <label class="local-sol-editor-label" for="local-sol-input">本廠做法</label>
+        <textarea id="local-sol-input" class="local-sol-editor-input" rows="4" v-model="localEdit.local_solution" placeholder="實際在現場怎麼處理這個警報"></textarea>
+        <label class="local-sol-editor-label" for="local-reason-input">為什麼不同（選填）</label>
+        <textarea id="local-reason-input" class="local-sol-editor-input" rows="3" v-model="localEdit.local_reason" placeholder="與原廠建議不同的原因"></textarea>
+        <div v-if="localEdit.references.length" class="local-sol-editor-refs">
+          <div class="local-sol-editor-label">同機種其他警報的本廠做法（參考）</div>
+          <div class="local-sol-editor-ref-item" v-for="r in localEdit.references" :key="r.code">
+            <strong>{{ r.code }}</strong>：{{ r.local_solution }}
+          </div>
+        </div>
+        <div v-if="localEdit.error" class="local-sol-editor-error">{{ localEdit.error }}</div>
+        <div class="local-sol-editor-actions">
+          <button class="model-picker-cancel" @click="closeLocalSolutionEditor" :disabled="localEdit.saving">取消</button>
+          <button class="local-sol-editor-save" @click="saveLocalSolution" :disabled="localEdit.saving">{{ localEdit.saving ? '儲存中…' : '儲存' }}</button>
+        </div>
       </div>
     </div>
   </div>
@@ -1084,6 +1147,12 @@
           viewStats: {},
           showOldSolution: false,
           modelPicker: { show: false, code: '', candidates: [] },
+          localEdit: {
+            show: false, saving: false, error: '',
+            department: '', device_model: '', code: '', description: '',
+            vendorSolution: '', local_solution: '', local_reason: '',
+            references: [],
+          },
           // camera
           camState: 'live', // 'live' | 'model-select' | 'analyzing' | 'confirm' | 'results' | 'no-alarm'
           camResults: [],
@@ -1115,7 +1184,7 @@
           selectedCorrectModel: '',
           showCorrectionPicker: false,
           isDesktopDev: !/iPhone|iPad|Android/i.test(navigator.userAgent),
-          whoami: { department: null, department_name: null },
+          whoami: { department: null, department_name: null, admin: false },
         };
       },
       computed: {
@@ -1180,6 +1249,64 @@
         hasSolSteps(a) {
           const s = a.sol_steps;
           return s && (s.check || s.parts || s.reset || s.safety);
+        },
+        async openLocalSolutionEditor() {
+          const a = this.selected;
+          if (!a) return;
+          this.localEdit.show = true;
+          this.localEdit.saving = false;
+          this.localEdit.error = '';
+          this.localEdit.department = this.whoami.department || '';
+          this.localEdit.device_model = a.device_model;
+          this.localEdit.code = a.code;
+          this.localEdit.description = a.description || '';
+          this.localEdit.vendorSolution = a.solution || '';
+          this.localEdit.local_solution = a.local_solution || '';
+          this.localEdit.local_reason = a.local_reason || '';
+          this.localEdit.references = [];
+          try {
+            const res = await AlarmApi.get(`/api/alarms?device=${encodeURIComponent(a.device_model)}`);
+            if (res.ok) {
+              const all = await res.json();
+              this.localEdit.references = all
+                .filter(x => x.code !== a.code && x.local_solution)
+                .slice(0, 5)
+                .map(x => ({ code: x.code, local_solution: x.local_solution }));
+            }
+          } catch {}
+        },
+        closeLocalSolutionEditor() {
+          if (this.localEdit.saving) return;
+          this.localEdit.show = false;
+        },
+        async saveLocalSolution() {
+          const e = this.localEdit;
+          if (!e.local_solution || !e.local_solution.trim()) {
+            e.error = '請填寫本廠做法';
+            return;
+          }
+          e.saving = true;
+          e.error = '';
+          try {
+            const url = `/api/alarms/${encodeURIComponent(e.department)}/${encodeURIComponent(e.device_model)}/${encodeURIComponent(e.code)}/local`;
+            const res = await AlarmApi.put(url, {
+              local_solution: e.local_solution.trim(),
+              local_reason: e.local_reason ? e.local_reason.trim() : '',
+            });
+            if (!res.ok) {
+              const body = await res.json().catch(() => ({}));
+              e.error = body.error || '儲存失敗，請稍後再試';
+              e.saving = false;
+              return;
+            }
+            const updated = await res.json();
+            this.selected = updated;
+            e.show = false;
+            e.saving = false;
+          } catch {
+            e.error = '網路錯誤，請稍後再試';
+            e.saving = false;
+          }
         },
         feedbackStatText(s) {
           const pct = Math.round(s.effective / s.total * 100);
