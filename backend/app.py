@@ -36,6 +36,30 @@ SUPER_DEPT_SENTINEL = "__super__"
 DEPT_ID_RE = re.compile(r"^[a-z0-9_]{1,32}$")
 _DUMMY_HASH = generate_password_hash("__never_matches__", method="pbkdf2:sha256")
 
+_TS_FRAC_RE = re.compile(r"(\.\d+)")
+_TS_SHORT_TZ_RE = re.compile(r"[+-]\d{2}$")
+
+
+def _parse_pg_timestamp(ts: str) -> datetime:
+    """PostgREST 回傳的 timestamptz 格式不完全固定：微秒尾端為 0 時會被
+    裁切成非 3/6 位（例如 .78161 而非 .781610），時區標記可能是
+    +00:00／+00／Z。Python 的 fromisoformat() 對這些變體要求嚴格，
+    任一種都會直接拋 ValueError。這裡統一正規化後再解析；解析不出來
+    就讓例外往外拋，不在這裡吞掉（見 _remaining_delay() 的 fail-closed
+    說明）。獨立成模組層級函式（不是 create_app() 內的閉包）是刻意的：
+    純函式邏輯關在閉包裡 pytest 測不到，這是一個第四輪外部審查發現的
+    既有 bug 才被抓出來——之後任何同類的時間戳/格式解析邏輯都該直接
+    寫成模組層級函式，不要圖方便塞進 create_app()。"""
+    s = ts.strip().replace("Z", "+00:00")
+    m = _TS_FRAC_RE.search(s)
+    if m:
+        frac = m.group(1)[1:].ljust(6, "0")[:6]
+        s = s[:m.start()] + "." + frac + s[m.end():]
+    if _TS_SHORT_TZ_RE.search(s):
+        s += ":00"
+    dt = datetime.fromisoformat(s)
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
 
 def _lan_ip() -> str:
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -253,39 +277,24 @@ def create_app() -> Flask:
     def _client_ip() -> str:
         return request.headers.get("X-Forwarded-For", request.remote_addr or "unknown").split(",")[0].strip()
 
-    _TS_FRAC_RE = re.compile(r"^(.*\.\d+)([+-]\d{2}:\d{2})$")
-
-    def _parse_pg_timestamp(ts: str) -> datetime:
-        """PostgREST 回傳的 timestamptz 微秒尾端為 0 時會被裁切成非 6 位數
-        （例如 .78161 而非 .781610），Python 的 datetime.fromisoformat() 只
-        接受精確 3 或 6 位微秒，其餘位數一律拋 ValueError——這裡先補齊到
-        6 位再解析，不依賴資料庫回傳字串剛好符合 fromisoformat 的嚴格格式。"""
-        s = ts.replace("Z", "+00:00")
-        m = _TS_FRAC_RE.match(s)
-        if m:
-            head, tz = m.groups()
-            int_part, _, frac = head.partition(".")
-            s = f"{int_part}.{frac.ljust(6, '0')[:6]}{tz}"
-        return datetime.fromisoformat(s)
-
     def _remaining_delay(n: int, last_failure_at: Optional[str], n_threshold: int, n_offset: int) -> int:
         """delay 是相對「最後一次失敗時間」的倒數計時，不是「N>=門檻就永久節流」——
         過了 2**effective_n 秒窗口，同一個 N 不再節流，直到下一次失敗才會觸發下一輪
         （且下一輪的 N 會遞增，delay 也隨之變長）。
 
-        【第四輪外部審查發現的既有 bug】原本用 datetime.fromisoformat() 直接解析
-        last_failure_at，遇到微秒非 3/6 位（PostgREST 常見輸出，尾端 0 被裁切）
-        會拋例外，except 分支回傳「完整延遲」而非「剩餘延遲」——不管實際已經
-        過了多久，永遠回報同一個固定秒數，等同節流視窗形同虛設地變長。改用
-        _parse_pg_timestamp() 容忍任意位數微秒，不再依賴嚴格格式。"""
+        【第四輪外部審查修正】第一版遇到時間戳解析失敗時 except 分支回傳
+        「完整延遲」，這是靜默降級——不管實際過了多久，永遠回報同一個固定
+        秒數，使用者會被永久卡住且沒有任何錯誤訊息可循，跟這個系統反覆
+        踩過的「例外分支回傳看似合理的預設值」是同一個模式（/ping 漏傳
+        department、_count() 解析失敗回 0）。改為 fail-closed：解析失敗
+        直接往外拋，讓呼叫端（登入端點）變成明確的 500，而不是把節流機制
+        悄悄弄壞——節流是安全機制，資料格式跟預期不符時應該被立刻發現，
+        不該被吞掉。"""
         if n < n_threshold or last_failure_at is None:
             return 0
         effective_n = n if n_offset == 0 else (n - n_offset)
         full_delay = min(2 ** effective_n, 60)
-        try:
-            last_dt = _parse_pg_timestamp(last_failure_at)
-        except Exception:
-            return full_delay
+        last_dt = _parse_pg_timestamp(last_failure_at)
         elapsed = (datetime.now(timezone.utc) - last_dt).total_seconds()
         remaining = full_delay - elapsed
         return max(0, int(remaining) + (1 if remaining % 1 else 0))
@@ -607,6 +616,12 @@ def create_app() -> Flask:
             abort(404, "找不到此警報代碼")
         row = alarms_store.patch_one(department=target,
                                      match={"device_model": device_model, "code": code}, patch=patch)
+        if row is None:
+            # patch_one() 打不到任何列——警報在上面 load() 查完之後被刪除
+            # 的競態，或 PostgREST 過濾條件沒匹配到（不該發生，但 PATCH
+            # 打空不報錯，靜默回 None 比讓前端以為改成功了更安全，見
+            # 外部審查提醒：這類「看似合理的預設值」是這個系統反覆踩過的坑）
+            abort(404, "找不到此警報代碼")
         audit_logger.log("local_update", department=target, new_data=row, old_data=old_row)
         return jsonify(row)
 
@@ -627,6 +642,12 @@ def create_app() -> Flask:
         items = alarms_store.load(department=target)
         if not any(a["code"] == code and a.get("device_model") == device_model for a in items):
             abort(404, "找不到此警報代碼")
+        # 防止同一筆警報已有待審建議時又重複提交——不區分是不是同一人
+        # 提的，因為部門共用密碼追不到個人（見 PLAN_local_solution.md 9
+        # 節已知限制），只要這筆警報已經有人在排隊審核，就不該再疊一筆
+        pending = alarm_suggestion_store.list_pending(department=target)
+        if any(s["device_model"] == device_model and s["code"] == code for s in pending):
+            abort(409, "這筆警報已有待審核的建議，請等管理員處理後再提交")
         role = "superadmin" if is_superadmin() else ("admin" if is_admin() else "user")
         row = alarm_suggestion_store.create(
             department=target, device_model=device_model, code=code,
@@ -653,12 +674,19 @@ def create_app() -> Flask:
         scope, dept = scope_department()
         if scope == DeptScope.DEPT and row["department"] != dept:
             abort(404)  # 不透露其他部門的建議存在（同三段式路由 404 而非 403 的一貫做法）
+        if row["status"] != "pending":
+            abort(409, "這筆建議已經審核過了")
         body = request.get_json(silent=True) or {}
         action = body.get("action")
         if action not in ("accept", "reject"):
             abort(400, "action 必須是 accept 或 reject")
         role = "superadmin" if is_superadmin() else "admin"
-        reviewer = f"{row['department']}/{role}" if scope == DeptScope.DEPT else f"{dept or row['department']}/{role}"
+        # 一律用建議所屬的部門（row["department"]），不是審核者的檢視範圍
+        # （scope_department() 的 dept）——這次寫入實際影響的是建議所屬
+        # 部門，超管在 ?dept= 模式下審核時兩者可能不同，稽核軌跡要記對
+        # 象而非操作者當下的檢視狀態（同 PLAN_local_solution.md 4.4 節
+        # local_updated_by 的原則）。
+        reviewer = f"{row['department']}/{role}"
         note = (body.get("review_note") or "").strip() or None
         if action == "accept":
             patch = {"local_solution": row["suggestion"], "local_updated_by": reviewer,
@@ -671,6 +699,11 @@ def create_app() -> Flask:
             new_row = alarms_store.patch_one(department=row["department"],
                                              match={"device_model": row["device_model"], "code": row["code"]},
                                              patch=patch)
+            if new_row is None:
+                # 建議指向的警報在待審期間被刪除——alarm_suggestions 的外鍵
+                # 有 on delete cascade，理論上這筆建議會跟著消失，走不到這裡；
+                # 但 patch_one() 打空不報錯，保守起見仍要擋，不留靜默寫入 None
+                abort(404, "找不到此建議對應的警報，可能已被刪除")
             audit_logger.log("local_update", department=row["department"], new_data=new_row, old_data=old_row)
             updated = alarm_suggestion_store.review(suggestion_id, "accepted", reviewer, note)
         else:
