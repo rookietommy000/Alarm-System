@@ -11,12 +11,12 @@
 
 | 介面 | 連結 |
 |---|---|
-| 🏠 入口頁 | https://alarm-system-j9dl.onrender.com/ |
-| 🔍 前台查詢 | https://alarm-system-j9dl.onrender.com/app |
-| ⚙️ 後台管理 | https://alarm-system-j9dl.onrender.com/admin |
-| 📊 回饋儀表板 | https://alarm-system-j9dl.onrender.com/admin/dashboard |
+| 🏠 入口頁 | https://alarm-system-1.onrender.com/ |
+| 🔍 前台查詢 | https://alarm-system-1.onrender.com/app |
+| ⚙️ 後台管理 | https://alarm-system-1.onrender.com/admin |
+| 📊 回饋儀表板 | https://alarm-system-1.onrender.com/admin/dashboard |
 
-> 使用 [cron-job.org](https://cron-job.org) 每 5 分鐘自動 ping `https://alarm-system-j9dl.onrender.com/ping`，防止 Render 免費方案休眠。
+> 使用 [cron-job.org](https://cron-job.org) 每 5 分鐘自動 ping `https://alarm-system-1.onrender.com/ping`，防止 Render 免費方案休眠。
 
 ## 資料庫
 

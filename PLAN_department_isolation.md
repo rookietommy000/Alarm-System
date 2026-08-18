@@ -2065,4 +2065,6 @@ FORBIDDEN regex 新增 `throttle`/`rate_limit`/`fallthrough` 三個關鍵字（�
 
 **影響範圍**：無程式碼異動，純外部平台（cron-job.org）設定修正，不涉及 git commit。這是本專案第二次遇到「網域/服務位址變更後，外部相依服務的設定沒有同步更新」的情況（第一次是 Railway→Render 平台遷移本身），值得記錄的通用教訓：**服務網域一旦變更，除了程式碼裡的環境變數（`RENDER_EXTERNAL_URL` 是自動注入不受影響），還要盤點所有外部指向該網域的設定**（本例是 cron-job.org，未來若有其他外部服務——例如 webhook、監控告警——同樣要檢查）。
 
+**🟡【後續修正，現場處置做法階段 5 期間發現】**：本輪「舊網域已不存在」的判斷不準確——`alarm-system-j9dl.onrender.com` 對應的 Render service（名稱 `alarm-system`）當時只是 cron-job.org 的排程指錯，服務本身其實一直存在、持續自動部署最新程式碼（curl 實測仍回 200，且跑的是最新 commit）。這代表除了 cron-job.org 這一個外部設定，還遺漏了「舊 Render service 本身要不要刪除」這一步——只改外部排程指向新網域，不代表舊 service 會自動消失。已請使用者到 Render Dashboard 手動刪除該舊 service（`docs/index.html`、`README.md` 的網址已同步改為 `alarm-system-1`）。教訓：服務網域變更時，除了外部設定要盤點，**平台本身遺留的舊 service 也要主動確認並清理**，不能假設它會被同一次遷移自動處理掉。
+
 **影響範圍**：`backend/storage.py`（新增 `SupabaseStore.probe()`/`JsonStore.probe()`）；`backend/app.py`（`/ping` 改呼叫 `probe()`）；`tests/test_no_fake_isolation_claims.py`（完整重寫：`rglob`、類別名匹配、`purge` 出口說明、`throttle`/`fallthrough` 關鍵字、九項機制清單 docstring）；61 個既有 pytest 全數通過；用真實 Supabase 連線驗證 `/ping` 回應時間（0.4-0.5 秒，較撈整張表明顯更快）；`grep` 確認 `dashboard.html` 不存在同類動態綁定陷阱，Vue `@click` 指令機制天生免疫。三個 commit（`b47feda`/`1be67fa`/`51d2de6`）確認皆不擋部署，本輪修正尚未 commit。
