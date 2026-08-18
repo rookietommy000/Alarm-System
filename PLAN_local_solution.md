@@ -2,13 +2,22 @@
 
 ## 狀態
 
-🟡 **實作中——階段 1-4 已完成，階段 5 起尚未開始。**
+🟡 **實作中——階段 1-5 前端已完成，尚未 commit，一個小問題（退回是否強制填理由）待二次確認專家。**
 
-**下一個 session 接手時，從這裡開始：** 第七節「執行順序」表格的階段 5（一般使用者建議 ＋ 待審表 ＋ 後台審核）。階段 1-2 的所有程式碼已 commit 並 push 到 `main`，`verify_isolation.sh` 對正式 Render 環境跑出 **48 通過、0 失敗**（含新增的 T-15~T-17），70 個 pytest 全數通過。詳細過程見第十二節「第四輪外部審查與階段 1-2 收尾」。
+**下一個 session 接手時，從這裡開始：** 階段 5 已無阻塞性缺口，`review_note` 是否要從選填改必填是唯一待二次確認的小問題（5.4 節），不影響 commit。確認 commit/push 後可進入階段 6（缺處置清單）。
 
 **階段 3（前台詳情卡片顯示兩層）已完成**：`frontend/index.html` 的詳情卡片改為四分支（`sol_steps` 結構化步驟優先 → 有 `local_solution` 顯示現場方案＋原廠收合 → 只有 `solution` 原樣顯示 → 兩者皆無顯示「這筆還沒有處置方式」），純文字插值無 `v-html`，已過安全 review，已 commit（`1d6df6f`）並 push。
 
-**階段 4（前台管理員編輯入口）已完成，但只做了 `isAdmin` 這條路徑**：詳情卡片新增「✏️ 編輯」/「💡 補充現場方案」入口與同一個編輯對話框（預填機種/代碼/描述/原廠建議，帶同機種其他警報的 `local_solution` 參考清單，見 5.3 節），送出打既有的 `PUT /api/alarms/<department>/<device_model>/<code>/local` 端點。一般使用者的建議入口（走 `POST .../suggestions` 待審流程）**沒有做**，留給階段 5。純前端改動，已過安全 review（SAFE TO COMMIT），尚未 commit。
+**階段 4（前台管理員編輯入口）已完成**：詳情卡片新增編輯入口與對話框（預填機種/代碼/描述/原廠建議，帶同機種其他警報的 `local_solution` 參考清單，見 5.3 節），送出打既有的 `PUT .../local` 端點。已 commit（`e6d84ec`）並 push。
+
+**階段 5（一般使用者建議＋待審表＋後台審核）已完成，尚未 commit**：
+- 前台：`whoami.auth && !whoami.admin` 顯示「💡 提出建議」/「💡 補充現場方案」按鈕，與階段 4 的管理員編輯共用同一個對話框，用 `localEdit.mode` 區分行為，送出打 `POST .../suggestions`，寫入待審表（見 5.2 節實作備註）
+- 後台：`admin.html` 新增「💡 待審建議」頁籤（含未處理筆數徽章），三層對照呈現（原廠建議／目前現場方案／建議改為），覆蓋既有內容時額外警示，操作接受／退回，皆已打通對應端點（見 5.4 節）
+- 後端：`AlarmSuggestionStore.list_pending()` 改用 PostgREST resource embedding 一次查詢帶出對應 `alarms` 列，已對正式 Supabase 實測驗證（見 5.4 節）
+- 已過 security-diff-review（SAFE TO COMMIT）
+- 🟡 待二次確認：退回建議的 `review_note` 目前選填，外部審查建議改必填，暫緩處理
+
+**注意：這次的第一版審查包（`review_packs/local-solution-stage-3-4-review.md`）給錯了給專家看的檔案脈絡**——階段 5 待審清單相關的討論，專家當時看到的是 `frontend/dashboard.html`（回饋儀表板，五個分頁 dashboard/scans/alarms/models/depts），不是實際改動的 `frontend/admin.html`。之後生成審查包時要清楚標明檔案路徑，避免混淆。
 
 與 `PLAN_department_isolation.md`（多部門隔離工程）的關係：**依賴**該工程已完成的部分——`alarms` 表的 `department` 欄位、複合主鍵 `(department, device_model, code)`、`scope_department()`/`resolve_target_department()`/三段式路由、`ROUTE_AUTH_REGISTRY`、`sentinel_pack` 驗證機制——全部直接沿用，不重新設計。本文件只記錄這個功能本身新增的部分。
 
@@ -229,7 +238,7 @@ where a.local_solution is null or a.local_solution = '';
 - 只有 `solution` → 直接顯示原廠內容，不特別標示（避免既有畫面大幅變動）
 - 兩者皆無 → 顯示「這筆還沒有處置方式」＋ 補充入口
 
-### 5.2 ✅（僅管理員路徑）編輯入口：把時機移到知識產生的當下
+### 5.2 ✅ 編輯入口：把時機移到知識產生的當下
 
 現有流程麻煩的根本原因是**時機錯開**：知識產生在「剛處理完那個警報」的當下，但填寫要求「某天有空 → 打開後台 → 找到那筆 → 回想」。
 
@@ -246,7 +255,7 @@ where a.local_solution is null or a.local_solution = '';
 
 兩個按鈕開**同一個對話框**，差別只在送出後走哪支端點。
 
-**實作備註（這次動工的範圍）**：目前只做了 `isAdmin` 這條路徑（按鈕文字「✏️ 編輯」，打 `PUT .../local` 直接寫入），一般使用者的「💡 補充現場方案」按鈕與 `POST .../suggestions` 待審流程留給階段 5（見 5.4 節、第七節）。詳情卡片與 AI 拍照辨識結果共用同一個 `openDetail`/`selected` 元件（已於階段 3 確認），只改了一處，兩條觸發路徑都已涵蓋。
+**實作備註**：階段 4 先做了 `isAdmin` 這條路徑（按鈕文字「✏️ 編輯」，打 `PUT .../local` 直接寫入）。階段 5 補上一般使用者路徑：`whoami.auth && !whoami.admin` 顯示「💡 提出建議」/「💡 補充現場方案」按鈕，打 `POST .../suggestions`，寫入待審表。兩條路徑共用同一個對話框，用 `localEdit.mode`（`'admin'` / `'suggest'`）區分標題文字、欄位是否預填既有值、送出端點與按鈕文案——建議模式故意不預填既有 `local_solution`/`local_reason`，避免使用者誤以為在編輯已生效的內容。詳情卡片與 AI 拍照辨識結果共用同一個 `openDetail`/`selected` 元件（已於階段 3 確認），只改了一處，兩條觸發路徑都已涵蓋。
 
 ### 5.3 ✅ 對話框要預填情境
 
@@ -268,9 +277,23 @@ E108：確認風扇運轉並清潔濾網
 
 參考範例會大幅提高填寫品質與用語一致性，也降低「不知道要寫多細」的猶豫。**這比 AI 審核更早介入，效果也更直接。**
 
-### 5.4 後台待審清單
+### 5.4 ✅ 後台待審清單
 
 管理員後台新增「待處理建議」提示（含未處理筆數），列表顯示：提交者、時間、警報、建議內容、目前的現場方案（若有）。操作：接受（寫入 `local_solution`）／退回（填 `review_note`）。
+
+**【外部審查修正：從無現值對照改為三層對照】**第一版做出來後，外部審查指出「目前的現場方案」不是錦上添花，是審核決策的核心依據——審核者要判斷的其實是**差異**（從無到有 vs 覆蓋既有內容），沒有現值對照，工廠環境下審核者不會另外查。原本考慮的兩個做法（後端 `list_pending()` 內逐筆 `load()` 全撈比對、前端逐筆打 `GET /api/alarms`）都被指出是 N+1 或全表掃描的模式，跟 4.4 節已經修正過的 `update_local_solution` 同一類問題（`app.py` 第 708 行那次全撈就是同一個坑）。
+
+**最終做法：`list_pending()` 改用 PostgREST resource embedding，一次查詢帶出 `alarms` 的 `solution`/`local_solution`/`local_reason`/`description`**（`backend/storage.py` `AlarmSuggestionStore.list_pending()`）：
+
+```
+GET /alarm_suggestions?select=*,alarms(solution,local_solution,local_reason,description)&status=eq.pending&department=eq.<dept>&order=submitted_at.desc
+```
+
+`alarm_suggestions` 已有指向 `alarms` 的複合外鍵（3.2 節），對正式 Supabase 實測（用 `zztest/ACM001/0001` 插入一筆測試建議、查詢、確認巢狀 `alarms` 物件正確回傳、刪除測試資料收尾）確認 PostgREST 能正確解析這個複合外鍵關聯，不需要退而求其次的「兩次往返＋Python 端 join」方案。
+
+前端（`admin.html`）改為三層對照呈現：**原廠建議**（`s.alarms.solution`，若有）→ **目前現場方案**（`s.alarms.local_solution`，無值時顯示「（尚未建立）」並用不同樣式區分）→ **建議改為**（`s.suggestion`，綠色左框標示這是變更方向）→ **提出理由**。若目前已有現場方案，接受按鈕旁加黃色警示「⚠️ 接受後會覆蓋現有的現場方案」，按鈕文字也變成「接受（將覆蓋）」——覆蓋既有內容跟從無到有，破壞性程度不同，介面的阻力也該不同。
+
+退回目前仍是選填 `review_note`（外部審查建議改必填，暫緩處理，待二次確認）。
 
 ---
 
@@ -332,7 +355,7 @@ E108：確認風扇運轉並清潔濾網
 | 2 | `PUT .../local` 端點 ＋ 白名單 ＋ 稽核 | 後端就緒 |
 | 3 | ✅ 前台詳情卡片顯示兩層 | **既有知識可見** |
 | 4 | ✅ 前台管理員編輯入口 ＋ 預填情境 | **知識開始累積** |
-| 5 | 一般使用者建議 ＋ 待審表 ＋ 後台審核 | 擴大來源 |
+| 5 | ✅ 一般使用者建議 ＋ 待審表 ＋ 後台審核 | 擴大來源 |
 | 6 | 缺處置清單（`GET /api/alarms?missing_local=true` 篩選參數，不做排序，見 4.5 節） | 補資料有優先序 |
 | 7 | AI 第一關分級 ＋ 差異摘要 | 降低審核負擔 |
 

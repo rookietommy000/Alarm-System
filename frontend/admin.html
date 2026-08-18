@@ -102,6 +102,27 @@
     .hist-val-new { color: #34d399; background: rgba(52,211,153,0.12); padding: 7px 10px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; word-break: break-word; border-left: 2px solid rgba(52,211,153,0.4); }
     .hist-arrow-lg { color: var(--muted); font-size: 13px; text-align: center; padding-top: 7px; }
 
+    /* Pending suggestions */
+    .badge-pending { display: inline-block; margin-left: 4px; padding: 1px 6px; border-radius: 10px; background: rgba(248,113,113,0.18); color: #f87171; font-size: 11px; font-weight: 700; }
+    .suggestions-section { padding: 20px; }
+    .suggestions-section h2 { font-size: 16px; font-weight: 600; margin-bottom: 16px; }
+    .suggestion-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 12px; }
+    .suggestion-item { padding: 14px 16px; background: var(--surface-hover); border-radius: var(--radius-md); font-size: 14px; display: flex; flex-direction: column; gap: 8px; }
+    .sugg-main { display: flex; align-items: baseline; gap: 8px; }
+    .sugg-code { font-weight: 700; font-family: "SF Mono", Menlo, ui-monospace, monospace; flex-shrink: 0; }
+    .sugg-desc { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+    .sugg-time { color: var(--muted); font-size: 12px; flex-shrink: 0; margin-left: auto; }
+    .sugg-submitter { color: var(--muted); font-size: 12px; }
+    .sugg-field { padding: 8px 10px; border-radius: 6px; background: rgba(255,255,255,0.03); }
+    .sugg-field-label { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin-bottom: 3px; }
+    .sugg-field-body { font-size: 13px; white-space: pre-wrap; }
+    .sugg-field-vendor .sugg-field-body { color: var(--muted); }
+    .sugg-field-empty { color: var(--muted); font-style: italic; }
+    .sugg-field-new { background: rgba(52,211,153,0.08); border-left: 3px solid #34d399; }
+    .sugg-overwrite-hint { font-size: 12px; color: #fbbf24; background: rgba(251,191,36,0.1); padding: 8px 10px; border-radius: 6px; }
+    .sugg-actions { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+    .sugg-actions .form-control { flex: 1; }
+
     /* Bootstrap dark overrides */
     body { background: var(--bg); color: var(--text); }
     .btn-dark { background: var(--primary); border-color: var(--primary); color: var(--primary-ink); font-weight: 600; }
@@ -150,8 +171,12 @@
       <button class="btn btn-outline-secondary btn-sm" @click="toggleHistory">
         {{ showHistory ? '← 返回列表' : '📋 歷史紀錄' }}
       </button>
+      <button class="btn btn-outline-secondary btn-sm" @click="toggleSuggestions">
+        {{ showSuggestions ? '← 返回列表' : '💡 待審建議' }}
+        <span v-if="pendingSuggestions.length" class="badge-pending">{{ pendingSuggestions.length }}</span>
+      </button>
       <a class="btn btn-outline-secondary btn-sm" href="/admin/dashboard">📊 回饋儀表板</a>
-      <template v-if="!showHistory">
+      <template v-if="!showHistory && !showSuggestions">
         <select class="form-select form-select-sm" style="width:160px" v-model="listDevice">
           <option value="">全部機種</option>
           <option v-for="d in devices" :key="d.id" :value="d.model">{{ d.model }}</option>
@@ -162,7 +187,7 @@
     </div>
 
     <!-- Table -->
-    <div class="admin-table-wrap" v-if="!showHistory">
+    <div class="admin-table-wrap" v-if="!showHistory && !showSuggestions">
       <p class="empty-admin" v-if="!loading && !filteredItems.length">無符合資料</p>
       <table class="admin-table" v-else>
         <thead>
@@ -186,6 +211,50 @@
           </tr>
         </tbody>
       </table>
+    </div>
+
+    <!-- Pending suggestions -->
+    <div class="suggestions-section" v-if="showSuggestions">
+      <h2>待審建議</h2>
+      <p style="color:var(--muted);font-size:14px;" v-if="!loadingSuggestions && !pendingSuggestions.length">目前沒有待審建議</p>
+      <ul class="suggestion-list" v-else>
+        <li class="suggestion-item" v-for="s in pendingSuggestions" :key="s.id">
+          <div class="sugg-main">
+            <span class="sugg-code">{{ s.device_model }} · {{ s.code }}</span>
+            <span class="sugg-desc" v-if="s.alarms && s.alarms.description">{{ s.alarms.description }}</span>
+            <span class="sugg-time">{{ fmtTime(s.submitted_at) }}</span>
+          </div>
+          <div class="sugg-submitter">提交者：{{ s.submitted_by }}</div>
+
+          <div class="sugg-field" v-if="s.alarms && s.alarms.solution">
+            <div class="sugg-field-label">原廠建議</div>
+            <div class="sugg-field-body sugg-field-vendor">{{ s.alarms.solution }}</div>
+          </div>
+
+          <div class="sugg-field">
+            <div class="sugg-field-label">目前現場方案</div>
+            <div class="sugg-field-body" v-if="s.alarms && s.alarms.local_solution">{{ s.alarms.local_solution }}</div>
+            <div class="sugg-field-body sugg-field-empty" v-else>（尚未建立）</div>
+          </div>
+
+          <div class="sugg-field sugg-field-new">
+            <div class="sugg-field-label">建議改為</div>
+            <div class="sugg-field-body">{{ s.suggestion }}</div>
+          </div>
+          <div class="sugg-field" v-if="s.reason">
+            <div class="sugg-field-label">提出理由</div>
+            <div class="sugg-field-body">{{ s.reason }}</div>
+          </div>
+
+          <div class="sugg-overwrite-hint" v-if="s.alarms && s.alarms.local_solution">⚠️ 接受後會覆蓋現有的現場方案，原內容不會保留在 alarms 上（歷史紀錄仍可在稽核軌跡查到）</div>
+
+          <div class="sugg-actions">
+            <input class="form-control form-control-sm" v-model="reviewNotes[s.id]" placeholder="退回時可填寫原因（選填）" />
+            <button class="btn btn-outline-danger btn-sm" @click="reviewSuggestion(s, 'reject')">退回</button>
+            <button class="btn btn-dark btn-sm" @click="reviewSuggestion(s, 'accept')">{{ s.alarms && s.alarms.local_solution ? '接受（將覆蓋）' : '接受' }}</button>
+          </div>
+        </li>
+      </ul>
     </div>
 
     <!-- History inline -->
@@ -310,6 +379,7 @@
           editing: null, isNew: false, error: '',
           keywordsText: '',
           showHistory: false, history: [], expandedHist: {},
+          showSuggestions: false, pendingSuggestions: [], loadingSuggestions: false, reviewNotes: {},
           loading: false, listSearch: '', listDevice: ''
         };
       },
@@ -325,7 +395,7 @@
           });
         }
       },
-      mounted() { this.load(); },
+      mounted() { this.load(); this.loadSuggestions(); },
       watch: {
         'editing.keywords'() {
           if (this.editing) this.keywordsText = (this.editing.keywords || []).join(', ');
@@ -373,6 +443,7 @@
         },
         async toggleHistory() {
           if (this.showHistory) { this.showHistory = false; return; }
+          this.showSuggestions = false;
           const r = await fetch('/api/audit');
           if (r.ok) this.history = await r.json();
           this.expandedHist = {};
@@ -380,6 +451,44 @@
         },
         toggleHistItem(idx) {
           this.expandedHist = { ...this.expandedHist, [idx]: !this.expandedHist[idx] };
+        },
+        async toggleSuggestions() {
+          if (this.showSuggestions) { this.showSuggestions = false; return; }
+          this.showHistory = false;
+          this.showSuggestions = true;
+          await this.loadSuggestions();
+        },
+        async loadSuggestions() {
+          this.loadingSuggestions = true;
+          try {
+            const r = await fetch('/api/admin/suggestions');
+            if (r.status === 401) { location.href = '/login'; return; }
+            if (r.status === 403) { location.href = '/admin/login'; return; }
+            this.pendingSuggestions = r.ok ? await r.json() : [];
+          } finally {
+            this.loadingSuggestions = false;
+          }
+        },
+        async reviewSuggestion(s, action) {
+          try {
+            const r = await fetch(`/api/admin/suggestions/${s.id}`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action, review_note: this.reviewNotes[s.id] || '' }),
+            });
+            if (r.status === 403) { location.href = '/admin/login'; return; }
+            if (!r.ok) {
+              const body = await r.json().catch(() => ({}));
+              this.showToast(body.error || '處理失敗', 'danger');
+              return;
+            }
+            delete this.reviewNotes[s.id];
+            await this.loadSuggestions();
+            await this.load();
+            this.showToast(action === 'accept' ? `已接受 ${s.device_model} · ${s.code} 的建議` : `已退回 ${s.device_model} · ${s.code} 的建議`);
+          } catch {
+            this.showToast('網路錯誤，請稍後再試', 'danger');
+          }
         },
         fmtTime(iso) {
           const d = new Date(iso);

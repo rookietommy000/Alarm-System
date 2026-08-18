@@ -892,10 +892,18 @@ class AlarmSuggestionStore:
 
     def list_pending(self, department: Optional[str]) -> list:
         """待審清單，依 scope_department() 過濾（department=None 是總管
-        不過濾的明確選擇，見 PLAN_department_isolation.md 3.6 節同一原則）。"""
+        不過濾的明確選擇，見 PLAN_department_isolation.md 3.6 節同一原則）。
+
+        用 PostgREST resource embedding 帶出對應 alarms 列的
+        solution/local_solution/local_reason/description，一次查詢完成
+        （外部審查指出：審核者判斷的是「建議 vs 目前現值」的差異，不是
+        建議文字本身，沒有現值對照無法判斷這是從無到有還是覆蓋既有內容；
+        且外鍵已是複合鍵 (department, device_model, code)，逐筆查詢或
+        前端另外打 API 都是 N+1，這裡用單一往返的 embedding 查詢）。"""
         if not _use_supabase():
             return []
-        qs = "select=*&status=eq.pending&order=submitted_at.desc"
+        qs = ("select=*,alarms(solution,local_solution,local_reason,description)"
+              "&status=eq.pending&order=submitted_at.desc")
         if department is not None:
             qs += f"&department=eq.{urllib.parse.quote(department, safe='')}"
         return self._req("GET", f"{self._TABLE}?{qs}")
