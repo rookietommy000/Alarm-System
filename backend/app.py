@@ -1116,7 +1116,7 @@ def create_app() -> Flask:
 
     @app.get("/")
     @public_endpoint
-    def portal():
+    def root_redirect():
         return redirect("/app")
 
     @app.get("/app")

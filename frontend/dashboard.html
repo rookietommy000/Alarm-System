@@ -540,6 +540,61 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
           </section>
         </div>
 
+        <!-- ══ 待審建議 ══ -->
+        <div v-if="page === 'suggestions'" style="display:flex; flex-direction:column; gap:20px">
+          <section class="card blueprint" style="padding:16px; gap:14px">
+            <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+            <div style="display:flex; align-items:baseline; justify-content:space-between">
+              <h2 style="font-size:18px">待審建議 <span style="font-size:11px; font-family:var(--font-body); color:color-mix(in srgb, var(--color-text) 55%, transparent)">R-01</span></h2>
+              <span style="font-size:11px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">共 {{ pendingSuggestions.length }} 筆</span>
+            </div>
+            <p v-if="!loadingSuggestions && !pendingSuggestions.length" style="font-size:13px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">目前沒有待審建議</p>
+            <div v-else style="display:flex; flex-direction:column; gap:14px">
+              <div class="card blueprint" v-for="s in pendingSuggestions" :key="s.id" style="padding:14px; gap:10px">
+                <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+                <div style="display:flex; align-items:baseline; gap:8px; flex-wrap:wrap">
+                  <span style="font-weight:600; font-family:var(--font-heading)">{{ s.device_model }} · {{ s.code }}</span>
+                  <span v-if="s.alarms && s.alarms.description" style="font-size:13px; color:color-mix(in srgb, var(--color-text) 55%, transparent); flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ s.alarms.description }}</span>
+                  <span style="font-size:11px; color:color-mix(in srgb, var(--color-text) 55%, transparent); margin-left:auto">{{ fmtTime(s.submitted_at) }}</span>
+                </div>
+                <div style="font-size:12px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">提交者：{{ s.submitted_by }}</div>
+
+                <div v-if="s.alarms && s.alarms.solution" class="field">
+                  <label>原廠建議</label>
+                  <div style="font-size:13px; color:color-mix(in srgb, var(--color-text) 65%, transparent); white-space:pre-wrap; padding:8px 10px; background:var(--color-surface)">{{ s.alarms.solution }}</div>
+                </div>
+
+                <div class="field">
+                  <label>目前現場方案</label>
+                  <div v-if="s.alarms && s.alarms.local_solution" style="font-size:13px; white-space:pre-wrap; padding:8px 10px; background:var(--color-surface)">{{ s.alarms.local_solution }}</div>
+                  <div v-else style="font-size:13px; font-style:italic; color:color-mix(in srgb, var(--color-text) 55%, transparent); padding:8px 10px; background:var(--color-surface)">（尚未建立）</div>
+                </div>
+
+                <div class="field">
+                  <label>建議改為</label>
+                  <div style="font-size:13px; white-space:pre-wrap; padding:8px 10px; background:var(--color-accent-100); border-left:3px solid var(--color-accent)">{{ s.suggestion }}</div>
+                </div>
+
+                <div class="field" v-if="s.reason">
+                  <label>提出理由</label>
+                  <div style="font-size:13px; white-space:pre-wrap; padding:8px 10px; background:var(--color-surface)">{{ s.reason }}</div>
+                </div>
+
+                <p v-if="s.alarms && s.alarms.local_solution" style="margin:0; font-size:12px; padding:8px 10px; background:#fbf1d9; color:#7a5c14">⚠️ 接受後會覆蓋現有的現場方案，原內容不會保留在 alarms 上（歷史紀錄仍可在稽核軌跡查到）</p>
+
+                <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap">
+                  <input class="input" style="flex:1; min-width:160px" v-model="reviewNotes[s.id]" placeholder="退回時可填寫原因（選填）" />
+                  <button class="btn btn-danger" @click="reviewSuggestion(s, 'reject')">退回</button>
+                  <button class="btn btn-primary blueprint" @click="reviewSuggestion(s, 'accept')">
+                    <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+                    {{ s.alarms && s.alarms.local_solution ? '接受（將覆蓋）' : '接受' }}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+
         <!-- ══ 機種管理 ══ -->
         <div v-if="page === 'models'">
           <section class="card blueprint" style="padding:16px; gap:12px">
@@ -857,6 +912,7 @@ createApp({
         { key: 'dashboard', label: 'Dashboard 統計', code: 'D' },
         { key: 'scans', label: '掃描紀錄管理', code: 'S' },
         { key: 'alarms', label: '警報管理', code: 'A' },
+        { key: 'suggestions', label: '待審建議', code: 'R' },
         { key: 'models', label: '機種管理', code: 'M' },
         { key: 'depts', label: '部門管理', code: 'X', superOnly: true },
       ],
@@ -864,6 +920,7 @@ createApp({
         dashboard: ['總覽', 'Dashboard 統計'],
         scans: ['紀錄', '掃描紀錄管理'],
         alarms: ['主檔', '警報管理'],
+        suggestions: ['審核', '待審建議'],
         models: ['主檔', '機種管理'],
         depts: ['系統', '部門管理'],
       },
@@ -885,6 +942,7 @@ createApp({
 
       alarmListDevice: '', alarmListSearch: '',
       alarmDraft: null, isNewAlarm: false, alarmKeywordsText: '', alarmError: '',
+      pendingSuggestions: [], loadingSuggestions: false, reviewNotes: {},
       deviceDraft: null, deviceError: '',
       toast: '',
 
@@ -900,7 +958,13 @@ createApp({
   computed: {
     isSuper() { return !!this.whoami.superadmin; },
     isAll() { return this.isSuper && this.viewDept === '__all__'; },
-    visibleNavItems() { return this.navItems.filter(n => !n.superOnly || this.isSuper); },
+    visibleNavItems() {
+      return this.navItems
+        .filter(n => !n.superOnly || this.isSuper)
+        .map(n => n.key === 'suggestions' && this.pendingSuggestions.length
+          ? { ...n, label: `${n.label}（${this.pendingSuggestions.length}）` }
+          : n);
+    },
     currentDeptName() {
       if (this.isAll) return null;
       const d = this.departments.find(x => x.id === this.viewDept);
@@ -1064,7 +1128,7 @@ createApp({
         const endpoints = [
           '/api/alarms' + dq, '/api/devices' + dq, '/api/feedback/stats' + dq, '/api/view/stats' + dq,
           '/api/admin/scan-stats' + dq, '/api/admin/scan-recent' + dq + amp + 'limit=100',
-          '/api/admin/scan-ranking' + dq, '/api/audit' + dq,
+          '/api/admin/scan-ranking' + dq, '/api/audit' + dq, '/api/admin/suggestions' + dq,
         ];
         const results = await Promise.all(endpoints.map(u => AlarmApi.get(u)));
         if (results.some(r => r.status === 403)) { location.href = '/admin/login'; return; }
@@ -1073,7 +1137,7 @@ createApp({
           this.setViewDept('__all__');
           return;
         }
-        const [alarms, devices, fbStats, viewStats, scanStats, scanRecent, scanRanking, audit] = await Promise.all(results.map(r => r.ok ? r.json() : (Array.isArray([]) ? [] : {})));
+        const [alarms, devices, fbStats, viewStats, scanStats, scanRecent, scanRanking, audit, suggestions] = await Promise.all(results.map(r => r.ok ? r.json() : (Array.isArray([]) ? [] : {})));
         this.alarms = alarms;
         this.devices = devices;
         this.feedbackStatsList = fbStats;
@@ -1083,8 +1147,27 @@ createApp({
         this.allScans = scanRecent;
         this.scanRanking = scanRanking;
         this.auditLog = audit;
+        this.pendingSuggestions = suggestions;
       } finally {
         this.loading = false;
+      }
+    },
+    async reviewSuggestion(s, action) {
+      try {
+        const r = await AlarmApi.put(`/api/admin/suggestions/${s.id}`, {
+          action, review_note: this.reviewNotes[s.id] || '',
+        });
+        if (r.status === 403) { location.href = '/admin/login'; return; }
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({}));
+          this.showToast(body.error || '處理失敗');
+          return;
+        }
+        delete this.reviewNotes[s.id];
+        await this.load();
+        this.showToast(action === 'accept' ? `已接受 ${s.device_model} · ${s.code} 的建議` : `已退回 ${s.device_model} · ${s.code} 的建議`);
+      } catch (e) {
+        this.showToast('網路錯誤，請稍後再試');
       }
     },
     fmtTime(iso) {

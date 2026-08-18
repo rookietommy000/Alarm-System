@@ -2,9 +2,9 @@
 
 ## 狀態
 
-🟡 **實作中——階段 1-5 前端已完成，尚未 commit，一個小問題（退回是否強制填理由）待二次確認專家。**
+🟡 **實作中——階段 1-5 已完成，尚未 commit。過程中意外發現並修正兩個與本功能無關的既有問題（孤兒後台檔案、公開的重複 Render 部署）。**
 
-**下一個 session 接手時，從這裡開始：** 階段 5 已無阻塞性缺口，`review_note` 是否要從選填改必填是唯一待二次確認的小問題（5.4 節），不影響 commit。確認 commit/push 後可進入階段 6（缺處置清單）。
+**下一個 session 接手時，從這裡開始：** 階段 5 已無阻塞性缺口，`review_note` 是否要從選填改必填（5.4 節）待二次確認專家，不影響 commit。另有一個獨立發現的架構問題（見下方「意外發現」）尚待處理，不阻塞本次 commit，但排在階段 6 之前處理較合適。確認 commit/push 後可進入階段 6（缺處置清單）。
 
 **階段 3（前台詳情卡片顯示兩層）已完成**：`frontend/index.html` 的詳情卡片改為四分支（`sol_steps` 結構化步驟優先 → 有 `local_solution` 顯示現場方案＋原廠收合 → 只有 `solution` 原樣顯示 → 兩者皆無顯示「這筆還沒有處置方式」），純文字插值無 `v-html`，已過安全 review，已 commit（`1d6df6f`）並 push。
 
@@ -12,12 +12,16 @@
 
 **階段 5（一般使用者建議＋待審表＋後台審核）已完成，尚未 commit**：
 - 前台：`whoami.auth && !whoami.admin` 顯示「💡 提出建議」/「💡 補充現場方案」按鈕，與階段 4 的管理員編輯共用同一個對話框，用 `localEdit.mode` 區分行為，送出打 `POST .../suggestions`，寫入待審表（見 5.2 節實作備註）
-- 後台：`admin.html` 新增「💡 待審建議」頁籤（含未處理筆數徽章），三層對照呈現（原廠建議／目前現場方案／建議改為），覆蓋既有內容時額外警示，操作接受／退回，皆已打通對應端點（見 5.4 節）
+- 後台：**`frontend/dashboard.html`**（不是 `admin.html`，見下方說明）新增「待審建議」分頁（側邊列徽章、三層對照呈現：原廠建議／目前現場方案／建議改為，覆蓋既有內容時額外警示），操作接受／退回，支援超管 `?dept=` 部門切換，皆已打通對應端點（見 5.4 節）
 - 後端：`AlarmSuggestionStore.list_pending()` 改用 PostgREST resource embedding 一次查詢帶出對應 `alarms` 列，已對正式 Supabase 實測驗證（見 5.4 節）
 - 已過 security-diff-review（SAFE TO COMMIT）
 - 🟡 待二次確認：退回建議的 `review_note` 目前選填，外部審查建議改必填，暫緩處理
 
-**注意：這次的第一版審查包（`review_packs/local-solution-stage-3-4-review.md`）給錯了給專家看的檔案脈絡**——階段 5 待審清單相關的討論，專家當時看到的是 `frontend/dashboard.html`（回饋儀表板，五個分頁 dashboard/scans/alarms/models/depts），不是實際改動的 `frontend/admin.html`。之後生成審查包時要清楚標明檔案路徑，避免混淆。
+**🔴 意外發現並修正：`admin.html` 是孤兒檔案，第一版待審清單做在使用者永遠看不到的地方**：一開始把待審清單做在 `frontend/admin.html`（有完整的新增/編輯/歷史紀錄功能，直覺判斷是正式後台），但 `/admin` 路由（`backend/app.py`）實際回傳的是 `frontend/dashboard.html`——`admin.html` 是 `dashboard.html` 的前身（`db4cb7e` 取代），自那之後從未被任何路由引用。整輪第一版後台實作是白工，已重新在 `dashboard.html` 做一次（見上方）。已對照確認 `db4cb7e` 取代時功能全部搬遷、沒有遺漏。`admin.html` 已 `git rm`。同時發現另一個孤兒 `frontend/portal.html`（曾是首頁，`cf13647` 多部門隔離工程起點後被 `redirect("/app")` 取代），一併 `git rm`。新增 `tests/test_no_orphan_frontend_html.py` 防止同類事再發生。
+
+**🔴 意外發現並處理：`static_url_path=""` 讓孤兒 HTML 公開可直接存取，順帶牽出一個公開的重複 Render 部署**：排查孤兒檔案時發現 `backend/app.py` 的 `Flask(static_folder=FRONTEND, static_url_path="")` 讓 `frontend/*.html` 全部繞過 `@app.route` 保護、可直接以檔名存取（`curl /admin.html` 回 200）——資料層本身安全（HTML 純模板無內嵌資料，API 端點仍受裝飾器保護），但這是「靠人記得不要亂放東西」的隱性架構，外部審查建議加 `before_request` 擋掉直接存取 `.html`（十行、零遷移成本，不動 `static_url_path` 本身以免牽動 Service Worker 快取），**尚未實作**，留待階段 5 收尾後處理。同一輪排查中，`docs/index.html`（GitHub Pages，已確認實際公開建置）的連結指向的網址 `alarm-system-j9dl` 經查證是一個**仍在運作、且與正式環境同步部署最新程式碼的獨立 Render service**，公開可達。已在 Render Dashboard 確認並刪除（`git remote`/`render.yaml` 對照 + 環境變數缺 `SUPERADMIN_PASSWORD` 佐證是舊部署），刪除後 curl 驗證回 404，正式環境不受影響。`docs/index.html`、`README.md` 的網址已同步更新為 `alarm-system-1`。`PLAN_department_isolation.md` 補充記錄修正第三十九輪「舊網域已不存在」的不準確判斷。`.env` 歷史檢查確認乾淨，無真實密鑰洩漏。
+
+**下一步的待辦（不阻塞 commit，但應排在階段 6 之前）**：在 `backend/app.py` 加 `before_request` 擋掉 `.html` 直接存取＋補兩組測試（外部審查已提供完整程式碼範本）。
 
 與 `PLAN_department_isolation.md`（多部門隔離工程）的關係：**依賴**該工程已完成的部分——`alarms` 表的 `department` 欄位、複合主鍵 `(department, device_model, code)`、`scope_department()`/`resolve_target_department()`/三段式路由、`ROUTE_AUTH_REGISTRY`、`sentinel_pack` 驗證機制——全部直接沿用，不重新設計。本文件只記錄這個功能本身新增的部分。
 
