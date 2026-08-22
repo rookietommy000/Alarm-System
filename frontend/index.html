@@ -662,8 +662,6 @@
       background: var(--bg); color: var(--text); resize: vertical;
     }
     .local-sol-editor-input:focus { outline: 2px solid var(--primary); }
-    .local-sol-editor-refs { display: flex; flex-direction: column; gap: 6px; max-height: 20vh; overflow-y: auto; padding: 10px 12px; background: var(--surface-hover); border-radius: var(--radius-sm); }
-    .local-sol-editor-ref-item { font-size: 13px; line-height: 1.6; color: var(--muted); }
     .local-sol-editor-error { padding: 10px 14px; background: #fef2f2; border: 1px solid #fca5a5; border-radius: 8px; color: #b91c1c; font-size: 14px; }
     .local-sol-editor-hint { font-size: 12px; color: var(--muted); }
     .local-sol-editor-actions { display: flex; gap: 8px; }
@@ -1116,12 +1114,6 @@
         <textarea id="local-sol-input" class="local-sol-editor-input" rows="4" v-model="localEdit.local_solution" placeholder="實際在現場怎麼處理這個警報"></textarea>
         <label class="local-sol-editor-label" for="local-reason-input">為什麼不同（選填）</label>
         <textarea id="local-reason-input" class="local-sol-editor-input" rows="3" v-model="localEdit.local_reason" placeholder="與原廠建議不同的原因"></textarea>
-        <div v-if="localEdit.references.length" class="local-sol-editor-refs">
-          <div class="local-sol-editor-label">同機種其他警報的現場方案（參考）</div>
-          <div class="local-sol-editor-ref-item" v-for="r in localEdit.references" :key="r.code">
-            <strong>{{ r.code }}</strong>：{{ r.local_solution }}
-          </div>
-        </div>
         <div v-if="localEdit.mode !== 'admin'" class="local-sol-editor-hint">送出後會進入待審核清單，管理員確認後才會生效。</div>
         <div v-if="localEdit.error" class="local-sol-editor-error">{{ localEdit.error }}</div>
         <div class="local-sol-editor-actions">
@@ -1154,7 +1146,6 @@
             show: false, saving: false, error: '', mode: 'admin',
             department: '', device_model: '', code: '', description: '',
             vendorSolution: '', local_solution: '', local_reason: '',
-            references: [],
           },
           // camera
           camState: 'live', // 'live' | 'model-select' | 'analyzing' | 'confirm' | 'results' | 'no-alarm'
@@ -1253,7 +1244,7 @@
           const s = a.sol_steps;
           return s && (s.check || s.parts || s.reset || s.safety);
         },
-        async openLocalSolutionEditor() {
+        openLocalSolutionEditor() {
           const a = this.selected;
           if (!a) return;
           this.localEdit.show = true;
@@ -1269,17 +1260,6 @@
           // 改別人已生效的內容——使用者提的是新建議，不是編輯既有現場方案。
           this.localEdit.local_solution = this.localEdit.mode === 'admin' ? (a.local_solution || '') : '';
           this.localEdit.local_reason = this.localEdit.mode === 'admin' ? (a.local_reason || '') : '';
-          this.localEdit.references = [];
-          try {
-            const res = await AlarmApi.get(`/api/alarms?device=${encodeURIComponent(a.device_model)}`);
-            if (res.ok) {
-              const all = await res.json();
-              this.localEdit.references = all
-                .filter(x => x.code !== a.code && x.local_solution)
-                .slice(0, 5)
-                .map(x => ({ code: x.code, local_solution: x.local_solution }));
-            }
-          } catch {}
         },
         closeLocalSolutionEditor() {
           if (this.localEdit.saving) return;
