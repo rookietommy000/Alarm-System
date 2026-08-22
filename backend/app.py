@@ -35,6 +35,13 @@ SEVERITIES = {"嚴重", "警告", "資訊"}
 
 SUPER_DEPT_SENTINEL = "__super__"
 DEPT_ID_RE = re.compile(r"^[a-z0-9_]{1,32}$")
+
+# 跨部門存取／部門不存在／無權存取，三種情況一律用這同一句話，刻意不區分
+# （不透露「部門存在但你無權存取」與「部門根本不存在」的差異）。跟 Werkzeug
+# 路由層 404 的預設英文訊息不同，讓使用者截圖裡的錯誤訊息能區分「URL 結構
+# 沒對上任何路由規則」還是「部門解析失敗」——這不是放寬安全設計，訊息內容
+# 在四處都完全相同，只是把原本由 Werkzeug 決定的措辭換成我們自己控制的字串。
+NOT_FOUND_MSG = "找不到指定資源"
 _DUMMY_HASH = generate_password_hash("__never_matches__", method="pbkdf2:sha256")
 
 _TS_FRAC_RE = re.compile(r"(\.\d+)")
@@ -220,7 +227,7 @@ def create_app() -> Flask:
             # 超管的 ?dept= 打錯字時，過去會安靜回空清單（外部審查發現）。
             # 加一次存在性驗證，不存在就 404，跟一般帳號越權時的行為一致。
             if _use_supabase() and _dept_cached(viewing) is None:
-                abort(404)
+                abort(404, NOT_FOUND_MSG)
             return (DeptScope.DEPT, viewing)
         dept = session.get("department")
         if not dept:
@@ -235,13 +242,13 @@ def create_app() -> Flask:
             # （ai_scans/feedback）安靜寫入孤兒列（外部審查發現）。加一次
             # 存在性驗證，不存在就 404。
             if _use_supabase() and _dept_cached(path_department) is None:
-                abort(404)
+                abort(404, NOT_FOUND_MSG)
             return path_department  # 超管：path 段就是明確指定的目標，直接採用
         dept = session.get("department")
         if not dept:
             abort(401, "登入狀態異常，請重新登入")
         if path_department != dept:
-            abort(404)  # 不透露「這個部門存在但你無權寫入」，一律裝作路徑不存在
+            abort(404, NOT_FOUND_MSG)  # 不透露「這個部門存在但你無權寫入」，一律裝作路徑不存在
         return dept
 
     def _check_body_department_conflict(body: dict, path_department: str) -> None:
@@ -755,7 +762,7 @@ def create_app() -> Flask:
             abort(404, "找不到此建議")
         scope, dept = scope_department()
         if scope == DeptScope.DEPT and row["department"] != dept:
-            abort(404)  # 不透露其他部門的建議存在（同三段式路由 404 而非 403 的一貫做法）
+            abort(404, NOT_FOUND_MSG)  # 不透露其他部門的建議存在（同三段式路由 404 而非 403 的一貫做法）
         if row["status"] != "pending":
             abort(409, "這筆建議已經審核過了")
         body = request.get_json(silent=True) or {}
