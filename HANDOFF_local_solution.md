@@ -101,40 +101,35 @@ cd backend && ../.venv/bin/pytest ../tests/ -q   # 84 項應該全過
 
 ---
 
-## 待辦逐項核對結果
+## 待辦逐項核對結果（含第二輪跟進，全部處理完畢）
 
 | 編號 | 項目 | 狀態 | 備註 |
 |---|---|---|---|
-| 4.1 | 前台 `department` 取得收成單一入口 | 🟡 部分完成 | 兩個踩雷點都已修（各自加了 fallback），但沒有收成建議的單一 `_deptPath()` helper，也沒有「取不到就明確報錯中止」的防呆。第三處出現前建議補上 |
-| 4.2 | 四處 `abort(404)` 統一 `NOT_FOUND_MSG` | ✅ 完成 | 四處都已改。**額外發現**：`department_impact()`（超管專用部門管理端點）也有一處 `abort(404, "部門不存在")`，但語意相反（那裡故意要明確告知部門不存在），不屬於這次範圍，不用動 |
-| 4.3 | `conftest.py` 收斂測試 fixture | ✅ 完成 | `client`/`anon_client` 已建立，既有測試檔案的本地 fixture 照建議暫未刪除 |
-| 4.4 | 孤兒檔案刪除（`admin.html`/`portal.html`） | ✅ 完成 | 兩個都已刪除，`test_no_orphan_frontend_html.py` 已存在 |
-| 4.5 | `create_alarm`/`update_alarm` 的死檢查 | ⬜ **未完成，待修** | 確認死碼成立：`normalize()` 濾掉 `department` 後才呼叫 `_check_body_department_conflict`，永遠不會觸發。**`create_device`/`update_device` 兩處是有效的**（用未過濾的原始 body），不要誤改。只需要調整 `create_alarm`/`update_alarm` 這兩處，在 `normalize()` 之前用原始 body 檢查 |
-| 4.6 | `GET /api/server-url` 公開回傳內網 IP | ⬜ **未完成，待修** | 仍是 `@public_endpoint`，仍會在沒有 `RENDER_EXTERNAL_URL`/`PUBLIC_URL` 時 fallback 到 LAN IP |
-| 4.7 | 靜態路徑保護殘留檢查 | ✅ 完成 | `before_request` 已上線並實測；`frontend/` 目錄確認只有 `.DS_Store`（已 gitignore、未被追蹤，非風險），沒有備份檔或洩漏資料 |
-| 4.8 | `docs/index.html` 死連結 | 🟡 已處理，但走了不同方案 | 文件建議「傾向關掉 Pages」，實際做的是「改連結」（`alarm-system-j9dl` → `alarm-system-1`）。目前連結有效，非阻塞，但跟原始建議方向不同，如果之後要重新考慮「乾脆關掉 Pages」，這是背景 |
+| 4.1 | 前台 `department` 取得收成單一入口 | ✅ 完成 | 收成 `frontend/index.html` 的 `deptOf(a)` helper，`toggleLocalHistory`/`openLocalSolutionEditor` 都改用它。取不到部門時 `openLocalSolutionEditor` 會 `alert` 並中止，不再靜默塞入無效值 |
+| 4.2 | 四處 `abort(404)` 統一 `NOT_FOUND_MSG` | ✅ 完成 | 四處都已改。`department_impact()`（超管專用）語意相反，故意不動 |
+| 4.3 | `conftest.py` 收斂測試 fixture | ✅ 完成 | |
+| 4.4 | 孤兒檔案刪除（`admin.html`/`portal.html`） | ✅ 完成 | |
+| 4.5 | `create_alarm`/`update_alarm` 的死檢查 | ✅ 完成 | 改成用 `raw_body`（`normalize()` 之前）呼叫 `_check_body_department_conflict`，死碼重新生效。`create_device`/`update_device` 本來就是對的，沒動。新增 `tests/test_body_department_conflict.py`（3 項）驗證檢查真的觸發 |
+| 4.6 | `GET /api/server-url` 公開回傳內網 IP | ✅ 完成 | `render.yaml` 的 `healthCheckPath` 指向這裡，**不能加 `login_required`**。改成 production 環境（`is_production` 為真）若漏設 `RENDER_EXTERNAL_URL`/`PUBLIC_URL` 就回 500，不再 fallback 到內網 IP；本機開發模式行為不變。已確認正式環境目前設定正確，這條防線平常不會觸發，只在漏設時才生效。新增 `tests/test_server_url_production_guard.py`（2 項） |
+| 4.7 | 靜態路徑保護殘留檢查 | ✅ 完成 | |
+| 4.8 | `docs/index.html` 死連結 | ✅ 完成 | 維持「改連結」而非「關閉 Pages」的方案，但加了 HTML 註解說明這行連結指向正式環境、換網址時要回來同步更新——防止同樣的事再脫節一次 |
 
-**這次沒有處理，下次接手可以直接做的兩項（都不大）**：4.5（死碼修正）、4.6（內網 IP 洩漏）。
+**全部八項待辦都已處理完畢。**
 
-## 第五節環境約束 —— ⬜ 未加進 `CLAUDE.md`
+## 三份 `variant` 動工前置確認（已做）
 
-建議的六條約束目前都還沒寫進 `CLAUDE.md`。且順帶發現 `CLAUDE.md` 現有內容裡還提到「`frontend/index.html` 與 `admin.html`」——`admin.html` 已經刪除，這句話本身就過期了，一併更新會比較好：
+- `alarm_suggestions` **曾經不是空表**——查出一筆先前端到端測試留下的殘留資料（`zztest`/`ACM001`/`0001`，`status: accepted`），已清除，現在確認真的是空表（`Content-Range: */0`）。**這是規劃一（`variant`）DDL 階段 3 假設外鍵可安全 drop/recreate 的前提，動工前務必再查一次**，因為誰知道之間又累積了什麼
+- `local_solution` 四個欄位已在 `alarms` 上，不影響 `variant` 的主鍵 DDL；但 `_row_to_alarm()` 的欄位白名單屆時要記得同時加 `variant`
 
-```markdown
-- 所有 department 參數必填無預設值（漏傳要 TypeError，不可靜默不過濾）
-- 新增 /api/* 路由必須同步更新 ROUTE_AUTH_REGISTRY，鍵為 (rule, method)
-- alarms.solution 為原廠欄位，任何路徑都不得覆寫；現場做法寫 local_solution
-- 寫入端點的目標部門只從 URL path 取，不讀 request.args、不讀 body
-- 例外分支不得回傳看似合理的預設值（回 0/[]/None 會造成靜默失敗）
-- 隔離只能用 sentinel_pack/verify_isolation.sh 對真實 Supabase 驗證，
-  pytest 環境測不到（JsonStore 單租戶）
-```
+## `CLAUDE.md` 已更新
+
+第五節六條約束已加入（新章節「多部門相關的硬約束」），並補了 `deptOf(a)` helper 的提醒。同時修正了三處過期內容：`/admin` 路由改指向 `dashboard.html` 而非 `admin.html`、`client` fixture 收斂進 `conftest.py` 的說明、`static_url_path=""` 的風險與 `before_request` 保護機制。
 
 ## 建議的下一步順序
 
-1. **規劃二已經做完**，不用再碰
-2. 兩個小待辦（4.5、4.6）隨時可以順手修，各自獨立、風險低
-3. 4.1 的架構收斂（`_deptPath()` helper）不急，但下次要加任何新的部門相關前端功能時，先做這個會省事
-4. 把第五節六條約束補進 `CLAUDE.md`（連帶修正過期的 `admin.html` 提及）
-5. **規劃一（`variant`）是下一個大工程**，規劃三（批次匯入）卡在它後面，兩者都還沒開始
+1. **規劃二（審核路徑停用）已經做完**，不用再碰
+2. **待辦四項全部處理完畢**，不用再碰
+3. `variant` 動工前置確認（`alarm_suggestions` 空表）已做完，可以直接照 `PLAN_variant`（第一份規劃）的八個階段開工
+4. **規劃一（`variant`）是下一個大工程**，規劃三（批次匯入）卡在它後面，兩者都還沒開始
+5. 階段 6（缺處置清單）跟 `variant`/批次匯入是三條獨立的線，看要先做哪個都可以
 6. 階段 6（缺處置清單）跟 `variant`/批次匯入是三條獨立的線，看要先做哪個都可以

@@ -1270,13 +1270,13 @@
           if (this.showLocalHistory) { this.showLocalHistory = false; return; }
           this.showLocalHistory = true;
           if (this.localHistory.length || !this.selected) return;
+          const dept = this.deptOf(this.selected);
+          if (!dept) {
+            this.localHistory = [];
+            return;
+          }
           this.loadingLocalHistory = true;
           try {
-            // 用 selected.department（這筆資料實際所在的部門），不是
-            // whoami.department——超管的 whoami.department 是 null，
-            // encodeURIComponent(null) 會變成字面字串 "null"，組出
-            // /api/alarms/null/... 這種無效路徑，後端 404。
-            const dept = this.selected.department || this.whoami.department;
             const url = `/api/alarms/${encodeURIComponent(dept)}/${encodeURIComponent(this.selected.device_model)}/${encodeURIComponent(this.selected.code)}/history`;
             const res = await AlarmApi.get(url);
             this.localHistory = res.ok ? await res.json() : [];
@@ -1285,6 +1285,16 @@
           } finally {
             this.loadingLocalHistory = false;
           }
+        },
+        // 前台所有需要 department 組 URL 的地方都走這裡，不要各自 fallback。
+        // 超管的 whoami.department 是 null；a（selected/localEdit 對應的
+        // 那筆資料）帶的 department 是資料本身真正的歸屬，優先使用。
+        // 兩者都拿不到時回傳 null——呼叫端必須自己判斷並中止，不能把
+        // null/undefined 塞進 URL 字串繼續跑（那會變成看似合理但其實
+        // 無效的路徑，"null" 字面字串或空字串塌陷，兩種都很難從畫面上
+        // 看出成因，這正是本輪修過兩次的同一個坑）。
+        deptOf(a) {
+          return (a && a.department) || this.whoami.department || null;
         },
         isHot(a) {
           return !!this.viewStats[a.device_model + '|' + a.code];
@@ -1296,14 +1306,15 @@
         openLocalSolutionEditor() {
           const a = this.selected;
           if (!a) return;
+          const dept = this.deptOf(a);
+          if (!dept) {
+            alert('無法判斷所屬部門，請重新登入後再試');
+            return;
+          }
           this.localEdit.show = true;
           this.localEdit.saving = false;
           this.localEdit.error = '';
-          // a.department（這筆警報資料本身的部門）優先於 whoami.department——
-          // 超管的 whoami.department 是 null，會讓這裡組出 /api/alarms//...
-          // 這種塌陷路徑，Werkzeug 路由層直接 404（同 toggleLocalHistory 的
-          // null 部門問題，但這裡連 fallback 都沒有，是更早、更根本的來源）。
-          this.localEdit.department = a.department || this.whoami.department || '';
+          this.localEdit.department = dept;
           this.localEdit.device_model = a.device_model;
           this.localEdit.code = a.code;
           this.localEdit.description = a.description || '';

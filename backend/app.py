@@ -570,9 +570,21 @@ def create_app() -> Flask:
     @app.get("/api/server-url")
     @public_endpoint
     def server_url():
+        """Render 的 healthCheckPath 指向這裡（render.yaml），不能加
+        login_required——健康檢查請求不會帶 session，加了會讓 Render
+        誤判服務不健康。
+
+        本機/內網開發時回內網 IP 是刻意功能（方便同網段的平板/手機
+        連線測試，不用手動查 IP）。但這個 fallback 不該在正式環境
+        觸發——即使漏設 RENDER_EXTERNAL_URL/PUBLIC_URL，只要偵測到
+        production 環境就不该把內網 IP 回給任何未驗證的呼叫端（外部
+        審查發現：這個端點是 public，正式環境若忘記設定這兩個變數，
+        會把內網拓樸資訊洩漏給任何人）。"""
         public = os.environ.get("RENDER_EXTERNAL_URL") or os.environ.get("PUBLIC_URL")
         if public:
             return jsonify({"url": public.rstrip("/") + "/"})
+        if is_production:
+            abort(500, "PUBLIC_URL 或 RENDER_EXTERNAL_URL 未設定")
         host = request.host or ""
         port = host.split(":", 1)[1] if ":" in host else "5001"
         return jsonify({"url": f"http://{_lan_ip()}:{port}/"})
@@ -583,8 +595,11 @@ def create_app() -> Flask:
     @admin_required
     def create_alarm(department: str):
         target = resolve_target_department(department)
-        body = normalize(request.get_json(silent=True) or {})
-        _check_body_department_conflict(body, target)
+        raw_body = request.get_json(silent=True) or {}
+        _check_body_department_conflict(raw_body, target)  # 必須用原始 body——
+        # normalize() 只保留 ALARM_FIELDS 白名單，不含 department，過濾後
+        # 這個檢查永遠不會觸發（外部審查發現的死碼）。
+        body = normalize(raw_body)
         items = alarms_store.load(department=target)
         if any(a["code"] == body["code"] and a.get("device_model") == body.get("device_model") for a in items):
             abort(409, "代碼已存在")
@@ -596,8 +611,9 @@ def create_app() -> Flask:
     @admin_required
     def update_alarm(department: str, device_model: str, code: str):
         target = resolve_target_department(department)
-        body = normalize(request.get_json(silent=True) or {}, require_code=False)
-        _check_body_department_conflict(body, target)
+        raw_body = request.get_json(silent=True) or {}
+        _check_body_department_conflict(raw_body, target)  # 見 create_alarm 同樣的說明
+        body = normalize(raw_body, require_code=False)
         body["code"] = code
         body["device_model"] = device_model
         items = alarms_store.load(department=target)
