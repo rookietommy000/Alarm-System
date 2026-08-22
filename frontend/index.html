@@ -1272,7 +1272,12 @@
           if (this.localHistory.length || !this.selected) return;
           this.loadingLocalHistory = true;
           try {
-            const url = `/api/alarms/${encodeURIComponent(this.whoami.department)}/${encodeURIComponent(this.selected.device_model)}/${encodeURIComponent(this.selected.code)}/history`;
+            // 用 selected.department（這筆資料實際所在的部門），不是
+            // whoami.department——超管的 whoami.department 是 null，
+            // encodeURIComponent(null) 會變成字面字串 "null"，組出
+            // /api/alarms/null/... 這種無效路徑，後端 404。
+            const dept = this.selected.department || this.whoami.department;
+            const url = `/api/alarms/${encodeURIComponent(dept)}/${encodeURIComponent(this.selected.device_model)}/${encodeURIComponent(this.selected.code)}/history`;
             const res = await AlarmApi.get(url);
             this.localHistory = res.ok ? await res.json() : [];
           } catch {
