@@ -50,10 +50,10 @@
 ## 跑測試 / 部署
 
 ```bash
-cd backend && ../.venv/bin/pytest ../tests/ -q   # 84 項應該全過
+cd backend && ../.venv/bin/pytest ../tests/ -q   # 89 項應該全過
 ```
 
-`tests/conftest.py` 提供共用的 `client`/`anon_client` fixture。改動任何跟登入、部門解析、靜態檔案存取有關的東西，記得看 `test_route_auth_registry.py`、`test_no_orphan_frontend_html.py`、`test_static_html_blocked.py`、`test_department_404_messages.py` 這幾支有沒有要跟著更新。
+`tests/conftest.py` 提供共用的 `client`/`anon_client` fixture。改動任何跟登入、部門解析、靜態檔案存取有關的東西，記得看 `test_route_auth_registry.py`、`test_no_orphan_frontend_html.py`、`test_static_html_blocked.py`、`test_department_404_messages.py`、`test_body_department_conflict.py`、`test_server_url_production_guard.py` 這幾支有沒有要跟著更新。
 
 部署是 push 到 `main` 就自動上 Render（`alarm-system-1.onrender.com`）。**不要相信第一次 curl 驗證的結果**——Render 部署切換有幾秒到幾十秒的過渡期，舊版本會短暫殘留，寫個等待迴圈或多等一下再驗證，不要一次 200/404 就下結論（這輪至少踩過一次）。
 
@@ -132,4 +132,3 @@ cd backend && ../.venv/bin/pytest ../tests/ -q   # 84 項應該全過
 3. `variant` 動工前置確認（`alarm_suggestions` 空表）已做完，可以直接照 `PLAN_variant`（第一份規劃）的八個階段開工
 4. **規劃一（`variant`）是下一個大工程**，規劃三（批次匯入）卡在它後面，兩者都還沒開始
 5. 階段 6（缺處置清單）跟 `variant`/批次匯入是三條獨立的線，看要先做哪個都可以
-6. 階段 6（缺處置清單）跟 `variant`/批次匯入是三條獨立的線，看要先做哪個都可以
