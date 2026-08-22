@@ -26,11 +26,13 @@ ROUTE_AUTH_REGISTRY = {
     ("/api/alarms/<department>/<device_model>/<code>", "PUT"): "admin",
     ("/api/alarms/<department>/<device_model>/<code>", "DELETE"): "admin",
 
-    # 現場處置做法（PLAN_local_solution.md）
-    ("/api/alarms/<department>/<device_model>/<code>/local", "PUT"): "admin",
+    # 現場處置做法（PLAN_local_solution.md）——審核路徑停用決策後，
+    # local 端點改為任何登入者皆可編輯，不再限管理員
+    ("/api/alarms/<department>/<device_model>/<code>/local", "PUT"): "login",
     ("/api/alarms/<department>/<device_model>/<code>/suggestions", "POST"): "login",
     ("/api/admin/suggestions", "GET"): "admin",
     ("/api/admin/suggestions/<int:suggestion_id>", "PUT"): "admin",
+    ("/api/alarms/<department>/<device_model>/<code>/history", "GET"): "login",
 
     ("/api/devices", "GET"): "login",
     ("/api/devices/<department>", "POST"): "admin",

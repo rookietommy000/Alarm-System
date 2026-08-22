@@ -678,6 +678,14 @@
       font-size: 12px; font-weight: 700; cursor: pointer; padding: 4px 0; font-family: inherit;
     }
     .local-sol-edit-btn:hover { color: var(--primary-hover); }
+    .local-sol-meta { margin-top: 6px; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .local-sol-meta-link { background: none; border: none; color: var(--primary); font-size: 12px; cursor: pointer; padding: 0; font-family: inherit; text-decoration: underline; }
+    .local-history { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; max-height: 30vh; overflow-y: auto; padding: 10px 12px; background: var(--surface-hover); border-radius: var(--radius-sm); }
+    .local-history-loading, .local-history-empty { font-size: 12px; color: var(--muted); }
+    .local-history-item { font-size: 13px; line-height: 1.5; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+    .local-history-item:last-child { border-bottom: none; padding-bottom: 0; }
+    .local-history-meta { font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+    .local-history-body { white-space: pre-wrap; }
 
     /* Placeholder */
     .page-placeholder {
@@ -1063,26 +1071,39 @@
                 <div class="local-sol-body">{{ selected.local_solution }}</div>
                 <div v-if="selected.local_reason" class="local-sol-reason">為什麼不同：{{ selected.local_reason }}</div>
               </div>
+              <div v-if="selected.local_updated_by" class="local-sol-meta">
+                {{ selected.local_updated_by }} · {{ fmtLocalTime(selected.local_updated_at) }}
+                <button class="local-sol-meta-link" @click="toggleLocalHistory">檢視變更紀錄</button>
+              </div>
               <button v-if="selected.solution" class="old-sol-toggle" @click="showOldSolution = !showOldSolution">
                 {{ showOldSolution ? '▲ 收起原廠建議做法' : '▼ 原廠建議做法' }}
               </button>
               <div v-if="showOldSolution && selected.solution" class="old-sol-body">{{ selected.solution }}</div>
-              <button v-if="whoami.admin" class="local-sol-edit-btn" @click="openLocalSolutionEditor">✏️ 編輯</button>
-              <button v-else-if="whoami.auth" class="local-sol-edit-btn" @click="openLocalSolutionEditor">💡 提出建議</button>
+              <div v-if="showLocalHistory" class="local-history">
+                <div v-if="loadingLocalHistory" class="local-history-loading">載入中…</div>
+                <template v-else>
+                  <div v-if="!localHistory.length" class="local-history-empty">尚無紀錄</div>
+                  <div v-for="h in localHistory" :key="h.changed_at" class="local-history-item">
+                    <div class="local-history-meta">{{ fmtLocalTime(h.changed_at) }}　{{ (h.new_data || {}).local_updated_by }}</div>
+                    <div class="local-history-body">{{ (h.new_data || {}).local_solution || '（清空）' }}</div>
+                  </div>
+                </template>
+              </div>
+              <button v-if="whoami.auth" class="local-sol-edit-btn" @click="openLocalSolutionEditor">✏️ 編輯</button>
             </dd>
           </template>
           <template v-else-if="selected.solution">
             <dt>解決方案</dt>
             <dd>
               {{ selected.solution }}
-              <button v-if="whoami.admin || whoami.auth" class="local-sol-edit-btn" @click="openLocalSolutionEditor">💡 補充現場方案</button>
+              <button v-if="whoami.auth" class="local-sol-edit-btn" @click="openLocalSolutionEditor">💡 補充現場方案</button>
             </dd>
           </template>
           <template v-else>
             <dt>解決方案</dt>
             <dd>
               <span class="no-solution-hint">這筆還沒有處置方式</span>
-              <button v-if="whoami.admin || whoami.auth" class="local-sol-edit-btn" @click="openLocalSolutionEditor">💡 補充現場方案</button>
+              <button v-if="whoami.auth" class="local-sol-edit-btn" @click="openLocalSolutionEditor">💡 補充現場方案</button>
             </dd>
           </template>
           <dt>關鍵字</dt><dd>{{ (selected.keywords || []).join('、') || '—' }}</dd>
@@ -1104,21 +1125,20 @@
 
     <div v-if="localEdit.show" class="model-picker-backdrop" @click.self="closeLocalSolutionEditor">
       <div class="model-picker local-sol-editor">
-        <div class="model-picker-title">{{ localEdit.mode === 'admin' ? '編輯現場方案' : '提出現場方案建議' }}</div>
+        <div class="model-picker-title">編輯現場方案</div>
         <div class="model-picker-sub">{{ localEdit.device_model }} · {{ localEdit.code }} · {{ localEdit.description }}</div>
         <div v-if="localEdit.vendorSolution" class="local-sol-editor-vendor">
           <div class="local-sol-editor-label">原廠建議</div>
           <div class="local-sol-editor-vendor-body">{{ localEdit.vendorSolution }}</div>
         </div>
-        <label class="local-sol-editor-label" for="local-sol-input">{{ localEdit.mode === 'admin' ? '現場方案' : '建議內容' }}</label>
+        <label class="local-sol-editor-label" for="local-sol-input">現場方案</label>
         <textarea id="local-sol-input" class="local-sol-editor-input" rows="4" v-model="localEdit.local_solution" placeholder="實際在現場怎麼處理這個警報"></textarea>
         <label class="local-sol-editor-label" for="local-reason-input">為什麼不同（選填）</label>
         <textarea id="local-reason-input" class="local-sol-editor-input" rows="3" v-model="localEdit.local_reason" placeholder="與原廠建議不同的原因"></textarea>
-        <div v-if="localEdit.mode !== 'admin'" class="local-sol-editor-hint">送出後會進入待審核清單，管理員確認後才會生效。</div>
         <div v-if="localEdit.error" class="local-sol-editor-error">{{ localEdit.error }}</div>
         <div class="local-sol-editor-actions">
           <button class="model-picker-cancel" @click="closeLocalSolutionEditor" :disabled="localEdit.saving">取消</button>
-          <button class="local-sol-editor-save" @click="saveLocalSolution" :disabled="localEdit.saving">{{ localEdit.saving ? '送出中…' : (localEdit.mode === 'admin' ? '儲存' : '送出建議') }}</button>
+          <button class="local-sol-editor-save" @click="saveLocalSolution" :disabled="localEdit.saving">{{ localEdit.saving ? '儲存中…' : '儲存' }}</button>
         </div>
       </div>
     </div>
@@ -1141,9 +1161,10 @@
           feedbackStats: {},
           viewStats: {},
           showOldSolution: false,
+          showLocalHistory: false, loadingLocalHistory: false, localHistory: [],
           modelPicker: { show: false, code: '', candidates: [] },
           localEdit: {
-            show: false, saving: false, error: '', mode: 'admin',
+            show: false, saving: false, error: '',
             department: '', device_model: '', code: '', description: '',
             vendorSolution: '', local_solution: '', local_reason: '',
           },
@@ -1232,10 +1253,33 @@
           this.selected = a;
           this.feedbackSent = false;
           this.showOldSolution = false;
+          this.showLocalHistory = false;
+          this.localHistory = [];
           try {
             await AlarmApi.post('/api/view', { code: a.code, device_model: a.device_model });
             this.refreshViewStats();
           } catch {}
+        },
+        fmtLocalTime(iso) {
+          if (!iso) return '—';
+          const d = new Date(iso);
+          if (isNaN(d)) return '—';
+          return `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+        },
+        async toggleLocalHistory() {
+          if (this.showLocalHistory) { this.showLocalHistory = false; return; }
+          this.showLocalHistory = true;
+          if (this.localHistory.length || !this.selected) return;
+          this.loadingLocalHistory = true;
+          try {
+            const url = `/api/alarms/${encodeURIComponent(this.whoami.department)}/${encodeURIComponent(this.selected.device_model)}/${encodeURIComponent(this.selected.code)}/history`;
+            const res = await AlarmApi.get(url);
+            this.localHistory = res.ok ? await res.json() : [];
+          } catch {
+            this.localHistory = [];
+          } finally {
+            this.loadingLocalHistory = false;
+          }
         },
         isHot(a) {
           return !!this.viewStats[a.device_model + '|' + a.code];
@@ -1250,16 +1294,13 @@
           this.localEdit.show = true;
           this.localEdit.saving = false;
           this.localEdit.error = '';
-          this.localEdit.mode = this.whoami.admin ? 'admin' : 'suggest';
           this.localEdit.department = this.whoami.department || '';
           this.localEdit.device_model = a.device_model;
           this.localEdit.code = a.code;
           this.localEdit.description = a.description || '';
           this.localEdit.vendorSolution = a.solution || '';
-          // 管理員模式預填目前值可直接修改；建議模式留白，避免看起來像在
-          // 改別人已生效的內容——使用者提的是新建議，不是編輯既有現場方案。
-          this.localEdit.local_solution = this.localEdit.mode === 'admin' ? (a.local_solution || '') : '';
-          this.localEdit.local_reason = this.localEdit.mode === 'admin' ? (a.local_reason || '') : '';
+          this.localEdit.local_solution = a.local_solution || '';
+          this.localEdit.local_reason = a.local_reason || '';
         },
         closeLocalSolutionEditor() {
           if (this.localEdit.saving) return;
@@ -1268,36 +1309,27 @@
         async saveLocalSolution() {
           const e = this.localEdit;
           if (!e.local_solution || !e.local_solution.trim()) {
-            e.error = e.mode === 'admin' ? '請填寫現場方案' : '請填寫建議內容';
+            e.error = '請填寫現場方案';
             return;
           }
           e.saving = true;
           e.error = '';
           try {
-            let res;
-            if (e.mode === 'admin') {
-              const url = `/api/alarms/${encodeURIComponent(e.department)}/${encodeURIComponent(e.device_model)}/${encodeURIComponent(e.code)}/local`;
-              res = await AlarmApi.put(url, {
-                local_solution: e.local_solution.trim(),
-                local_reason: e.local_reason ? e.local_reason.trim() : '',
-              });
-            } else {
-              const url = `/api/alarms/${encodeURIComponent(e.department)}/${encodeURIComponent(e.device_model)}/${encodeURIComponent(e.code)}/suggestions`;
-              res = await AlarmApi.post(url, {
-                suggestion: e.local_solution.trim(),
-                reason: e.local_reason ? e.local_reason.trim() : '',
-              });
-            }
+            const url = `/api/alarms/${encodeURIComponent(e.department)}/${encodeURIComponent(e.device_model)}/${encodeURIComponent(e.code)}/local`;
+            const res = await AlarmApi.put(url, {
+              local_solution: e.local_solution.trim(),
+              local_reason: e.local_reason ? e.local_reason.trim() : '',
+            });
             if (!res.ok) {
               const body = await res.json().catch(() => ({}));
-              e.error = body.error || (e.mode === 'admin' ? '儲存失敗，請稍後再試' : '送出失敗，請稍後再試');
+              e.error = body.error || '儲存失敗，請稍後再試';
               e.saving = false;
               return;
             }
-            if (e.mode === 'admin') {
-              const updated = await res.json();
-              this.selected = updated;
-            }
+            const updated = await res.json();
+            this.selected = updated;
+            this.showLocalHistory = false;
+            this.localHistory = [];
             e.show = false;
             e.saving = false;
           } catch {

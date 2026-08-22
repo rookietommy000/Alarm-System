@@ -543,6 +543,18 @@ class AuditLogger:
             return self._load_supabase(limit, department)
         return self._load_json(limit)
 
+    def list_for_alarm(self, department: str, device_model: str, code: str,
+                        operation: str, limit: int) -> list:
+        """單筆警報的變更紀錄，department 為必填（PLAN 3.6 節：跨部門查詢
+        一律要求呼叫端主動決定範圍，不提供「不過濾」的隱式預設）。
+
+        只回傳指定 operation（現場處置做法場景下固定傳 local_update）——
+        一般使用者不需要看到批次匯入、機種變更這類技術性軌跡，那些留在
+        後台的 /api/audit（PLAN_local_solution.md 3.2 節）。"""
+        if not _use_supabase():
+            return []
+        return self._load_supabase_for_alarm(department, device_model, code, operation, limit)
+
     # ── JSON backend ────────────────────────────────────────────────
 
     def _log_json(self, entry: dict) -> None:
@@ -597,6 +609,35 @@ class AuditLogger:
             qs = f"select=*&order=changed_at.desc&limit={limit}"
             if department is not None:
                 qs += f"&department=eq.{urllib.parse.quote(department, safe='')}"
+            req = urllib.request.Request(
+                f"{base}/rest/v1/alarm_history?{qs}",
+                headers={"apikey": key, "Authorization": f"Bearer {key}"},
+                method="GET",
+            )
+            with urllib.request.urlopen(req) as r:
+                return json.loads(r.read().decode())
+        except Exception:
+            return []
+
+    def _load_supabase_for_alarm(self, department: str, device_model: str, code: str,
+                                  operation: str, limit: int) -> list:
+        """alarm_history 沒有獨立的 device_model 欄位（只有 code/department/
+        operation 是一般欄位），device_model 存在 new_data/old_data 這兩個
+        JSON 欄位裡。用 PostgREST 的 JSON 路徑運算子 ->> 過濾
+        new_data->>device_model（local_update 這個 operation 只改
+        local_solution/local_reason，不會改 device_model，用 new_data
+        過濾足夠，不需要同時比對 old_data）。"""
+        try:
+            base = os.environ.get("SUPABASE_URL", "").rstrip("/")
+            key = os.environ.get("SUPABASE_KEY", "")
+            qs = (
+                "select=*"
+                f"&department=eq.{urllib.parse.quote(department, safe='')}"
+                f"&code=eq.{urllib.parse.quote(code, safe='')}"
+                f"&operation=eq.{urllib.parse.quote(operation, safe='')}"
+                f"&new_data->>device_model=eq.{urllib.parse.quote(device_model, safe='')}"
+                f"&order=changed_at.desc&limit={limit}"
+            )
             req = urllib.request.Request(
                 f"{base}/rest/v1/alarm_history?{qs}",
                 headers={"apikey": key, "Authorization": f"Bearer {key}"},
@@ -849,6 +890,12 @@ class AlarmSuggestionStore:
     管理員依部門審核），JsonStore 環境測不到跨部門隔離，這裡不假裝
     支援，比照 AiScanStore/LoginAttemptStore 的既有模式：
     _use_supabase()=False 時讀回空清單、寫入 no-op。
+
+    目前無前端呼叫端。審核路徑已停用：部門共用密碼、無個人帳號，提交者
+    與審核者無法區分，審核在此模型下摩擦為真、把關為假（PLAN_local_
+    solution.md 審核路徑停用決策記錄）。已對正式 Supabase 端到端驗證過
+    （提交 → 待審 → 接受 → alarms.local_solution 生效），技術上完好，
+    保留供個人帳號功能完成後重新評估啟用，不刪除。
     """
 
     _TABLE = "alarm_suggestions"

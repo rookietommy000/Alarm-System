@@ -87,6 +87,28 @@ def create_app() -> Flask:
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
     CORS(app)
 
+    # ── 靜態路徑保護 ────────────────────────────────────────────────
+    # static_folder=FRONTEND, static_url_path="" 讓 frontend/ 下所有檔案
+    # 掛在根路徑，Flask 的靜態伺服器完全繞過 @app.route 的裝飾器（含
+    # @admin_required/@login_required）。實測 /dashboard.html 等 HTML
+    # 未登入即可直接讀取。verify_isolation.sh 測不到這件事——它比對的是
+    # API 回應裡有無哨兵標記，HTML 模板本身不含任何資料，永遠不會命中，
+    # 是工具能力邊界問題，不是部門隔離失效。
+    #
+    # 目前風險等級低（純 Vue 模板、無內嵌資料、真正的資料都要走
+    # /api/*，那裡裝飾器仍然生效），但這個架構讓「檔案放進 frontend/
+    # 就會被公開」變成一條沒有記錄在任何地方的規則——本專案已經在這個
+    # 目錄留下過兩個孤兒 HTML（admin.html、portal.html）。
+    #
+    # 不改 static_url_path 本身：那會牽動所有靜態資源的 URL、sw.js 的
+    # STATIC_SHELL 清單、manifest.webmanifest 的 icons 路徑，且讓平板上
+    # 既有的 Service Worker 快取全部失效，風險遠高於這裡要解決的問題。
+    # 改為只擋 .html 直接存取，零遷移成本。
+    @app.before_request
+    def _block_direct_html_access():
+        if request.path.endswith(".html"):
+            abort(404)  # 404 而非 403，不透露檔案是否存在
+
     # ── 4.2 節：啟動時 fail fast ────────────────────────────────────
     is_production = bool(os.environ.get("RENDER_EXTERNAL_URL")) or os.environ.get("FLASK_ENV") == "production"
     if is_production and not _use_supabase():
@@ -596,11 +618,19 @@ def create_app() -> Flask:
     LOCAL_EDITABLE = {"local_solution", "local_reason"}
 
     @app.put("/api/alarms/<department>/<device_model>/<code>/local")
-    @admin_required
+    @login_required
     def update_local_solution(department: str, device_model: str, code: str):
-        """管理員直接編輯現場做法。只接受 local_solution/local_reason，
-        其餘欄位一律忽略——這是防止原廠欄位（solution）被覆寫的最後一道
-        （PLAN_local_solution.md 4.3 節），不能省。department 必須用
+        """任何登入者皆可直接編輯現場做法，不再限管理員（PLAN_local_solution.md
+        審核路徑停用決策記錄）。原本規劃「一般使用者提交建議、管理員審核」，
+        但部門共用密碼、無個人帳號，提交者與審核者無法區分，且
+        alarm_suggestions.submitted_by 記的只是「某個知道密碼的人」，審核者
+        判斷不了建議可不可信——審核在此模型下摩擦為真、把關為假。改為所有
+        登入者直接編輯，以 alarm_history 的 local_update 紀錄與前台的
+        「最後修改」標示作為追溯機制，這不依賴身分模型。
+
+        只接受 local_solution/local_reason，其餘欄位一律忽略——這是防止
+        原廠欄位（solution）被覆寫的最後一道（PLAN_local_solution.md 4.3
+        節），與權限層級無關，不能省。department 必須用
         resolve_target_department() 的目標部門，不能沿用 _confirmed_by()
         （那個服務的是無路徑部門段的端點，語意不同，見 4.4 節）。"""
         target = resolve_target_department(department)
@@ -608,7 +638,7 @@ def create_app() -> Flask:
         patch = {k: v for k, v in body.items() if k in LOCAL_EDITABLE}
         if not patch:
             abort(400, "沒有可更新的欄位")
-        role = "superadmin" if is_superadmin() else "admin"
+        role = "superadmin" if is_superadmin() else ("admin" if is_admin() else "user")
         patch["local_updated_by"] = f"{target}/{role}"
         patch["local_updated_at"] = datetime.now(timezone.utc).isoformat()
         old_row = alarms_store.get_one(department=target, match={"device_model": device_model, "code": code})
@@ -624,6 +654,46 @@ def create_app() -> Flask:
             abort(404, "找不到此警報代碼")
         audit_logger.log("local_update", department=target, new_data=row, old_data=old_row)
         return jsonify(row)
+
+    @app.get("/api/alarms/<department>/<device_model>/<code>/history")
+    @login_required
+    def alarm_local_history(department: str, device_model: str, code: str):
+        """單筆警報的本廠做法變更紀錄。審核路徑停用後，這是追溯機制的
+        核心——歷史紀錄不依賴身分模型，前台詳情卡片的「最後修改」標示與
+        這裡的完整紀錄，取代的是「這筆內容可不可信」的判斷依據（PLAN
+        審核路徑停用決策記錄）。
+
+        只回 operation=local_update 的紀錄——一般使用者不需要看到批次
+        匯入、機種變更這類技術性軌跡，那些留在後台的 /api/audit（維持
+        admin_required 不動，不為了這個功能把整個部門的稽核軌跡開放給
+        一般使用者）。
+
+        唯讀。alarm_history 只有寫入路徑（AuditLogger.log），沒有
+        update/delete 端點——稽核軌跡能被修改就沒有稽核價值。"""
+        target = resolve_target_department(department)  # 跨部門一律 404
+        if alarms_store.get_one(department=target, match={"device_model": device_model, "code": code}) is None:
+            abort(404, "找不到此警報代碼")
+        rows = audit_logger.list_for_alarm(
+            department=target, device_model=device_model, code=code,
+            operation="local_update", limit=20,
+        )
+        return jsonify(rows)
+
+    # ── alarm_suggestions（審核路徑，目前停用，見下方三支端點與 storage.py
+    #    的 AlarmSuggestionStore）─────────────────────────────────────
+    #
+    # 這三支端點目前無前端呼叫端。審核路徑已停用：部門共用密碼、無個人
+    # 帳號，提交者與審核者無法區分，且 alarm_suggestions.submitted_by
+    # 記的只是「某個知道密碼的人」，審核者判斷不了建議可不可信——審核
+    # 在此模型下摩擦為真、把關為假（PLAN_local_solution.md 審核路徑
+    # 停用決策記錄）。
+    #
+    # 表與端點保留、不刪除：這套機制已對正式 Supabase 環境端到端驗證
+    # 過（提交 → 待審 → 接受 → alarms.local_solution 生效，全部正確），
+    # 技術上是完好的。刪除成本（改 storage.py、改 app.py、改白名單、
+    # 跑 migration、更新測試）遠高於保留成本（一張空表 + 三支無呼叫端
+    # 的端點）。待個人帳號功能完成、提交者與審核者可以真正區分時，
+    # 直接重新啟用即可，不需要重寫或重新驗證。
 
     @app.post("/api/alarms/<department>/<device_model>/<code>/suggestions")
     @login_required

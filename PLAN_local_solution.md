@@ -2,26 +2,42 @@
 
 ## 狀態
 
-🟡 **實作中——階段 1-5 已完成，尚未 commit。過程中意外發現並修正兩個與本功能無關的既有問題（孤兒後台檔案、公開的重複 Render 部署）。**
+🟡 **實作中——階段 1-5 已完成，含一次重大方向轉折（審核路徑停用），尚未 commit。**
 
-**下一個 session 接手時，從這裡開始：** 階段 5 已無阻塞性缺口，`review_note` 是否要從選填改必填（5.4 節）待二次確認專家，不影響 commit。另有一個獨立發現的架構問題（見下方「意外發現」）尚待處理，不阻塞本次 commit，但排在階段 6 之前處理較合適。確認 commit/push 後可進入階段 6（缺處置清單）。
+**下一個 session 接手時，從這裡開始：** 階段 5 的審核機制（一般使用者提交建議、管理員審核）已停用，改為所有登入者直接編輯 + 變更歷史追溯，見下方「審核路徑停用（決策記錄）」。`before_request` 靜態路徑保護已完成並實測。確認 commit/push 後可進入階段 6（缺處置清單）。
 
 **階段 3（前台詳情卡片顯示兩層）已完成**：`frontend/index.html` 的詳情卡片改為四分支（`sol_steps` 結構化步驟優先 → 有 `local_solution` 顯示現場方案＋原廠收合 → 只有 `solution` 原樣顯示 → 兩者皆無顯示「這筆還沒有處置方式」），純文字插值無 `v-html`，已過安全 review，已 commit（`1d6df6f`）並 push。
 
 **階段 4（前台管理員編輯入口）已完成**：詳情卡片新增編輯入口與對話框（預填機種/代碼/描述/原廠建議），送出打既有的 `PUT .../local` 端點。已 commit（`e6d84ec`）並 push。原本帶的「同機種其他警報的 `local_solution` 參考清單」（5.3 節）在使用者實測後判斷沒有實際幫助，已於後續 commit 移除，見 5.3 節說明。
 
-**階段 5（一般使用者建議＋待審表＋後台審核）已完成，尚未 commit**：
-- 前台：`whoami.auth && !whoami.admin` 顯示「💡 提出建議」/「💡 補充現場方案」按鈕，與階段 4 的管理員編輯共用同一個對話框，用 `localEdit.mode` 區分行為，送出打 `POST .../suggestions`，寫入待審表（見 5.2 節實作備註）
-- 後台：**`frontend/dashboard.html`**（不是 `admin.html`，見下方說明）新增「待審建議」分頁（側邊列徽章、三層對照呈現：原廠建議／目前現場方案／建議改為，覆蓋既有內容時額外警示），操作接受／退回，支援超管 `?dept=` 部門切換，皆已打通對應端點（見 5.4 節）
-- 後端：`AlarmSuggestionStore.list_pending()` 改用 PostgREST resource embedding 一次查詢帶出對應 `alarms` 列，已對正式 Supabase 實測驗證（見 5.4 節）
-- 已過 security-diff-review（SAFE TO COMMIT）
-- 🟡 待二次確認：退回建議的 `review_note` 目前選填，外部審查建議改必填，暫緩處理
+**階段 5（現場方案編輯 + 變更歷史追溯）已完成，尚未 commit**——**經歷完整實作、端到端驗證、再到停用的完整循環，見下方決策記錄**：
+- `PUT .../local` 改為 `login_required`（所有登入者皆可直接編輯，不再限管理員），`ROUTE_AUTH_REGISTRY` 同步更新
+- 新增 `GET .../history` 端點（`login_required`，唯讀，只回 `operation=local_update` 的紀錄），`AuditLogger.list_for_alarm()` 用 PostgREST JSON 路徑運算子 `new_data->>device_model` 過濾（`alarm_history` 沒有獨立 `device_model` 欄位，已對正式 Supabase 實測驗證此語法可行）
+- 前台詳情卡片：有 `local_solution` 時顯示「最後修改」一行（`local_updated_by` + 時間），點「檢視變更紀錄」才展開、才呼叫 `history` 端點（不是開卡片就撈）
+- 後台 `dashboard.html` 的 `auditText()` 加上 `local_update` 的友善顯示（含 `local_updated_by`）
+- **移除已做好的「待審建議」分頁**（`dashboard.html`）——審核路徑停用後這個介面會永遠空白，沒有留著的意義
+- `backend/app.py` 加 `_block_direct_html_access()` before_request，擋 `frontend/*.html` 被靜態路徑直接存取（見下方「延伸發現」），已對正式環境實測驗證（`/dashboard.html` 等四個 HTML 未登入直接讀取從 200 變 404，正規入口 `/app`/`/admin`/`/login` 不受影響），新增 `tests/test_static_html_blocked.py`（9 項）
+- 71→81 個 pytest 全數通過
 
-**🔴 意外發現並修正：`admin.html` 是孤兒檔案，第一版待審清單做在使用者永遠看不到的地方**：一開始把待審清單做在 `frontend/admin.html`（有完整的新增/編輯/歷史紀錄功能，直覺判斷是正式後台），但 `/admin` 路由（`backend/app.py`）實際回傳的是 `frontend/dashboard.html`——`admin.html` 是 `dashboard.html` 的前身（`db4cb7e` 取代），自那之後從未被任何路由引用。整輪第一版後台實作是白工，已重新在 `dashboard.html` 做一次（見上方）。已對照確認 `db4cb7e` 取代時功能全部搬遷、沒有遺漏。`admin.html` 已 `git rm`。同時發現另一個孤兒 `frontend/portal.html`（曾是首頁，`cf13647` 多部門隔離工程起點後被 `redirect("/app")` 取代），一併 `git rm`。新增 `tests/test_no_orphan_frontend_html.py` 防止同類事再發生。
+### 審核路徑停用（決策記錄）
 
-**🔴 意外發現並處理：`static_url_path=""` 讓孤兒 HTML 公開可直接存取，順帶牽出一個公開的重複 Render 部署**：排查孤兒檔案時發現 `backend/app.py` 的 `Flask(static_folder=FRONTEND, static_url_path="")` 讓 `frontend/*.html` 全部繞過 `@app.route` 保護、可直接以檔名存取（`curl /admin.html` 回 200）——資料層本身安全（HTML 純模板無內嵌資料，API 端點仍受裝飾器保護），但這是「靠人記得不要亂放東西」的隱性架構，外部審查建議加 `before_request` 擋掉直接存取 `.html`（十行、零遷移成本，不動 `static_url_path` 本身以免牽動 Service Worker 快取），**尚未實作**，留待階段 5 收尾後處理。同一輪排查中，`docs/index.html`（GitHub Pages，已確認實際公開建置）的連結指向的網址 `alarm-system-j9dl` 經查證是一個**仍在運作、且與正式環境同步部署最新程式碼的獨立 Render service**，公開可達。已在 Render Dashboard 確認並刪除（`git remote`/`render.yaml` 對照 + 環境變數缺 `SUPERADMIN_PASSWORD` 佐證是舊部署），刪除後 curl 驗證回 404，正式環境不受影響。`docs/index.html`、`README.md` 的網址已同步更新為 `alarm-system-1`。`PLAN_department_isolation.md` 補充記錄修正第三十九輪「舊網域已不存在」的不準確判斷。`.env` 歷史檢查確認乾淨，無真實密鑰洩漏。
+現場方案開放給所有登入者直接編輯，不經審核。
 
-**下一步的待辦（不阻塞 commit，但應排在階段 6 之前）**：在 `backend/app.py` 加 `before_request` 擋掉 `.html` 直接存取＋補兩組測試（外部審查已提供完整程式碼範本）。
+**依據**：目前身分模型為部門共用密碼、無個人帳號。兩組密碼（`pw_hash`/`admin_pw_hash`）由同一位超管在同一個對話框設定並發給同一批人，導致：現場平板的 session 用哪組密碼登入，取決於當初設定的人，不取決於現在操作的人；就算真的分開流通兩組密碼，`alarm_suggestions.submitted_by` 記的也只是「某個知道 user 密碼的人」——管理員審核時判斷不了「這是誰的經驗、可不可信」，這往往才是決定接受與否的關鍵。審核在此模型下摩擦為真、把關為假。
+
+**這個結論是在完整實作並端到端驗證過審核機制之後才確立的**：階段 5 原本按計畫做了一般使用者提交建議、管理員審核接受/退回的完整流程，且用 `zztest` 測試部門對正式 Supabase 環境跑過一次真實的端到端測試（提交 → 待審 → 接受 → `alarms.local_solution` 生效，全部正確）——這證明了機制在技術上完好，但也讓「提交者與審核者在共用密碼模型下無法有效區分」這個根本問題浮現。
+
+**追溯機制**：`alarm_history` 的 `local_update` 變更紀錄，以及前台詳情卡片的「最後修改」標示（`local_updated_by`/`local_updated_at`）。歷史紀錄不依賴身分模型，這是選擇它的關鍵理由——使用者自己判斷「這是上週剛改的、還是三年沒動過」，這在共用密碼模型下是唯一還有效的可信度訊號。前台那一行不是裝飾，是這次設計的核心；後台的稽核檢視是次要的（要人主動去翻，多數時候不會有人翻）。
+
+**已知風險**：任何知道部門密碼的人都能修改處置指示。目前部門成員均為資深人員，此風險可接受；**推廣至有新人或臨時人力的部門時需重新評估**。
+
+**後續**：個人帳號功能完成後重新評估是否啟用 `alarm_suggestions` 的審核路徑——該表與四支端點已實作並保留（`backend/app.py`/`backend/storage.py` 已加註解說明），已對正式環境端到端驗證過，技術上完好，屆時可直接啟用，不需重寫或重新驗證。
+
+**孤兒檔案清理（已完成，見上一輪）**：`admin.html`（`dashboard.html` 前身，`db4cb7e` 取代後從未被路由引用）與 `portal.html`（曾是首頁，`cf13647` 後被 `redirect("/app")` 取代）皆已 `git rm`，`tests/test_no_orphan_frontend_html.py` 防止同類事再發生。
+
+**延伸發現：靜態路徑繞過路由保護（已修復）**：`backend/app.py` 的 `Flask(static_folder=FRONTEND, static_url_path="")` 讓 `frontend/*.html` 全部繞過 `@app.route` 裝飾器，可直接以檔名存取。已加 `_block_direct_html_access()` before_request 修復，不改 `static_url_path` 本身（避免牽動 `sw.js` 的 `STATIC_SHELL`、manifest 路徑、既有 Service Worker 快取）。
+
+同一輪排查中也發現並清除了一個公開的重複 Render 部署（`alarm-system-j9dl`，與正式環境 `alarm-system-1` 同步部署最新程式碼但環境變數缺 `SUPERADMIN_PASSWORD`），已在 Render Dashboard 刪除，`docs/index.html`/`README.md` 網址已更新，`PLAN_department_isolation.md` 補充記錄修正第三十九輪的不準確判斷。`.env` 歷史檢查確認乾淨，無真實密鑰洩漏。
 
 與 `PLAN_department_isolation.md`（多部門隔離工程）的關係：**依賴**該工程已完成的部分——`alarms` 表的 `department` 欄位、複合主鍵 `(department, device_model, code)`、`scope_department()`/`resolve_target_department()`/三段式路由、`ROUTE_AUTH_REGISTRY`、`sentinel_pack` 驗證機制——全部直接沿用，不重新設計。本文件只記錄這個功能本身新增的部分。
 
@@ -63,6 +79,8 @@
 順序理由：現場人員要的是「現在該怎麼做」；原廠版本備查，但必須看得到——有時候現場方案不適用（設備狀況不同），那時需要退回原廠依據。
 
 ### 2.2 權限界線
+
+**🔴【階段 5 完成後修正：此節設計已停用，見狀態區塊「審核路徑停用（決策記錄）」】** 本節描述的三層權限（一般使用者提交建議、管理員審核）已完整實作並端到端驗證過，但發現部門共用密碼、無個人帳號的身分模型下，審核機制的把關前提不成立，已改為所有登入者直接編輯，追溯機制改用變更歷史。以下內容保留作為原始設計脈絡記錄，非目前行為。
 
 | 角色 | 能做什麼 |
 |---|---|
@@ -277,9 +295,11 @@ where a.local_solution is null or a.local_solution = '';
 
 **【使用者實測後移除】原設計曾規劃「同機種其他警報的現場方案（參考）」清單，實測後判斷沒有實際幫助，已移除**（原本每次開對話框會多打一次 `GET /api/alarms?device=...` 撈整個機種的警報清單，只為了顯示最多 5 筆參考——移除後對話框只保留機種/代碼/描述/原廠建議的預填情境，開啟對話框不再需要額外的網路請求）。
 
-### 5.4 ✅ 後台待審清單
+### 5.4 🔴 後台待審清單（已完成並驗證，後續決策停用，見狀態區塊）
 
 管理員後台新增「待處理建議」提示（含未處理筆數），列表顯示：提交者、時間、警報、建議內容、目前的現場方案（若有）。操作：接受（寫入 `local_solution`）／退回（填 `review_note`）。
+
+**【階段 5 完成後修正】** 本節描述的待審清單已完整實作（見下方過程記錄）並對正式 Supabase 環境端到端驗證成功，但隨後確認「審核路徑停用（決策記錄）」的結論後，這個介面已從 `dashboard.html` 移除——保留這個介面會永遠空白，沒有意義。`alarm_suggestions` 表與四支端點本身保留不刪，技術上完好，待個人帳號功能完成後可直接重新啟用。以下內容保留作為實作過程與技術可行性記錄。
 
 **【外部審查修正：從無現值對照改為三層對照】**第一版做出來後，外部審查指出「目前的現場方案」不是錦上添花，是審核決策的核心依據——審核者要判斷的其實是**差異**（從無到有 vs 覆蓋既有內容），沒有現值對照，工廠環境下審核者不會另外查。原本考慮的兩個做法（後端 `list_pending()` 內逐筆 `load()` 全撈比對、前端逐筆打 `GET /api/alarms`）都被指出是 N+1 或全表掃描的模式，跟 4.4 節已經修正過的 `update_local_solution` 同一類問題（`app.py` 第 708 行那次全撈就是同一個坑）。
 
@@ -355,7 +375,7 @@ GET /alarm_suggestions?select=*,alarms(solution,local_solution,local_reason,desc
 | 2 | `PUT .../local` 端點 ＋ 白名單 ＋ 稽核 | 後端就緒 |
 | 3 | ✅ 前台詳情卡片顯示兩層 | **既有知識可見** |
 | 4 | ✅ 前台管理員編輯入口 ＋ 預填情境 | **知識開始累積** |
-| 5 | ✅ 一般使用者建議 ＋ 待審表 ＋ 後台審核 | 擴大來源 |
+| 5 | 🔴 現場方案直接編輯（所有登入者）＋ 變更歷史追溯（審核機制已完整驗證後停用，見狀態區塊） | 全員可貢獻 |
 | 6 | 缺處置清單（`GET /api/alarms?missing_local=true` 篩選參數，不做排序，見 4.5 節） | 補資料有優先序 |
 | 7 | AI 第一關分級 ＋ 差異摘要 | 降低審核負擔 |
 
