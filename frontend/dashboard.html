@@ -75,6 +75,9 @@ a { color: var(--color-accent); text-underline-offset: 3px; }
 .btn-ghost { color: var(--color-accent); padding-inline: var(--space-1); border-color: transparent; }
 .btn-ghost:hover { background: color-mix(in srgb, var(--color-accent) 10%, transparent); }
 .btn-danger { color: #a23b3b; }
+/* 按鈕群模擬單選時（例如快速時間範圍）用來標示「目前生效的是哪一個」——
+   跟 .dept-tab.active 同樣的用途，但套用在一般 .btn 上，供之後同類按鈕群沿用。 */
+.btn-secondary.active { background: var(--color-accent); border-color: var(--color-accent); color: var(--color-bg); }
 .btn-danger:hover { background: color-mix(in srgb, #a23b3b 10%, transparent); }
 
 .field > label { display: block; font-size: 12px; margin-bottom: 5px; color: color-mix(in srgb, var(--color-text) 70%, transparent); }
@@ -554,14 +557,14 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
             </div>
             <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
               <div style="display:flex; gap:4px">
-                <button class="btn btn-secondary" @click="setAuditQuickRange('today'); loadAudit()">今天</button>
-                <button class="btn btn-secondary" @click="setAuditQuickRange('week'); loadAudit()">本週</button>
-                <button class="btn btn-secondary" @click="setAuditQuickRange('month'); loadAudit()">本月</button>
-                <button class="btn btn-secondary" @click="setAuditQuickRange('all'); loadAudit()">全部</button>
+                <button class="btn btn-secondary" :class="{active: auditQuickKey==='today'}" @click="setAuditQuickRange('today'); loadAudit()">今天</button>
+                <button class="btn btn-secondary" :class="{active: auditQuickKey==='week'}" @click="setAuditQuickRange('week'); loadAudit()">本週</button>
+                <button class="btn btn-secondary" :class="{active: auditQuickKey==='month'}" @click="setAuditQuickRange('month'); loadAudit()">本月</button>
+                <button class="btn btn-secondary" :class="{active: auditQuickKey==='all'}" @click="setAuditQuickRange('all'); loadAudit()">全部</button>
               </div>
-              <input class="input toolbar-field" type="date" style="width:150px" v-model="auditFilter.from" @change="loadAudit">
+              <input class="input toolbar-field" type="date" style="width:150px" v-model="auditFilter.from" @change="auditQuickKey=''; loadAudit()">
               <span style="font-size:13px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">~</span>
-              <input class="input toolbar-field" type="date" style="width:150px" v-model="auditFilter.to" @change="loadAudit">
+              <input class="input toolbar-field" type="date" style="width:150px" v-model="auditFilter.to" @change="auditQuickKey=''; loadAudit()">
               <select class="input toolbar-field" style="width:160px" v-model="auditFilter.deviceModel" @change="loadAudit">
                 <option value="">全部機種</option>
                 <option v-for="d in devices" :key="d.id" :value="d.model">{{ d.model }}</option>
@@ -955,6 +958,11 @@ createApp({
       // 預設「本月」而非「全部」，避免一進頁面就撈一大包（外部審查建議）。
       // device_model 空字串＝全部機種，跟 alarmListDevice 同樣的慣例。
       auditFilter: { from: '', to: '', deviceModel: '' },
+      // 記錄目前生效的是哪個快速時間選項，供按鈕高亮用——不用每次反推
+      // 比對 auditFilter.from/to 跟算出來的日期是否相等（時區/邊界情況
+      // 容易誤判）。使用者手動改自訂日期輸入框時清空，四個按鈕都不亮，
+      // 如實反映「現在這個區間不對應任何一個快速選項」。
+      auditQuickKey: '',
 
       alarmListDevice: '', alarmListSearch: '', alarmListSolutionStatus: '',
       alarmPageIdx: 0, alarmPageSize: 20,
@@ -1223,6 +1231,7 @@ createApp({
     // load() 還沒被呼叫，打了也是浪費；使用者點快速鈕時再各自呼叫
     // loadAudit()（見 template 的 @click）。
     setAuditQuickRange(key) {
+      this.auditQuickKey = key;
       const fmt = d => d.toISOString().slice(0, 10);
       const now = new Date();
       if (key === 'today') {
