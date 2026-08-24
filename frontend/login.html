@@ -331,7 +331,14 @@
         btn.type = 'button';
         btn.className = 'dept-option';
         btn.dataset.deptCode = d.id;
-        btn.innerHTML = `<span class="name">${d.name}</span><span class="code">${d.id}</span>`;
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'name';
+        nameSpan.textContent = d.name;
+        const codeSpan = document.createElement('span');
+        codeSpan.className = 'code';
+        codeSpan.textContent = d.id;
+        btn.appendChild(nameSpan);
+        btn.appendChild(codeSpan);
         deptList.appendChild(btn);
         if (i === 0) selectDept(d.id, btn);
       });

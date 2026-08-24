@@ -35,6 +35,16 @@ SEVERITIES = {"嚴重", "警告", "資訊"}
 
 SUPER_DEPT_SENTINEL = "__super__"
 DEPT_ID_RE = re.compile(r"^[a-z0-9_]{1,32}$")
+DEPT_NAME_MAX_LEN = 64
+
+
+def _validate_dept_name(name: str) -> None:
+    """部門名稱是顯示用自由文字，不用白名單（會誤傷合法字元），只擋
+    長度與控制字元；真正的 XSS 防線在前端一律 textContent 輸出。"""
+    if len(name) > DEPT_NAME_MAX_LEN:
+        abort(400, f"name 長度不可超過 {DEPT_NAME_MAX_LEN} 字元")
+    if any(ord(c) < 0x20 for c in name):
+        abort(400, "name 不可包含控制字元")
 
 # 跨部門存取／部門不存在／無權存取，三種情況一律用這同一句話，刻意不區分
 # （不透露「部門存在但你無權存取」與「部門根本不存在」的差異）。跟 Werkzeug
@@ -87,7 +97,16 @@ class DeptScope(Enum):
 
 def create_app() -> Flask:
     app = Flask(__name__, static_folder=str(FRONTEND), static_url_path="")
-    app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-change-me")
+
+    _DEV_SECRET_KEY = "dev-secret-change-me"
+    _is_production = bool(os.environ.get("RENDER_EXTERNAL_URL")) or os.environ.get("FLASK_ENV") == "production"
+    _secret_key = os.environ.get("FLASK_SECRET_KEY", "")
+    if _is_production and (not _secret_key or _secret_key == _DEV_SECRET_KEY):
+        raise RuntimeError(
+            "生產環境偵測到但 FLASK_SECRET_KEY 未設定或仍為預設值，"
+            "拒絕以可預測的金鑰啟動——session 可被偽造，包含 superadmin"
+        )
+    app.secret_key = _secret_key or _DEV_SECRET_KEY
     # Secure 只在正式環境（Render 提供 HTTPS）開啟，本機 HTTP 開發環境開啟會讓 cookie 傳不出去
     app.config["SESSION_COOKIE_SECURE"] = bool(os.environ.get("RENDER_EXTERNAL_URL"))
     app.config["SESSION_COOKIE_HTTPONLY"] = True
@@ -117,7 +136,7 @@ def create_app() -> Flask:
             abort(404)  # 404 而非 403，不透露檔案是否存在
 
     # ── 4.2 節：啟動時 fail fast ────────────────────────────────────
-    is_production = bool(os.environ.get("RENDER_EXTERNAL_URL")) or os.environ.get("FLASK_ENV") == "production"
+    is_production = _is_production
     if is_production and not _use_supabase():
         raise RuntimeError(
             "生產環境偵測到但 SUPABASE_URL/SUPABASE_KEY 未設定，"
@@ -881,12 +900,15 @@ def create_app() -> Flask:
             from ai import run_pipeline
             return jsonify(run_pipeline(image_b64, mime_type, known_model=known_model,
                                         department=session.get("department")))
-        except ImportError as e:
-            abort(503, f"AI 模組未安裝：{e}")
-        except KeyError as e:
-            abort(503, f"缺少環境變數：{e}")
-        except Exception as e:
-            abort(500, f"AI 分析失敗：{e}")
+        except ImportError:
+            app.logger.exception("AI 模組未安裝")
+            abort(503, "AI 模組未安裝")
+        except KeyError:
+            app.logger.exception("AI 分析缺少環境變數")
+            abort(503, "AI 服務設定不完整，請聯絡管理員")
+        except Exception:
+            app.logger.exception("AI 分析失敗")
+            abort(500, "AI 分析失敗，請稍後再試或聯絡管理員")
 
     def _confirmed_by() -> str:
         """PLAN 5.2.2 節：用寫入的目標部門＋真實角色組成，取代信任前端傳值。
@@ -920,8 +942,9 @@ def create_app() -> Flask:
                 department=session.get("department"),
             )
             return jsonify(result), 201
-        except Exception as e:
-            abort(500, f"確認記錄失敗：{e}")
+        except Exception:
+            app.logger.exception("確認記錄失敗")
+            abort(500, "確認記錄失敗，請稍後再試或聯絡管理員")
 
     @app.post("/api/correct")
     @login_required
@@ -949,8 +972,9 @@ def create_app() -> Flask:
                 department=session.get("department"),
             )
             return jsonify(result), 201
-        except Exception as e:
-            abort(500, f"修正記錄失敗：{e}")
+        except Exception:
+            app.logger.exception("修正記錄失敗")
+            abort(500, "修正記錄失敗，請稍後再試或聯絡管理員")
 
     @app.get("/api/audit")
     @admin_required
@@ -1086,6 +1110,7 @@ def create_app() -> Flask:
             abort(400, "id 必須符合 ^[a-z0-9_]{1,32}$")
         if not name or not password or not admin_password:
             abort(400, "name、password、admin_password 為必填")
+        _validate_dept_name(name)
         super_pw = os.environ.get("SUPERADMIN_PASSWORD", "")
         if super_pw and (password == super_pw or admin_password == super_pw):
             abort(400, "密碼不可與總管理員密碼相同")
@@ -1107,6 +1132,7 @@ def create_app() -> Flask:
         name = (body.get("name") or "").strip()
         if not name:
             abort(400, "name 為必填")
+        _validate_dept_name(name)
         department_store.update_name(dept_id, name)
         return jsonify({"ok": True})
 

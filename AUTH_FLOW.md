@@ -70,6 +70,8 @@
 
 ## 五、要驗證「一般使用者建議 → 待審核」流程，具體要做什麼
 
+⚠️ **本節描述的流程目前已停用**（commit `ee85162`，見 `PLAN_local_solution.md` 「審核路徑停用（決策記錄）」）。`alarm_suggestions` 表與三支端點保留、已對正式環境端到端驗證過，待個人帳號功能完成後重新評估啟用。**目前照本節操作會走到一條沒有前端入口的死路徑**——`dashboard.html` 的待審清單 UI 已移除，管理員登入後看不到任何待審項目。現行做法是所有登入者可直接編輯 `local_solution`，見 `PLAN_local_solution.md` 第七節階段 5。
+
 1. 確認要測試的部門，其 `pw_hash` 對應的明文密碼（不是 `admin_pw_hash`）——如果不知道，需要用 `backend/gen_department_hashes.py` 或直接對 Supabase 執行 UPDATE 重設 `pw_hash`，並记下你剛设的新明文
 2. 全新無痕視窗，開 `https://alarm-system-1.onrender.com/login`（不要碰 `/admin/login`）
 3. 用該部門 ID + 第 1 步的一般密碼登入
