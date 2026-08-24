@@ -980,8 +980,29 @@ def create_app() -> Flask:
     @admin_required
     def list_audit():
         scope, dept = scope_department()
-        limit = min(int(request.args.get("limit", 100)), 500)
-        return jsonify(audit_logger.load(limit, department=(dept if scope == DeptScope.DEPT else None)))
+        try:
+            limit = max(1, min(int(request.args.get("limit", 100)), 500))
+        except ValueError:
+            abort(400, "limit 必須是數字")
+        device_model = (request.args.get("device_model") or "").strip() or None
+        # 純日期（YYYY-MM-DD），不是完整 ISO timestamp——前端快速選項
+        # 只需要日期粒度。to 補到當天結束，否則「今天」會漏掉當天的異動
+        # （gte today 00:00 加 lte today 00:00 只會篩到剛好那一刻）。
+        from_raw = (request.args.get("from") or "").strip()
+        to_raw = (request.args.get("to") or "").strip()
+        from_dt = to_dt = None
+        try:
+            if from_raw:
+                from_dt = datetime.fromisoformat(from_raw).replace(tzinfo=timezone.utc).isoformat()
+            if to_raw:
+                to_dt = (datetime.fromisoformat(to_raw) + timedelta(days=1)).replace(tzinfo=timezone.utc).isoformat()
+        except ValueError:
+            abort(400, "from/to 必須是 YYYY-MM-DD 格式")
+        items, truncated = audit_logger.load(
+            limit, department=(dept if scope == DeptScope.DEPT else None),
+            device_model=device_model, from_dt=from_dt, to_dt=to_dt,
+        )
+        return jsonify({"items": items, "truncated": truncated, "limit": limit})
 
     # ── Admin dashboard (AI 掃描統計) ─────────────────────────────────
 

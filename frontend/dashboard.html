@@ -548,10 +548,26 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
 
           <section class="card blueprint" style="padding:16px; gap:10px">
             <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
-            <div style="display:flex; align-items:baseline; justify-content:space-between">
+            <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px">
               <h2 style="font-size:18px">操作歷史紀錄</h2>
               <span style="font-size:11px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">A-05</span>
             </div>
+            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+              <div style="display:flex; gap:4px">
+                <button class="btn btn-secondary" @click="setAuditQuickRange('today'); loadAudit()">今天</button>
+                <button class="btn btn-secondary" @click="setAuditQuickRange('week'); loadAudit()">本週</button>
+                <button class="btn btn-secondary" @click="setAuditQuickRange('month'); loadAudit()">本月</button>
+                <button class="btn btn-secondary" @click="setAuditQuickRange('all'); loadAudit()">全部</button>
+              </div>
+              <input class="input toolbar-field" type="date" style="width:150px" v-model="auditFilter.from" @change="loadAudit">
+              <span style="font-size:13px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">~</span>
+              <input class="input toolbar-field" type="date" style="width:150px" v-model="auditFilter.to" @change="loadAudit">
+              <select class="input toolbar-field" style="width:160px" v-model="auditFilter.deviceModel" @change="loadAudit">
+                <option value="">全部機種</option>
+                <option v-for="d in devices" :key="d.id" :value="d.model">{{ d.model }}</option>
+              </select>
+            </div>
+            <p v-if="auditTruncated" style="margin:0; font-size:12px; color:#a2703b">僅顯示最新 {{ auditLog.length }} 筆，範圍內可能還有更多紀錄，請縮小時間區間或指定機種以看到完整結果。</p>
             <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:0 24px">
               <div v-for="(h,idx) in auditLog" :key="h.changed_at+idx" style="display:flex; gap:10px; padding:9px 0; border-bottom:1px solid color-mix(in srgb, var(--color-text) 8%, transparent)">
                 <span style="width:8px; height:8px; margin-top:6px; flex:none; background:var(--color-accent)"></span>
@@ -931,10 +947,14 @@ createApp({
 
       alarms: [], devices: [], feedbackStatsList: [], viewStatsList: [],
       scanStats: { today_count: 0, week_count: 0, total_count: 0, fail_count: 0, fail_rate: 0 },
-      scanRecent: [], scanRanking: [], auditLog: [], allScans: [],
+      scanRecent: [], scanRanking: [], auditLog: [], auditTruncated: false, allScans: [],
 
       scanFilter: { from: '', to: '', model: '', code: '', fix: 'all' },
       scanPageIdx: 0,
+
+      // 預設「本月」而非「全部」，避免一進頁面就撈一大包（外部審查建議）。
+      // device_model 空字串＝全部機種，跟 alarmListDevice 同樣的慣例。
+      auditFilter: { from: '', to: '', deviceModel: '' },
 
       alarmListDevice: '', alarmListSearch: '', alarmListSolutionStatus: '',
       alarmPageIdx: 0, alarmPageSize: 20,
@@ -1113,6 +1133,7 @@ createApp({
       // 部門管理員固定看自己的部門，不受 viewDept 影響
       this.viewDept = this.whoami.department;
     }
+    this.setAuditQuickRange('month');  // 預設本月，load() 內的 loadAudit() 會沿用這個區間
     await this.load();
 
     const d = new Date();
@@ -1155,7 +1176,7 @@ createApp({
         const endpoints = [
           '/api/alarms' + dq, '/api/devices' + dq, '/api/feedback/stats' + dq, '/api/view/stats' + dq,
           '/api/admin/scan-stats' + dq, '/api/admin/scan-recent' + dq + amp + 'limit=100',
-          '/api/admin/scan-ranking' + dq, '/api/audit' + dq,
+          '/api/admin/scan-ranking' + dq,
         ];
         const results = await Promise.all(endpoints.map(u => AlarmApi.get(u)));
         if (results.some(r => r.status === 403)) { location.href = '/admin/login'; return; }
@@ -1164,7 +1185,7 @@ createApp({
           this.setViewDept('__all__');
           return;
         }
-        const [alarms, devices, fbStats, viewStats, scanStats, scanRecent, scanRanking, audit] = await Promise.all(results.map(r => r.ok ? r.json() : (Array.isArray([]) ? [] : {})));
+        const [alarms, devices, fbStats, viewStats, scanStats, scanRecent, scanRanking] = await Promise.all(results.map(r => r.ok ? r.json() : (Array.isArray([]) ? [] : {})));
         this.alarms = alarms;
         this.devices = devices;
         this.feedbackStatsList = fbStats;
@@ -1173,9 +1194,47 @@ createApp({
         this.scanRecent = scanRecent;
         this.allScans = scanRecent;
         this.scanRanking = scanRanking;
-        this.auditLog = audit;
+        await this.loadAudit();
       } finally {
         this.loading = false;
+      }
+    },
+    // 操作歷史紀錄獨立於 load() 之外重打，篩選條件（機種/時間）變動時
+    // 不需要整批八個端點重來一次。回應格式是 {items, truncated, limit}
+    // 而非裸陣列——truncated 為 true 時要明說「只顯示最新 N 筆」，不能
+    // 讓使用者誤以為某段時間沒有異動，其實只是被截斷沒撈到。
+    async loadAudit() {
+      const dq = this.deptQuery();
+      const amp = dq ? '&' : '?';
+      let url = '/api/audit' + dq;
+      const f = this.auditFilter;
+      const params = [];
+      if (f.deviceModel) params.push('device_model=' + encodeURIComponent(f.deviceModel));
+      if (f.from) params.push('from=' + encodeURIComponent(f.from));
+      if (f.to) params.push('to=' + encodeURIComponent(f.to));
+      if (params.length) url += amp + params.join('&');
+      const r = await AlarmApi.get(url);
+      if (!r.ok) { this.auditLog = []; this.auditTruncated = false; return; }
+      const data = await r.json();
+      this.auditLog = data.items || [];
+      this.auditTruncated = !!data.truncated;
+    },
+    // 快速時間選項：只設值，不主動打請求——mounted() 初始化時這個時候
+    // load() 還沒被呼叫，打了也是浪費；使用者點快速鈕時再各自呼叫
+    // loadAudit()（見 template 的 @click）。
+    setAuditQuickRange(key) {
+      const fmt = d => d.toISOString().slice(0, 10);
+      const now = new Date();
+      if (key === 'today') {
+        this.auditFilter.from = this.auditFilter.to = fmt(now);
+      } else if (key === 'week') {
+        const start = new Date(now); start.setDate(now.getDate() - 6);
+        this.auditFilter.from = fmt(start); this.auditFilter.to = fmt(now);
+      } else if (key === 'month') {
+        const start = new Date(now.getFullYear(), now.getMonth(), 1);
+        this.auditFilter.from = fmt(start); this.auditFilter.to = fmt(now);
+      } else {
+        this.auditFilter.from = ''; this.auditFilter.to = '';
       }
     },
     fmtTime(iso) {

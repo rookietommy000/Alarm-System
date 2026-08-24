@@ -536,12 +536,23 @@ class AuditLogger:
         else:
             self._log_json(entry)
 
-    def load(self, limit: int, department: Optional[str]) -> list:
+    def load(self, limit: int, department: Optional[str], device_model: Optional[str] = None,
+              from_dt: Optional[str] = None, to_dt: Optional[str] = None) -> tuple:
         # department=None 是明確選擇（DeptScope.ALL），呼叫端一律主動傳入
-        # （PLAN 3.6 節）。JsonStore fallback（本機/測試）內部不使用這個值。
+        # （PLAN 3.6 節）。JsonStore fallback（本機/測試）內部不使用這個值，
+        # device_model/from_dt/to_dt 同理——本機模式資料量小，不需要篩選。
+        #
+        # 多要一筆（limit+1）來偵測「是否被截斷」，不用額外的 count 查詢：
+        # 若拿回的筆數超過呼叫端要的 limit，代表資料庫裡還有更多、被截斷了
+        # （見 /api/audit 的 truncated 回傳，避免使用者誤以為某段時間沒有
+        # 異動——實際上只是被截斷沒撈到，這類「看似合理的空結果」正是這個
+        # 系統反覆在防的問題）。
         if _use_supabase():
-            return self._load_supabase(limit, department)
-        return self._load_json(limit)
+            rows = self._load_supabase(limit + 1, department, device_model, from_dt, to_dt)
+        else:
+            rows = self._load_json(limit + 1)
+        truncated = len(rows) > limit
+        return rows[:limit], truncated
 
     def list_for_alarm(self, department: str, device_model: str, code: str,
                         operation: str, limit: int) -> list:
@@ -602,13 +613,27 @@ class AuditLogger:
         except Exception:
             pass  # log failure must never crash the main operation
 
-    def _load_supabase(self, limit: int, department: Optional[str] = None) -> list:
+    def _load_supabase(self, limit: int, department: Optional[str] = None,
+                        device_model: Optional[str] = None,
+                        from_dt: Optional[str] = None, to_dt: Optional[str] = None) -> list:
         try:
             base = os.environ.get("SUPABASE_URL", "").rstrip("/")
             key = os.environ.get("SUPABASE_KEY", "")
             qs = f"select=*&order=changed_at.desc&limit={limit}"
             if department is not None:
                 qs += f"&department=eq.{urllib.parse.quote(department, safe='')}"
+            if device_model:
+                # DELETE 只有 old_data（new_data 為 null），但這裡跟
+                # list_for_alarm() 同樣的判斷：一般 CREATE/UPDATE/
+                # local_update 用 new_data 過濾即可，機種本身不會被
+                # local_update 改動；DELETE 記錄用 new_data 過濾會
+                # 因為 new_data 是 null 而篩不到，這是可接受的取捨
+                # ——被刪除的警報本來就不會出現在「當前機種」的清單裡。
+                qs += f"&new_data->>device_model=eq.{urllib.parse.quote(device_model, safe='')}"
+            if from_dt:
+                qs += f"&changed_at=gte.{urllib.parse.quote(from_dt, safe='')}"
+            if to_dt:
+                qs += f"&changed_at=lte.{urllib.parse.quote(to_dt, safe='')}"
             req = urllib.request.Request(
                 f"{base}/rest/v1/alarm_history?{qs}",
                 headers={"apikey": key, "Authorization": f"Bearer {key}"},

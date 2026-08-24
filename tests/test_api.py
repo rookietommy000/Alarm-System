@@ -179,3 +179,40 @@ def test_missing_local_combines_with_other_filters(client):
     assert codes == {"E001", "E002"}
     r2 = client.get("/api/alarms?missing_local=true&severity=警告")
     assert {a["code"] for a in r2.get_json()} == {"E002"}
+
+
+# ── /api/audit 分類與時間篩選（後台操作歷史紀錄優化）────────────────────
+
+def test_audit_response_shape(client):
+    """回應改成 {items, truncated, limit} 物件，不是裸陣列——truncated
+    要能讓前端明說「只顯示最新 N 筆」，不能讓截斷變成沉默的不完整資料。"""
+    client.put("/api/alarms/local/CNC-A100/E001", json={"description": "觸發一筆稽核紀錄"})
+    r = client.get("/api/audit")
+    assert r.status_code == 200
+    body = r.get_json()
+    assert set(body.keys()) == {"items", "truncated", "limit"}
+    assert isinstance(body["items"], list)
+    assert body["truncated"] is False
+    assert body["limit"] == 100
+
+
+def test_audit_limit_invalid_value_rejected(client):
+    """limit 給非數字要明確 400，不能讓 int() 拋出的 ValueError 變成 500。"""
+    assert client.get("/api/audit?limit=abc").status_code == 400
+
+
+def test_audit_limit_clamped_to_valid_range(client):
+    """limit 給 0 或負數要夾到至少 1，不能讓 0/負數原樣傳給底層查詢。"""
+    r = client.get("/api/audit?limit=0")
+    assert r.status_code == 200
+    assert r.get_json()["limit"] == 1
+    r2 = client.get("/api/audit?limit=-5")
+    assert r2.get_json()["limit"] == 1
+    r3 = client.get("/api/audit?limit=9999")
+    assert r3.get_json()["limit"] == 500
+
+
+def test_audit_from_to_invalid_format_rejected(client):
+    """from/to 給不是 YYYY-MM-DD 的格式要明確 400，不能讓底層 fromisoformat 拋例外。"""
+    assert client.get("/api/audit?from=not-a-date").status_code == 400
+    assert client.get("/api/audit?to=2026/08/24").status_code == 400
