@@ -136,3 +136,46 @@ def test_keywords_string_normalized(client):
     r = client.post("/api/alarms/local", json={"code": "K1", "keywords": "a, b ,c"})
     assert r.status_code == 201
     assert r.get_json()["keywords"] == ["a", "b", "c"]
+
+
+# ── missing_local 篩選（PLAN_local_solution.md 階段 6）──────────────────
+
+def test_missing_local_excludes_alarm_with_local_solution(client):
+    """E001 種子資料原本沒有 local_solution，補上後應該從 missing_local=true 排除。"""
+    assert len(client.get("/api/alarms?missing_local=true").get_json()) == 1
+    client.put("/api/alarms/local/CNC-A100/E001/local",
+               json={"local_solution": "降速運轉", "local_reason": ""})
+    assert len(client.get("/api/alarms?missing_local=true").get_json()) == 0
+
+
+def test_missing_local_treats_empty_string_as_missing(client):
+    """local_solution 是空字串（不是 null）時仍要算「缺」——既有資料
+    兩種狀態都有，只判斷 null 會漏掉一半（PLAN 第九節查證同一個坑）。"""
+    client.put("/api/alarms/local/CNC-A100/E001/local",
+               json={"local_solution": "先前寫過的內容", "local_reason": ""})
+    assert len(client.get("/api/alarms?missing_local=true").get_json()) == 0
+    client.put("/api/alarms/local/CNC-A100/E001/local",
+               json={"local_solution": "", "local_reason": ""})
+    assert len(client.get("/api/alarms?missing_local=true").get_json()) == 1
+
+
+def test_missing_local_absent_or_non_true_behaves_like_unfiltered(client):
+    """missing_local 缺席、或給非 "true" 的值（例如 "1"、"false"），
+    行為都要跟不帶這個參數一樣，不能被意外當成 true 觸發過濾。"""
+    baseline = len(client.get("/api/alarms").get_json())
+    assert len(client.get("/api/alarms?missing_local=1").get_json()) == baseline
+    assert len(client.get("/api/alarms?missing_local=false").get_json()) == baseline
+    assert len(client.get("/api/alarms?missing_local=TRUE").get_json()) == baseline  # 大小寫不敏感，見 4.5 節
+
+
+def test_missing_local_combines_with_other_filters(client):
+    """missing_local 要能跟既有的 device/severity 篩選疊加，不是互斥的獨立端點。"""
+    client.post("/api/alarms/local", json={
+        "code": "E002", "device_model": "CNC-A100", "severity": "警告",
+        "description": "第二筆，缺處置", "cause": "", "solution": "", "keywords": [],
+    })
+    r = client.get("/api/alarms?missing_local=true&device=CNC-A100")
+    codes = {a["code"] for a in r.get_json()}
+    assert codes == {"E001", "E002"}
+    r2 = client.get("/api/alarms?missing_local=true&severity=警告")
+    assert {a["code"] for a in r2.get_json()} == {"E002"}

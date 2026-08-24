@@ -490,6 +490,12 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
                   <option value="">全部機種</option>
                   <option v-for="d in devices" :key="d.id" :value="d.model">{{ d.model }}</option>
                 </select>
+                <select class="input toolbar-field" style="width:180px" v-model="alarmListSolutionStatus">
+                  <option value="">處置狀態：全部</option>
+                  <option value="none">無任何處置（{{ solutionStatusCounts.none }}）</option>
+                  <option value="vendor">僅有原廠（{{ solutionStatusCounts.vendor }}）</option>
+                  <option value="local">已有現場做法（{{ solutionStatusCounts.local }}）</option>
+                </select>
                 <input class="input toolbar-field" style="width:200px" v-model="alarmListSearch" placeholder="搜尋代碼或描述…" />
                 <button v-if="!isAll" class="btn btn-primary blueprint toolbar-field" @click="newAlarm">
                   <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
@@ -500,18 +506,24 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
             <p v-if="isAll" style="margin:0; font-size:13px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">跨部門檢視可以編輯既有資料，但無法新增——沒有指定部門就無法決定要建立到哪裡。</p>
             <div class="table-wrap">
             <table class="table" style="min-width:760px">
-              <thead><tr><th>代碼</th><th>機種</th><th>嚴重度</th><th>描述</th><th>回饋</th><th></th></tr></thead>
+              <thead><tr><th>代碼</th><th>機種</th><th>嚴重度</th><th>描述</th><th>處置狀態</th><th>回饋</th><th></th></tr></thead>
               <tbody>
                 <tr v-for="a in filteredAlarms" :key="a.device_model+a.code">
                   <td style="font-weight:500; white-space:nowrap">{{ a.code }}</td>
                   <td style="white-space:nowrap">{{ a.device_model || '—' }}</td>
                   <td><span class="tag" :class="sevTag(a.severity)">{{ a.severity || '—' }}</span></td>
                   <td>{{ a.description }}</td>
+                  <td style="white-space:nowrap">
+                    <span v-if="(a.local_solution||'').trim()" class="tag tag-neutral">已有現場做法</span>
+                    <span v-else-if="(a.solution||'').trim()" class="tag tag-outline">僅有原廠</span>
+                    <span v-else class="tag tag-outline" style="opacity:0.7">無任何處置</span>
+                  </td>
                   <td style="white-space:nowrap; font-size:12px">
                     <span v-if="feedbackStats[a.device_model+'|'+a.code]">{{ feedbackPct(feedbackStats[a.device_model+'|'+a.code]) }}%</span>
                     <span v-else style="color:color-mix(in srgb, var(--color-text) 50%, transparent)">—</span>
                   </td>
                   <td style="text-align:right; white-space:nowrap">
+                    <button class="btn btn-ghost" @click="openLocalEdit(a)">現場方案</button>
                     <button class="btn btn-ghost" @click="editAlarm(a)">編輯</button>
                   </td>
                 </tr>
@@ -648,6 +660,34 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
         <div style="display:flex; gap:8px">
           <button class="btn btn-secondary" @click="alarmDraft = null">取消</button>
           <button class="btn btn-primary" @click="saveAlarm">儲存</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 現場方案 Dialog：獨立於上方原廠主檔編輯，改的是 local_solution，
+       打 PUT .../local，跟原廠 solution 完全分開，避免混在同一個對話框。 -->
+  <div class="dialog-backdrop" v-if="localEdit" @click.self="localEdit = null">
+    <div class="dialog blueprint">
+      <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+      <div class="dialog-title">現場方案 · {{ localEdit.code }}</div>
+      <div style="font-size:13px; color:color-mix(in srgb, var(--color-text) 65%, transparent)">{{ localEdit.device_model }} · {{ localEdit.description }}</div>
+      <div v-if="localEdit.vendorSolution" class="field">
+        <label>原廠建議（唯讀）</label>
+        <div style="font-size:13px; padding:8px; background:color-mix(in srgb, var(--color-text) 5%, transparent); white-space:pre-wrap">{{ localEdit.vendorSolution }}</div>
+      </div>
+      <div style="font-size:12px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">
+        <span v-if="localEdit.updatedBy">上次修改：{{ localEdit.updatedBy }} · {{ fmtLocalTime(localEdit.updatedAt) }}</span>
+        <span v-else>尚無現場方案紀錄</span>
+      </div>
+      <div class="field"><label>現場方案</label><textarea id="local-sol-dialog-input" class="input" v-model="localEdit.local_solution" rows="4" placeholder="實際在現場怎麼處理這個警報"></textarea></div>
+      <div class="field"><label>為什麼不同（選填）</label><textarea class="input" v-model="localEdit.local_reason" rows="2" placeholder="與原廠建議不同的原因"></textarea></div>
+      <p v-if="localEdit.error" style="color:#a23b3b; font-size:13px; margin:0">{{ localEdit.error }}</p>
+      <div class="dialog-actions">
+        <div></div>
+        <div style="display:flex; gap:8px">
+          <button class="btn btn-secondary" @click="localEdit = null" :disabled="localEdit.saving">取消</button>
+          <button class="btn btn-primary" @click="saveLocalEdit" :disabled="localEdit.saving">{{ localEdit.saving ? '儲存中…' : '儲存' }}</button>
         </div>
       </div>
     </div>
@@ -883,8 +923,9 @@ createApp({
       scanFilter: { from: '', to: '', model: '', code: '', fix: 'all' },
       scanPageIdx: 0,
 
-      alarmListDevice: '', alarmListSearch: '',
+      alarmListDevice: '', alarmListSearch: '', alarmListSolutionStatus: '',
       alarmDraft: null, isNewAlarm: false, alarmKeywordsText: '', alarmError: '',
+      localEdit: null,
       deviceDraft: null, deviceError: '',
       toast: '',
 
@@ -973,9 +1014,29 @@ createApp({
       const q = this.alarmListSearch.trim().toLowerCase();
       return this.alarms.filter(a => {
         if (this.alarmListDevice && a.device_model !== this.alarmListDevice) return false;
+        if (!this.matchSolutionStatus(a)) return false;
         if (!q) return true;
         return a.code.toLowerCase().includes(q) || (a.description||'').toLowerCase().includes(q) || (a.device_model||'').toLowerCase().includes(q);
       });
+    },
+    // 依「處置狀態」篩選前先算出各選項的筆數，供下拉選單顯示，動態反映
+    // 當前機種/關鍵字篩選後的結果，避免使用者篩了機種之後數字對不上。
+    solutionStatusCounts() {
+      const base = this.alarms.filter(a => {
+        if (this.alarmListDevice && a.device_model !== this.alarmListDevice) return false;
+        const q = this.alarmListSearch.trim().toLowerCase();
+        if (!q) return true;
+        return a.code.toLowerCase().includes(q) || (a.description||'').toLowerCase().includes(q) || (a.device_model||'').toLowerCase().includes(q);
+      });
+      const counts = { none: 0, vendor: 0, local: 0 };
+      base.forEach(a => {
+        const hasVendor = !!(a.solution || '').trim();
+        const hasLocal = !!(a.local_solution || '').trim();
+        if (hasLocal) counts.local++;
+        else if (hasVendor) counts.vendor++;
+        else counts.none++;
+      });
+      return counts;
     },
     filteredScans() {
       const f = this.scanFilter;
@@ -1134,6 +1195,18 @@ createApp({
       return this.isSuper ? this.viewDept : this.whoami.department;
     },
 
+    // 空字串與 null 都要當「無」——既有資料兩種都有，只判斷 null 會漏掉一半。
+    matchSolutionStatus(a) {
+      const hasVendor = !!(a.solution || '').trim();
+      const hasLocal = !!(a.local_solution || '').trim();
+      switch (this.alarmListSolutionStatus) {
+        case 'none': return !hasVendor && !hasLocal;
+        case 'vendor': return hasVendor && !hasLocal;
+        case 'local': return hasLocal;
+        default: return true;
+      }
+    },
+
     newAlarm() {
       this.isNewAlarm = true;
       this.alarmDraft = { code: '', device_model: '', severity: '', description: '', cause: '', solution: '', keywords: [] };
@@ -1144,6 +1217,47 @@ createApp({
       this.alarmDraft = JSON.parse(JSON.stringify(a));
       this.alarmKeywordsText = (a.keywords || []).join(', ');
       this.alarmError = '';
+    },
+    // 現場方案語意 = 當前有效版本，編輯即覆蓋；alarm_history 承擔完整
+    // 歷史軌跡，這裡不做文字內文署名（曾規劃過，會讓 local_solution 變成
+    // 不斷累加的日誌而非「現在該怎麼處理」，已改為只在框外顯示上次修改）。
+    // 預填既有內容＋游標移到最後，降低「要不要覆蓋別人寫的」這個心理
+    // 門檻，同時保留隨時可以直接刪除過時內容的覆蓋語意。
+    openLocalEdit(a) {
+      const dept = a.department || this.writeDept();
+      if (!dept || dept === '__all__') {
+        this.showToast('無法判斷所屬部門，請重新整理頁面');
+        return;
+      }
+      this.localEdit = {
+        saving: false, error: '',
+        department: dept, device_model: a.device_model, code: a.code,
+        description: a.description || '', vendorSolution: a.solution || '',
+        local_solution: a.local_solution || '', local_reason: a.local_reason || '',
+        updatedBy: a.local_updated_by || '', updatedAt: a.local_updated_at || '',
+      };
+      Vue.nextTick(() => {
+        const el = document.getElementById('local-sol-dialog-input');
+        if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+      });
+    },
+    async saveLocalEdit() {
+      const e = this.localEdit;
+      e.saving = true; e.error = '';
+      try {
+        const url = `/api/alarms/${encodeURIComponent(e.department)}/${encodeURIComponent(e.device_model)}/${encodeURIComponent(e.code)}/local`;
+        const r = await AlarmApi.put(url, {
+          local_solution: (e.local_solution || '').trim(),
+          local_reason: (e.local_reason || '').trim(),
+        });
+        if (r.status === 403) { location.href = '/admin/login'; return; }
+        if (!r.ok) { e.error = (await r.json().catch(() => ({}))).error || '儲存失敗'; e.saving = false; return; }
+        await this.load();
+        this.localEdit = null;
+        this.showToast(`${e.code} 現場方案已儲存`);
+      } catch (err) {
+        e.error = '網路錯誤，請稍後再試'; e.saving = false;
+      }
     },
     async saveAlarm() {
       this.alarmError = '';
