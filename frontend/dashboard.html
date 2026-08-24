@@ -497,6 +497,12 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
                   <option value="local">已有現場做法（{{ solutionStatusCounts.local }}）</option>
                 </select>
                 <input class="input toolbar-field" style="width:200px" v-model="alarmListSearch" placeholder="搜尋代碼或描述…" />
+                <select class="input toolbar-field" style="width:110px" v-model.number="alarmPageSize">
+                  <option :value="5">每頁 5 筆</option>
+                  <option :value="10">每頁 10 筆</option>
+                  <option :value="20">每頁 20 筆</option>
+                  <option :value="50">每頁 50 筆</option>
+                </select>
                 <button v-if="!isAll" class="btn btn-primary blueprint toolbar-field" @click="newAlarm">
                   <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
                   ＋ 新增警報
@@ -508,7 +514,7 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
             <table class="table" style="min-width:760px">
               <thead><tr><th>代碼</th><th>機種</th><th>嚴重度</th><th>描述</th><th>處置狀態</th><th>回饋</th><th></th></tr></thead>
               <tbody>
-                <tr v-for="a in filteredAlarms" :key="a.device_model+a.code">
+                <tr v-for="a in pagedAlarms" :key="a.device_model+a.code">
                   <td style="font-weight:500; white-space:nowrap">{{ a.code }}</td>
                   <td style="white-space:nowrap">{{ a.device_model || '—' }}</td>
                   <td><span class="tag" :class="sevTag(a.severity)">{{ a.severity || '—' }}</span></td>
@@ -531,6 +537,13 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
             </table>
             </div>
             <p v-if="!filteredAlarms.length" style="font-size:13px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">無符合資料</p>
+            <div v-if="filteredAlarms.length" style="display:flex; align-items:center; justify-content:space-between; padding-top:6px">
+              <span style="font-size:12px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">第 {{ alarmPageIdx+1 }} / {{ alarmTotalPages }} 頁 · 共 {{ filteredAlarms.length }} 筆 · 每頁 {{ alarmPageSize }} 筆</span>
+              <div style="display:flex; gap:8px">
+                <button class="btn btn-secondary" @click="alarmPageIdx = Math.max(0, alarmPageIdx-1)" :disabled="alarmPageIdx===0">上一頁</button>
+                <button class="btn btn-secondary" @click="alarmPageIdx = Math.min(alarmTotalPages-1, alarmPageIdx+1)" :disabled="alarmPageIdx>=alarmTotalPages-1">下一頁</button>
+              </div>
+            </div>
           </section>
 
           <section class="card blueprint" style="padding:16px; gap:10px">
@@ -924,6 +937,7 @@ createApp({
       scanPageIdx: 0,
 
       alarmListDevice: '', alarmListSearch: '', alarmListSolutionStatus: '',
+      alarmPageIdx: 0, alarmPageSize: 20,
       alarmDraft: null, isNewAlarm: false, alarmKeywordsText: '', alarmError: '',
       localEdit: null,
       deviceDraft: null, deviceError: '',
@@ -1059,9 +1073,23 @@ createApp({
       const start = Math.min(this.scanPageIdx, this.scanTotalPages - 1) * 20;
       return this.filteredScans.slice(start, start + 20);
     },
+    alarmTotalPages() {
+      return Math.max(1, Math.ceil(this.filteredAlarms.length / this.alarmPageSize));
+    },
+    pagedAlarms() {
+      const start = Math.min(this.alarmPageIdx, this.alarmTotalPages - 1) * this.alarmPageSize;
+      return this.filteredAlarms.slice(start, start + this.alarmPageSize);
+    },
   },
   watch: {
     filteredScans() { this.scanPageIdx = 0; },
+    // filteredAlarms 本身依賴 alarmListDevice/alarmListSolutionStatus/
+    // alarmListSearch，篩選條件一變就重置頁碼；alarmPageSize 額外監聽，
+    // 否則切換每頁筆數時頁碼可能超出新的總頁數（見 pagedAlarms 的
+    // Math.min 保護，這裡重置是為了讓使用者體感從第一頁開始，不是為了
+    // 避免陣列越界）。
+    filteredAlarms() { this.alarmPageIdx = 0; },
+    alarmPageSize() { this.alarmPageIdx = 0; },
   },
   async mounted() {
     // 超管的檢視部門：URL query 為唯一權威，sessionStorage 只是重載後的
