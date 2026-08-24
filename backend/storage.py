@@ -38,7 +38,12 @@ class JsonStore:
         return _data_dir() / self.filename
 
     def _match_fields(self) -> list:
-        return ["model"] if self.is_devices else ["device_model", "code"]
+        # variant 加入 alarms 主鍵後這裡要跟著加，否則本機/測試模式下
+        # 同一 code 的多個變體會被判成「同一筆」互相覆蓋（PLAN_variant，
+        # 這個坑先在 SupabaseStore.pk_fields 補過一次，JsonStore 這邊
+        # 是獨立的判斷邏輯，容易漏改——實測發現匯入 114 筆多變體資料
+        # 被壓縮成 28 筆，就是這裡漏掉 variant 導致）。
+        return ["model"] if self.is_devices else ["device_model", "code", "variant"]
 
     def probe(self) -> None:
         """健康檢查專用，介面對齊 SupabaseStore.probe()。JsonStore 是本機檔案，
@@ -56,10 +61,16 @@ class JsonStore:
 
     def get_one(self, department: Optional[str] = None, match: dict = None) -> Optional[dict]:
         """介面對齊 SupabaseStore.get_one()。JsonStore 沒有分頁成本問題，
-        單純 load() 後線性找一筆即可，不需要另外的查詢路徑。"""
+        單純 load() 後線性找一筆即可，不需要另外的查詢路徑。
+
+        row.get(k, "") 而非 row.get(k)：既有測試種子資料（PLAN_variant
+        前建立）沒有 variant 欄位，讀出來是 None，但呼叫端傳入比對的
+        variant 值是正規化過的空字串——None != ""，會讓既有機種（不帶
+        variant 概念）在本機/測試模式下查不到自己。Supabase 端不會有
+        這個落差（DDL 已將 variant 設為 not null default ''）。"""
         match = match or {}
         for row in self.load(department):
-            if all(row.get(k) == v for k, v in match.items()):
+            if all(row.get(k, "") == v for k, v in match.items()):
                 return row
         return None
 
@@ -89,7 +100,9 @@ class JsonStore:
             fields = self._match_fields()
             replaced = False
             for i, row in enumerate(raw):
-                if all(row.get(f) == write_item.get(f) for f in fields):
+                # row.get(f, "")：見 get_one() 同樣的說明（既有列可能沒有
+                # variant 欄位，讀出 None，跟新寫入值的空字串比對要視為相等）。
+                if all(row.get(f, "") == write_item.get(f, "") for f in fields):
                     raw[i] = write_item
                     replaced = True
                     break
@@ -109,7 +122,9 @@ class JsonStore:
             if self.path.exists():
                 with self.path.open("r", encoding="utf-8") as f:
                     raw = json.load(f)
-            remaining = [row for row in raw if not all(row.get(k) == v for k, v in match.items())]
+            # row.get(k, "")：見 get_one() 同樣的說明（既有種子資料沒有
+            # variant 欄位時讀出 None，跟正規化後的空字串比對不相等）。
+            remaining = [row for row in raw if not all(row.get(k, "") == v for k, v in match.items())]
             self.path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self.path.with_suffix(".tmp")
             with tmp.open("w", encoding="utf-8") as f:
@@ -127,7 +142,8 @@ class JsonStore:
                     raw = json.load(f)
             updated = None
             for row in raw:
-                if all(row.get(k) == v for k, v in match.items()):
+                # row.get(k, "")：見 get_one() 同樣的說明。
+                if all(row.get(k, "") == v for k, v in match.items()):
                     row.update(patch)
                     updated = row
                     break
@@ -253,11 +269,30 @@ class SupabaseStore:
             result = [_row_to_device(row) for row in result]
         return result
 
+    def _require_full_pk_match(self, match: dict) -> None:
+        """match 必須包含除 department 外的完整主鍵欄位，否則 PostgREST
+        在條件不足時會回多列，get_one()/patch_one()/delete_one() 目前的
+        寫法是靜默取第一筆／全部命中中的一筆——順序不保證，看起來完全
+        正常但其實是任意一筆。variant 加入主鍵後這個風險是真實的：呼叫
+        端若忘記帶 variant，在多變體機種上會打到不確定是哪一筆。
+
+        漏帶時直接 ValueError（開發階段就炸），不是讓查詢默默用不完整
+        的條件跑下去——跟 department 參數必填、漏傳就報錯是同一個原則
+        （那次抓到了 /ping 漏傳 department 的問題）。這層檢查自動涵蓋
+        未來新增的所有呼叫點，不需要另外維護一份端點清單。"""
+        missing = set(self.pk_fields) - {"department"} - set(match)
+        if missing:
+            raise ValueError(
+                f"{self.table} 的 match 缺少主鍵欄位：{sorted(missing)}。"
+                f"條件不足會取到任意一列，不允許執行。"
+            )
+
     def get_one(self, department: str, match: dict) -> Optional[dict]:
         """單筆精確查詢，不分頁、不撈整個部門（外部審查第四輪發現：
         alarms 有 1759 筆，load() 兩次 HTTP 往返只為了取一列做稽核用的
         old_data 或存在性檢查，隨部門警報數線性變慢）。match 為精確比對
-        條件，同 delete_one()/patch_one() 的定位方式。"""
+        條件，同 delete_one()/patch_one() 的定位方式，必須含完整主鍵。"""
+        self._require_full_pk_match(match)
         qs_parts = [f"select=*", f"department=eq.{urllib.parse.quote(department, safe='')}"]
         for k, v in match.items():
             qs_parts.append(f"{k}=eq.{urllib.parse.quote(str(v), safe='')}")
@@ -334,7 +369,9 @@ class SupabaseStore:
         return _row_to_device(row) if self.is_devices else row
 
     def delete_one(self, department: str, match: dict) -> None:
-        """單筆刪除，match 為 {欄位: 值} 的精確比對條件，一律含 department。"""
+        """單筆刪除，match 為 {欄位: 值} 的精確比對條件，一律含 department，
+        且必須含完整主鍵（見 _require_full_pk_match）。"""
+        self._require_full_pk_match(match)
         qs_parts = [f"department=eq.{urllib.parse.quote(department, safe='')}"]
         for k, v in match.items():
             qs_parts.append(f"{k}=eq.{urllib.parse.quote(str(v), safe='')}")
@@ -344,9 +381,11 @@ class SupabaseStore:
     def patch_one(self, department: str, match: dict, patch: dict) -> Optional[dict]:
         """單筆部分更新（PLAN_local_solution.md 4.3 節：只改呼叫端明確給的
         欄位，其餘欄位不動）。match 為精確比對條件、一律含 department，
-        跟 delete_one() 同樣的定位方式；不用 upsert_one()，因為那是整筆
-        覆蓋語意，這裡只想動 patch 裡列出的欄位，不想動到其他欄位（也不需要
-        呼叫端先讀出整筆再合併）。找不到符合 match 的列時回傳 None。"""
+        且必須含完整主鍵（見 _require_full_pk_match），跟 delete_one()
+        同樣的定位方式；不用 upsert_one()，因為那是整筆覆蓋語意，這裡
+        只想動 patch 裡列出的欄位，不想動到其他欄位（也不需要呼叫端
+        先讀出整筆再合併）。找不到符合 match 的列時回傳 None。"""
+        self._require_full_pk_match(match)
         qs_parts = [f"department=eq.{urllib.parse.quote(department, safe='')}"]
         for k, v in match.items():
             qs_parts.append(f"{k}=eq.{urllib.parse.quote(str(v), safe='')}")
@@ -555,16 +594,21 @@ class AuditLogger:
         return rows[:limit], truncated
 
     def list_for_alarm(self, department: str, device_model: str, code: str,
-                        operation: str, limit: int) -> list:
+                        operation: str, limit: int, variant: str = "") -> list:
         """單筆警報的變更紀錄，department 為必填（PLAN 3.6 節：跨部門查詢
         一律要求呼叫端主動決定範圍，不提供「不過濾」的隱式預設）。
 
         只回傳指定 operation（現場處置做法場景下固定傳 local_update）——
         一般使用者不需要看到批次匯入、機種變更這類技術性軌跡，那些留在
-        後台的 /api/audit（PLAN_local_solution.md 3.2 節）。"""
+        後台的 /api/audit（PLAN_local_solution.md 3.2 節）。
+
+        variant 必須一併過濾（PLAN_variant）：code 不再是機種底下唯一的
+        識別，同一 code 可能有多個 variant，不過濾會把不同變體的變更
+        歷史混在一起顯示，讓使用者以為某段內容是「這個變體」的異動，
+        實際上是另一個變體的。"""
         if not _use_supabase():
             return []
-        return self._load_supabase_for_alarm(department, device_model, code, operation, limit)
+        return self._load_supabase_for_alarm(department, device_model, code, operation, limit, variant)
 
     # ── JSON backend ────────────────────────────────────────────────
 
@@ -645,13 +689,13 @@ class AuditLogger:
             return []
 
     def _load_supabase_for_alarm(self, department: str, device_model: str, code: str,
-                                  operation: str, limit: int) -> list:
-        """alarm_history 沒有獨立的 device_model 欄位（只有 code/department/
-        operation 是一般欄位），device_model 存在 new_data/old_data 這兩個
-        JSON 欄位裡。用 PostgREST 的 JSON 路徑運算子 ->> 過濾
-        new_data->>device_model（local_update 這個 operation 只改
-        local_solution/local_reason，不會改 device_model，用 new_data
-        過濾足夠，不需要同時比對 old_data）。"""
+                                  operation: str, limit: int, variant: str = "") -> list:
+        """alarm_history 沒有獨立的 device_model/variant 欄位（只有 code/
+        department/operation 是一般欄位），兩者都存在 new_data/old_data
+        這兩個 JSON 欄位裡。用 PostgREST 的 JSON 路徑運算子 ->> 過濾
+        new_data->>device_model 與 new_data->>variant（local_update 這個
+        operation 只改 local_solution/local_reason，不會改 device_model/
+        variant，用 new_data 過濾足夠，不需要同時比對 old_data）。"""
         try:
             base = os.environ.get("SUPABASE_URL", "").rstrip("/")
             key = os.environ.get("SUPABASE_KEY", "")
@@ -661,6 +705,7 @@ class AuditLogger:
                 f"&code=eq.{urllib.parse.quote(code, safe='')}"
                 f"&operation=eq.{urllib.parse.quote(operation, safe='')}"
                 f"&new_data->>device_model=eq.{urllib.parse.quote(device_model, safe='')}"
+                f"&new_data->>variant=eq.{urllib.parse.quote(variant, safe='')}"
                 f"&order=changed_at.desc&limit={limit}"
             )
             req = urllib.request.Request(
@@ -947,7 +992,7 @@ class AlarmSuggestionStore:
             return json.loads(raw) if raw.strip() else []
 
     def create(self, department: str, device_model: str, code: str,
-               suggestion: str, reason: Optional[str], submitted_by: str) -> dict:
+               suggestion: str, reason: Optional[str], submitted_by: str, variant: str = "") -> dict:
         """一般使用者提交建議，狀態固定為 pending，不直接寫入 alarms
         （PLAN_local_solution.md 2.2 節：一個人改、全部門立刻看到，
         工廠環境風險過高，所以只能建議、由管理員審核後才生效）。"""
@@ -955,7 +1000,7 @@ class AlarmSuggestionStore:
             return {}
         body = {
             "department": department, "device_model": device_model, "code": code,
-            "suggestion": suggestion, "reason": reason, "submitted_by": submitted_by,
+            "variant": variant, "suggestion": suggestion, "reason": reason, "submitted_by": submitted_by,
         }
         result = self._req("POST", f"{self._TABLE}",
                            [{k: v for k, v in body.items() if v is not None}],
@@ -980,7 +1025,7 @@ class AlarmSuggestionStore:
             qs += f"&department=eq.{urllib.parse.quote(department, safe='')}"
         return self._req("GET", f"{self._TABLE}?{qs}")
 
-    def has_pending(self, department: str, device_model: str, code: str) -> bool:
+    def has_pending(self, department: str, device_model: str, code: str, variant: str = "") -> bool:
         """單筆存在性檢查，不撈整個部門的待審清單（外部審查第四輪發現：
         submit_local_suggestion() 原本呼叫 list_pending() 只為了檢查某一筆
         有沒有待審建議，隨部門待審筆數增加會越來越浪費）。用
@@ -999,7 +1044,8 @@ class AlarmSuggestionStore:
         qs = (f"select=id&status=eq.pending"
               f"&department=eq.{urllib.parse.quote(department, safe='')}"
               f"&device_model=eq.{urllib.parse.quote(device_model, safe='')}"
-              f"&code=eq.{urllib.parse.quote(code, safe='')}")
+              f"&code=eq.{urllib.parse.quote(code, safe='')}"
+              f"&variant=eq.{urllib.parse.quote(variant, safe='')}")
         req = urllib.request.Request(
             f"{base}/rest/v1/{self._TABLE}?{qs}",
             headers={"apikey": key, "Authorization": f"Bearer {key}",
@@ -1137,7 +1183,7 @@ class LoginAttemptStore:
 
 
 if _use_supabase():
-    alarms_store = SupabaseStore("alarms", pk="code", pk_fields=["department", "device_model", "code"])
+    alarms_store = SupabaseStore("alarms", pk="code", pk_fields=["department", "device_model", "code", "variant"])
     devices_store = SupabaseStore("devices", pk="id", pk_fields=["department", "model"], is_devices=True)
 else:
     alarms_store = JsonStore("alarms.json")

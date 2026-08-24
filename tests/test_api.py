@@ -216,3 +216,31 @@ def test_audit_from_to_invalid_format_rejected(client):
     """from/to 給不是 YYYY-MM-DD 的格式要明確 400，不能讓底層 fromisoformat 拋例外。"""
     assert client.get("/api/audit?from=not-a-date").status_code == 400
     assert client.get("/api/audit?to=2026/08/24").status_code == 400
+
+
+# ── SupabaseStore._require_full_pk_match（PLAN_variant 第三層防護）──────
+# variant 加入主鍵後，get_one()/patch_one()/delete_one() 若收到不完整的
+# match（缺 variant），PostgREST 條件不足會回多列，靜默取第一筆是任意的
+# ——這支測試釘住「漏帶主鍵欄位時直接 ValueError，不讓查詢默默用不完整
+# 條件跑下去」，跟 department 參數必填漏傳就報錯是同一個原則。純邏輯
+# 測試，不需要真實 Supabase 連線。
+
+def test_require_full_pk_match_rejects_missing_field():
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
+    from storage import SupabaseStore
+
+    store = SupabaseStore("alarms", pk="code", pk_fields=["department", "device_model", "code", "variant"])
+    with pytest.raises(ValueError, match="variant"):
+        store._require_full_pk_match({"device_model": "ACM001", "code": "0001"})
+
+
+def test_require_full_pk_match_accepts_complete_match():
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
+    from storage import SupabaseStore
+
+    store = SupabaseStore("alarms", pk="code", pk_fields=["department", "device_model", "code", "variant"])
+    store._require_full_pk_match({"device_model": "ACM001", "code": "0001", "variant": ""})  # 不應拋例外

@@ -29,9 +29,23 @@ FRONTEND = BASE / "frontend"
 ALARM_FIELDS = [
     "code", "device_model", "severity",
     "description", "cause", "solution", "keywords",
-    "sol_steps",
+    "sol_steps", "variant",
 ]
 SEVERITIES = {"嚴重", "警告", "資訊"}
+
+
+def normalize_variant(s: str) -> str:
+    """variant 進主鍵，任何字元差異都是不同的警報。與
+    Variant/parse_alarms.py 的 normalize_variant() 是同一份邏輯（複製
+    非 import，因為那支工具是離線 CLI、不屬於 backend 部署範圍），
+    兩邊修改要同步。做不影響顯示的正規化，避免前端複製貼上帶入的
+    破折號/空白變體讓 variant 打不到既有列（PATCH 打空回 404）。
+    刻意不做大小寫轉換——原廠標題大小寫穩定，轉了反而讓顯示變醜。"""
+    s = " ".join((s or "").split())
+    s = s.replace("–", "-").replace("—", "-")   # en/em dash → hyphen
+    s = s.replace("（", "(").replace("）", ")")   # 全形括號
+    s = s.replace("／", "/")
+    return s.strip()
 
 SUPER_DEPT_SENTINEL = "__super__"
 DEPT_ID_RE = re.compile(r"^[a-z0-9_]{1,32}$")
@@ -513,11 +527,22 @@ def create_app() -> Flask:
     @app.get("/api/alarms/<department>/<device_model>/<code>")
     @login_required
     def get_alarm(department: str, device_model: str, code: str):
+        # variant 走 query string，精確查詢——找不到就 404，不回傳「隨便
+        # 一筆看起來合理但其實是另一個變體」的資料。這支端點目前沒有
+        # 任何前端呼叫端，但契約維持跟既有一致（回單一物件），不要為了
+        # 猜測中的未來用途（前台多變體選擇 UI）改成回陣列——真的要做時
+        # 需求可能長得完全不一樣（例如另開一支 .../variants 端點，或
+        # 前台直接用 GET /api/alarms 全量查詢+前端篩選，不需要這支）。
+        # 見 update_alarm 同樣的說明：variant 不是租戶邊界，走 query
+        # string 不影響 resolve_target_department() 只讀 path 的規則。
         target = resolve_target_department(department)
-        for a in alarms_store.load(department=target):
-            if a["code"] == code and a.get("device_model") == device_model:
-                return jsonify(a)
-        abort(404, "找不到此警報代碼")
+        variant = normalize_variant(request.args.get("variant", ""))
+        row = alarms_store.get_one(department=target, match={
+            "device_model": device_model, "code": code, "variant": variant,
+        })
+        if row is None:
+            abort(404, "找不到此警報代碼")
+        return jsonify(row)
 
     @app.get("/api/devices")
     @login_required
@@ -619,27 +644,44 @@ def create_app() -> Flask:
         # normalize() 只保留 ALARM_FIELDS 白名單，不含 department，過濾後
         # 這個檢查永遠不會觸發（外部審查發現的死碼）。
         body = normalize(raw_body)
+        body["variant"] = normalize_variant(body.get("variant", ""))
         items = alarms_store.load(department=target)
-        if any(a["code"] == body["code"] and a.get("device_model") == body.get("device_model") for a in items):
+        if any(a["code"] == body["code"] and a.get("device_model") == body.get("device_model")
+               and normalize_variant(a.get("variant", "")) == body["variant"] for a in items):
             abort(409, "代碼已存在")
-        row = alarms_store.upsert_one(body, department=target, on_conflict="department,device_model,code")
+        row = alarms_store.upsert_one(body, department=target, on_conflict="department,device_model,code,variant")
         audit_logger.log("CREATE", department=target, new_data=row)
         return jsonify(row), 201
 
     @app.put("/api/alarms/<department>/<device_model>/<code>")
     @admin_required
     def update_alarm(department: str, device_model: str, code: str):
+        # variant 走 query string，不走 path——它是機種底下的變體識別，
+        # 不是租戶邊界，跟 resolve_target_department() 只讀 path 的規則
+        # 屬於不同層級：那條規則防的是「目標部門有多重來源導致超管的
+        # 請求可以繞路」，department 在這裡仍然只從 path 取，不受影響。
+        # 不走 path 是因為 variant 文字本身可能含 "/"（會被當成路徑
+        # 分隔符切斷）、可能是空字串（既有 1759 筆的常態，但 Werkzeug
+        # 的 <string> 轉換器不匹配空字串路徑段，會直接 404）。
         target = resolve_target_department(department)
+        variant = normalize_variant(request.args.get("variant", ""))
         raw_body = request.get_json(silent=True) or {}
         _check_body_department_conflict(raw_body, target)  # 見 create_alarm 同樣的說明
         body = normalize(raw_body, require_code=False)
         body["code"] = code
         body["device_model"] = device_model
+        # variant 進主鍵，編輯時唯讀（跟 code 一致）——改它等於刪一筆
+        # 建一筆，local_solution 會跟著脫鉤，不透過這個端點改。body 裡
+        # 若夾帶 variant 一律忽略，只認 query string 指定的那一筆。
+        body["variant"] = variant
         items = alarms_store.load(department=target)
-        old = next((a for a in items if a["code"] == code and a.get("device_model") == device_model), None)
+        old = next((a for a in items if a["code"] == code and a.get("device_model") == device_model
+                    and normalize_variant(a.get("variant", "")) == variant), None)
         if old is None:
-            abort(404, "找不到此警報代碼")
-        row = alarms_store.upsert_one(body, department=target, on_conflict="department,device_model,code")
+            has_multiple = sum(1 for a in items if a["code"] == code
+                               and a.get("device_model") == device_model) > 1
+            abort(404, "找不到此警報代碼" + ("（此代碼有多個變體，請指定 variant）" if has_multiple else ""))
+        row = alarms_store.upsert_one(body, department=target, on_conflict="department,device_model,code,variant")
         audit_logger.log("UPDATE", department=target, new_data=row, old_data=old)
         return jsonify(row)
 
@@ -647,11 +689,15 @@ def create_app() -> Flask:
     @admin_required
     def delete_alarm(department: str, device_model: str, code: str):
         target = resolve_target_department(department)
+        variant = normalize_variant(request.args.get("variant", ""))  # 見 update_alarm 同樣的說明
         items = alarms_store.load(department=target)
-        old = next((a for a in items if a["code"] == code and a.get("device_model") == device_model), None)
+        old = next((a for a in items if a["code"] == code and a.get("device_model") == device_model
+                    and normalize_variant(a.get("variant", "")) == variant), None)
         if old is None:
-            abort(404, "找不到此警報代碼")
-        alarms_store.delete_one(department=target, match={"device_model": device_model, "code": code})
+            has_multiple = sum(1 for a in items if a["code"] == code
+                               and a.get("device_model") == device_model) > 1
+            abort(404, "找不到此警報代碼" + ("（此代碼有多個變體，請指定 variant）" if has_multiple else ""))
+        alarms_store.delete_one(department=target, match={"device_model": device_model, "code": code, "variant": variant})
         audit_logger.log("DELETE", department=target, old_data=old)
         return "", 204
 
@@ -676,6 +722,7 @@ def create_app() -> Flask:
         resolve_target_department() 的目標部門，不能沿用 _confirmed_by()
         （那個服務的是無路徑部門段的端點，語意不同，見 4.4 節）。"""
         target = resolve_target_department(department)
+        variant = normalize_variant(request.args.get("variant", ""))  # 見 update_alarm 同樣的說明
         body = request.get_json(silent=True) or {}
         patch = {k: v for k, v in body.items() if k in LOCAL_EDITABLE}
         if not patch:
@@ -683,11 +730,14 @@ def create_app() -> Flask:
         role = "superadmin" if is_superadmin() else ("admin" if is_admin() else "user")
         patch["local_updated_by"] = f"{target}/{role}"
         patch["local_updated_at"] = datetime.now(timezone.utc).isoformat()
-        old_row = alarms_store.get_one(department=target, match={"device_model": device_model, "code": code})
+        match = {"device_model": device_model, "code": code, "variant": variant}
+        old_row = alarms_store.get_one(department=target, match=match)
         if old_row is None:
-            abort(404, "找不到此警報代碼")
-        row = alarms_store.patch_one(department=target,
-                                     match={"device_model": device_model, "code": code}, patch=patch)
+            items = alarms_store.load(department=target)
+            has_multiple = sum(1 for a in items if a["code"] == code
+                               and a.get("device_model") == device_model) > 1
+            abort(404, "找不到此警報代碼" + ("（此代碼有多個變體，請指定 variant）" if has_multiple else ""))
+        row = alarms_store.patch_one(department=target, match=match, patch=patch)
         if row is None:
             # patch_one() 打不到任何列——警報在上面 get_one() 查完之後被
             # 刪除的競態，或 PostgREST 過濾條件沒匹配到（不該發生，但
@@ -713,11 +763,16 @@ def create_app() -> Flask:
         唯讀。alarm_history 只有寫入路徑（AuditLogger.log），沒有
         update/delete 端點——稽核軌跡能被修改就沒有稽核價值。"""
         target = resolve_target_department(department)  # 跨部門一律 404
-        if alarms_store.get_one(department=target, match={"device_model": device_model, "code": code}) is None:
-            abort(404, "找不到此警報代碼")
+        variant = normalize_variant(request.args.get("variant", ""))  # 見 update_alarm 同樣的說明
+        match = {"device_model": device_model, "code": code, "variant": variant}
+        if alarms_store.get_one(department=target, match=match) is None:
+            items = alarms_store.load(department=target)
+            has_multiple = sum(1 for a in items if a["code"] == code
+                               and a.get("device_model") == device_model) > 1
+            abort(404, "找不到此警報代碼" + ("（此代碼有多個變體，請指定 variant）" if has_multiple else ""))
         rows = audit_logger.list_for_alarm(
             department=target, device_model=device_model, code=code,
-            operation="local_update", limit=20,
+            operation="local_update", limit=20, variant=variant,
         )
         return jsonify(rows)
 
@@ -751,7 +806,13 @@ def create_app() -> Flask:
         if not suggestion:
             abort(400, "suggestion 為必填")
         reason = (body.get("reason") or "").strip() or None
-        if alarms_store.get_one(department=target, match={"device_model": device_model, "code": code}) is None:
+        # variant 走 query string，跟其他以 code 定位單筆的端點一致（見
+        # update_alarm 的說明）。這條路徑（一般使用者提交建議）目前停用
+        # 中，但程式碼技術上要維持正確，避免多變體機種上誤判不存在。
+        variant = normalize_variant(request.args.get("variant", ""))
+        if alarms_store.get_one(department=target, match={
+            "device_model": device_model, "code": code, "variant": variant,
+        }) is None:
             abort(404, "找不到此警報代碼")
         # 防止同一筆警報已有待審建議時又重複提交——不區分是不是同一人
         # 提的，因為部門共用密碼追不到個人（見 PLAN_local_solution.md 9
@@ -760,12 +821,12 @@ def create_app() -> Flask:
         # 同一人連點兩下）的是資料庫的部分唯一索引（005 遷移），兩者
         # 不衝突——外部審查第四輪指出應用層檢查有 check-then-insert
         # 的競態視窗，資料庫層才是真正的保險。
-        if alarm_suggestion_store.has_pending(target, device_model, code):
+        if alarm_suggestion_store.has_pending(target, device_model, code, variant):
             abort(409, "這筆警報已有待審核的建議，請等管理員處理後再提交")
         role = "superadmin" if is_superadmin() else ("admin" if is_admin() else "user")
         try:
             row = alarm_suggestion_store.create(
-                department=target, device_model=device_model, code=code,
+                department=target, device_model=device_model, code=code, variant=variant,
                 suggestion=suggestion, reason=reason, submitted_by=f"{target}/{role}",
             )
         except urllib.error.HTTPError as e:
@@ -817,12 +878,17 @@ def create_app() -> Flask:
                      "local_updated_at": datetime.now(timezone.utc).isoformat()}
             if row.get("reason"):
                 patch["local_reason"] = row["reason"]
+            # variant 走 alarm_suggestions 本身的欄位（DDL 006 已加），
+            # 這條路徑停用中但要維持技術正確，見 create_suggestion 的說明。
+            suggestion_variant = normalize_variant(row.get("variant") or "")
             old = alarms_store.load(department=row["department"])
             old_row = next((a for a in old if a["code"] == row["code"]
-                            and a.get("device_model") == row["device_model"]), None)
-            new_row = alarms_store.patch_one(department=row["department"],
-                                             match={"device_model": row["device_model"], "code": row["code"]},
-                                             patch=patch)
+                            and a.get("device_model") == row["device_model"]
+                            and normalize_variant(a.get("variant", "")) == suggestion_variant), None)
+            new_row = alarms_store.patch_one(
+                department=row["department"],
+                match={"device_model": row["device_model"], "code": row["code"], "variant": suggestion_variant},
+                patch=patch)
             if new_row is None:
                 # 建議指向的警報在待審期間被刪除——alarm_suggestions 的外鍵
                 # 有 on delete cascade，理論上這筆建議會跟著消失，走不到這裡；
