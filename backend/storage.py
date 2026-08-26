@@ -1063,6 +1063,45 @@ class AiScanStore:
         return self._get("ai_scans",
                          f"select=*&order=created_at.desc&limit={limit}{self._dept_qs(department)}")
 
+    def count_recent(self, department: str, since_minutes: int) -> int:
+        """/api/analyze 節流用：該部門在最近 since_minutes 分鐘內已成功寫入
+        ai_scans 的筆數（PostgREST count，不搬資料）。以資料庫為唯一真實
+        來源、無狀態，理由同 LoginAttemptStore——多 worker/重啟下次數才
+        不會被稀釋。JsonStore fallback（非 Supabase）不啟用節流，回傳 0，
+        與登入節流既有的單租戶定位一致。
+
+        用既有的 ai_scans 表而非新開一張節流專用表：這張表本來就是每次
+        AI 分析成功後才寫入的記錄，拿來算「最近呼叫過幾次」語意上是
+        近似值（若 Gemini 呼叫失敗未寫入，不計入節流），不是精確的
+        請求層級計數器，但足以擋住這次要防的濫用情境（正常操作不會
+        在短時間內大量呼叫），且不需要新增表／migration，改動範圍
+        限縮在純程式碼層級。"""
+        if not _use_supabase():
+            return 0
+        since = (datetime.now(timezone.utc) - timedelta(minutes=since_minutes)).isoformat()
+        base = os.environ.get("SUPABASE_URL", "").rstrip("/")
+        key = os.environ.get("SUPABASE_KEY", "")
+        try:
+            req = urllib.request.Request(
+                f"{base}/rest/v1/ai_scans?select=id"
+                f"&department=eq.{urllib.parse.quote(department, safe='')}"
+                f"&created_at=gt.{urllib.parse.quote(since, safe='')}",
+                headers={
+                    "apikey": key, "Authorization": f"Bearer {key}",
+                    "Prefer": "count=exact", "Range": "0-0",
+                },
+                method="GET",
+            )
+            with urllib.request.urlopen(req) as r:
+                content_range = r.headers.get("Content-Range", "")
+                # 格式 "0-0/N"，N 是總筆數
+                return int(content_range.split("/")[-1]) if "/" in content_range else 0
+        except Exception:
+            # 節流查詢失敗不可擋住正常分析請求——fail-open，理由同
+            # LoginAttemptStore.record() 的既有原則：節流是防濫用機制，
+            # 不是核心功能，查詢本身出錯不該讓使用者完全無法使用 AI 分析。
+            return 0
+
     def load_corrections(self, department: Optional[str], limit: int = 5000) -> list:
         return self._get("ai_corrections",
                          f"select=*&order=created_at.desc&limit={limit}{self._dept_qs(department)}")

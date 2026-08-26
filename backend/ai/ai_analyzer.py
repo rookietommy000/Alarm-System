@@ -93,6 +93,9 @@ class GeminiAnalyzer(BaseAnalyzer):
                 types.Part.from_bytes(data=base64.b64decode(image_b64), mime_type=mime_type),
                 _ALARM_PROMPT,
             ],
+            # 比照 LocalAnalyzer 的 timeout=30（秒）；SDK 的 timeout 單位是毫秒。
+            # 原本沒有設定，Gemini API 請求掛住時會無限期卡住整個 worker。
+            config=types.GenerateContentConfig(http_options=types.HttpOptions(timeout=30000)),
         )
         raw = response.text.strip()
         return _parse_response(raw, self)

@@ -1473,11 +1473,23 @@ def create_app() -> Flask:
         scope, dept = scope_department()
         return jsonify(view_store.stats(department=(dept if scope == DeptScope.DEPT else None)))
 
+    ANALYZE_RATE_LIMIT_PER_HOUR = 20
+
     @app.post("/api/analyze")
     @login_required
     def analyze_image():
         if is_superadmin():
             abort(400, "請以部門帳號操作")
+        department = session.get("department")
+        # 每次成功呼叫都會實際觸發 Gemini 付費 API，這裡沒有上限的話任何
+        # 已登入部門帳號可以無限次觸發——節流用既有的 ai_scans 表估算
+        # 「最近一小時已呼叫幾次」（見 AiScanStore.count_recent 的取捨
+        # 說明），量級抓一般操作不會踩到、但能擋住異常大量呼叫的範圍。
+        recent = ai_scan_store.count_recent(department, since_minutes=60)
+        if recent >= ANALYZE_RATE_LIMIT_PER_HOUR:
+            response = jsonify({"error": f"AI 分析呼叫已達每小時上限（{ANALYZE_RATE_LIMIT_PER_HOUR} 次），請稍後再試"})
+            response.status_code = 429
+            return response
         body = request.get_json(silent=True) or {}
         image_b64 = body.get("image")
         mime_type = body.get("mime_type", "image/jpeg")
@@ -1487,7 +1499,7 @@ def create_app() -> Flask:
         try:
             from ai import run_pipeline
             return jsonify(run_pipeline(image_b64, mime_type, known_model=known_model,
-                                        department=session.get("department")))
+                                        department=department))
         except ImportError:
             app.logger.exception("AI 模組未安裝")
             abort(503, "AI 模組未安裝")
