@@ -73,6 +73,10 @@ pytest tests/test_api.py::test_create_alarm -v
 
 前台任何需要把 `department` 組進 URL 的地方，走 `frontend/index.html` 的 `deptOf(a)` helper，不要各自寫 fallback——超管的 `whoami.department` 是 `null`，直接塞進字串會產生看起來合理但無效的路徑（`"null"` 字面字串或塌陷成空字串），這個坑在同一輪修過兩次才收斂成單一入口。
 
+## 可用 Skill
+
+- `llm-council`（`.claude/skills/llm-council/`）：重大決策要多角度壓力測試時使用（例如「要不要做X還是Y」「這個方向對不對」）。用 5 個不同思考角度的 sub-agent 各自分析、互相匿名審閱，最後彙整成一份裁決。觸發詞見該 skill 檔案開頭的 description，不用於單一正解的事實查詢或單純的建立任務。
+
 ## 資料模型
 
 警報欄位（`data/alarms.json`）：

@@ -56,6 +56,12 @@
     });
   }
 
+  /** multipart/form-data 專用（批次匯入上傳檔案）——不設 Content-Type，
+   * 讓瀏覽器自己帶上正確的 boundary，手動設反而會壞掉。 */
+  function postForm(url, formData) {
+    return apiFetch(url, { method: 'POST', body: formData });
+  }
+
   /** whoami 快取：一個頁面生命週期內不太會變，避免每個元件掛載都重打一次。
    * force=true 可強制重新查詢（例如部門切換器操作後）。 */
   async function whoami(force) {
@@ -69,5 +75,5 @@
     return whoamiPromise;
   }
 
-  window.AlarmApi = { get, post, put, delete: del, whoami };
+  window.AlarmApi = { get, post, put, delete: del, postForm, whoami };
 })();

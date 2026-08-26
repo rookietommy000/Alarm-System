@@ -103,7 +103,17 @@ class JsonStore:
                 # row.get(f, "")：見 get_one() 同樣的說明（既有列可能沒有
                 # variant 欄位，讀出 None，跟新寫入值的空字串比對要視為相等）。
                 if all(row.get(f, "") == write_item.get(f, "") for f in fields):
-                    raw[i] = write_item
+                    # 部分合併，不是整列取代（外部審查發現：批次匯入的
+                    # OPTIONAL_FIELDS 保護機制——見 alarm_ingest/commit.py
+                    # 的 _to_payload()——只在 SupabaseStore 成立，因為
+                    # PostgREST 的 merge-duplicates upsert 對缺席欄位是
+                    # 保留舊值；這裡若直接 raw[i] = write_item，payload
+                    # 缺的欄位會從這一列完全消失，不是保留舊值，讓本機/
+                    # 測試環境跟正式環境行為分岔）。write_item 本身若已
+                    # 含完整欄位（既有呼叫端 create_alarm/update_alarm
+                    # 皆如此），{**row, **write_item} 等同整列取代，
+                    # 行為不變。
+                    raw[i] = {**row, **write_item}
                     replaced = True
                     break
             if not replaced:
@@ -719,6 +729,141 @@ class AuditLogger:
             return []
 
 
+class ImportSnapshotStore:
+    """批次匯入的整批復原機制（規劃第 5 階段，跟 AI 無關的保底機制）。
+
+    commit_rows() 是逐筆 upsert，對已存在的列是 merge（覆蓋舊值），
+    不是新增——真正的復原必須記下「寫入前的值」，不能只記「這次新增
+    了哪些 code」（否則覆蓋掉的舊值就回不來了）。這裡的策略是 commit
+    每一筆之前先用 alarms_store.get_one() 讀出當前值（不存在則為
+    None）存進快照，undo 時逐筆回寫該值或刪除。
+
+    只在 Supabase 模式運作（JsonStore fallback 沒有 import_snapshots
+    這張表，本機/測試模式不提供復原——批次匯入本身在 JsonStore 模式
+    下影響範圍小，直接改資料檔即可）。JsonStore fallback 下 save_snapshot
+    回傳 None、list_snapshots/undo 回空結果，呼叫端據此判斷不可用。
+    """
+
+    def save_snapshot(self, department: str, device_models: list, rows_before: list,
+                       total_rows: int, import_mode: str) -> Optional[int]:
+        """rows_before：[{"device_model", "code", "variant", "before_data"}, ...]，
+        before_data 為 None 代表這筆在 commit 前不存在。回傳新建快照的 id，
+        JsonStore fallback 下回傳 None（不支援）。"""
+        if not _use_supabase():
+            return None
+        base = os.environ.get("SUPABASE_URL", "").rstrip("/")
+        key = os.environ.get("SUPABASE_KEY", "")
+        headers = {"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+        try:
+            snap_req = urllib.request.Request(
+                f"{base}/rest/v1/import_snapshots",
+                data=json.dumps({
+                    "department": department,
+                    "device_models": ",".join(sorted(set(device_models))),
+                    "total_rows": total_rows,
+                    "import_mode": import_mode,
+                }).encode(),
+                headers={**headers, "Prefer": "return=representation"},
+                method="POST",
+            )
+            with urllib.request.urlopen(snap_req) as r:
+                snapshot = json.loads(r.read().decode())[0]
+            snapshot_id = snapshot["id"]
+
+            if rows_before:
+                row_payload = [
+                    {"snapshot_id": snapshot_id, "device_model": r["device_model"],
+                     "code": r["code"], "variant": r.get("variant", ""), "before_data": r["before_data"]}
+                    for r in rows_before
+                ]
+                rows_req = urllib.request.Request(
+                    f"{base}/rest/v1/import_snapshot_rows",
+                    data=json.dumps(row_payload).encode(),
+                    headers={**headers, "Prefer": "return=minimal"},
+                    method="POST",
+                )
+                urllib.request.urlopen(rows_req)
+            return snapshot_id
+        except Exception as e:
+            # 快照寫入失敗不得中斷匯入本身——復原是保底機制，不是匯入的
+            # 必要條件；沒有快照只是這次不能 undo，不代表資料沒寫進去。
+            # 但完全吞掉例外會讓「表還沒建（007 migration 沒執行）」跟
+            # 「網路抖動」這兩種情況都靜默變成 snapshot_id=None，運維
+            # 端毫無線索可查——外部審查發現的問題：正式環境若忘記跑
+            # migration，匯入會一直「成功但沒有復原保底」卻沒有任何
+            # 警示。印一行 stderr，不中斷主流程，但至少留下痕跡。
+            import sys as _sys
+            print(f"[import_snapshot_store] save_snapshot 失敗（不影響本次匯入寫入結果）："
+                  f"{type(e).__name__}: {e}", file=_sys.stderr)
+            return None
+
+    def list_snapshots(self, department: str, limit: int = 50) -> list:
+        if not _use_supabase():
+            return []
+        base = os.environ.get("SUPABASE_URL", "").rstrip("/")
+        key = os.environ.get("SUPABASE_KEY", "")
+        try:
+            qs = (f"select=*&department=eq.{urllib.parse.quote(department, safe='')}"
+                  f"&order=created_at.desc&limit={limit}")
+            req = urllib.request.Request(
+                f"{base}/rest/v1/import_snapshots?{qs}",
+                headers={"apikey": key, "Authorization": f"Bearer {key}"},
+                method="GET",
+            )
+            with urllib.request.urlopen(req) as r:
+                return json.loads(r.read().decode())
+        except Exception:
+            return []
+
+    def get_snapshot(self, snapshot_id: int, department: str) -> Optional[dict]:
+        """回傳 {"snapshot": {...}, "rows": [...]}，department 必須相符
+        （越權查詢一律當作不存在，不外洩其他部門是否有這筆快照）。"""
+        if not _use_supabase():
+            return None
+        base = os.environ.get("SUPABASE_URL", "").rstrip("/")
+        key = os.environ.get("SUPABASE_KEY", "")
+        headers = {"apikey": key, "Authorization": f"Bearer {key}"}
+        try:
+            snap_req = urllib.request.Request(
+                f"{base}/rest/v1/import_snapshots?id=eq.{snapshot_id}"
+                f"&department=eq.{urllib.parse.quote(department, safe='')}",
+                headers=headers, method="GET",
+            )
+            with urllib.request.urlopen(snap_req) as r:
+                snaps = json.loads(r.read().decode())
+            if not snaps:
+                return None
+            rows_req = urllib.request.Request(
+                f"{base}/rest/v1/import_snapshot_rows?snapshot_id=eq.{snapshot_id}",
+                headers=headers, method="GET",
+            )
+            with urllib.request.urlopen(rows_req) as r:
+                rows = json.loads(r.read().decode())
+            return {"snapshot": snaps[0], "rows": rows}
+        except Exception:
+            return None
+
+    def mark_undone(self, snapshot_id: int, result: dict) -> None:
+        if not _use_supabase():
+            return
+        base = os.environ.get("SUPABASE_URL", "").rstrip("/")
+        key = os.environ.get("SUPABASE_KEY", "")
+        try:
+            req = urllib.request.Request(
+                f"{base}/rest/v1/import_snapshots?id=eq.{snapshot_id}",
+                data=json.dumps({
+                    "undone_at": datetime.now(timezone.utc).isoformat(),
+                    "undone_result": result,
+                }).encode(),
+                headers={"apikey": key, "Authorization": f"Bearer {key}",
+                         "Content-Type": "application/json", "Prefer": "return=minimal"},
+                method="PATCH",
+            )
+            urllib.request.urlopen(req)
+        except Exception:
+            pass
+
+
 class FeedbackStore:
     """Append-only store for user feedback entries."""
 
@@ -1196,3 +1341,4 @@ feedback_store = FeedbackStore()
 view_store = ViewStore()
 audit_logger = AuditLogger()
 ai_scan_store = AiScanStore()
+import_snapshot_store = ImportSnapshotStore()

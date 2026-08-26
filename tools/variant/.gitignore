@@ -1,0 +1,7 @@
+# 原廠文件與解析輸出含保密內容，一律不進版控。
+# repo 為 public，且 git 歷史一旦寫入就很難清除。
+fixtures/
+output/
+*.xlsx
+*.xlsm
+FILL203*.json

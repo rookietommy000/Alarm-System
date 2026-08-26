@@ -22,6 +22,23 @@ from storage import (
     ai_scan_store, alarm_suggestion_store, alarms_store, audit_logger, department_store,
     devices_store, feedback_store, login_attempt_store, view_store, _use_supabase,
 )
+from alarm_ingest import (
+    load_file as ingest_load_file,
+    validate_devices_exist as ingest_validate_devices_exist,
+    dedupe_check as ingest_dedupe_check,
+    completeness_report as ingest_completeness_report,
+    check_variant_consistency as ingest_check_variant_consistency,
+    decide_variant_mode as ingest_decide_variant_mode,
+    commit_rows as ingest_commit_rows,
+    COMPLETENESS_WARN_THRESHOLD as INGEST_COMPLETENESS_WARN_THRESHOLD,
+    read_grid as ingest_read_grid,
+    detect_columns as ingest_detect_columns,
+    apply_semantic_fix as ingest_apply_semantic_fix,
+)
+from alarm_ingest.detect import _cell_to_str as ingest_cell_to_str
+from alarm_ingest.split import split_texts as ingest_split_texts, MAX_BATCH_SIZE as INGEST_SPLIT_MAX_BATCH
+from alarm_ingest.commit import undo_snapshot as ingest_undo_snapshot
+from storage import import_snapshot_store
 
 BASE = Path(__file__).resolve().parent.parent
 FRONTEND = BASE / "frontend"
@@ -32,6 +49,13 @@ ALARM_FIELDS = [
     "sol_steps", "variant",
 ]
 SEVERITIES = {"嚴重", "警告", "資訊"}
+
+# 批次匯入上傳限制（PLAN 批次匯入 UI）：2MB 涵蓋單一機種的正常匯入量，
+# 超過這個大小的來源檔本身就該懷疑格式跑掉或混入非預期資料。刻意只在
+# 這兩個端點檢查，不用 Flask 的 app.config["MAX_CONTENT_LENGTH"] 全域
+# 設定——/api/analyze 會收 base64 圖片，全域上限會誤傷那條路徑。
+BULK_IMPORT_MAX_BYTES = 2 * 1024 * 1024
+BULK_IMPORT_MAX_ROWS = 1000
 
 
 def normalize_variant(s: str) -> str:
@@ -700,6 +724,504 @@ def create_app() -> Flask:
         alarms_store.delete_one(department=target, match={"device_model": device_model, "code": code, "variant": variant})
         audit_logger.log("DELETE", department=target, old_data=old)
         return "", 204
+
+    # ── 批次匯入（後台批次匯入 UI 規劃）───────────────────────────────
+    # 只收已解析完的標準格式（CSV/JSON/Excel 固定範本），不收原始廠商
+    # 文件——那條路線（智慧欄位偵測、Word/PDF）留在 Variant/parse_alarms.py
+    # 給技術端用 CLI 處理，見規劃第 0/1 節的範圍決策。
+    #
+    # preview 與 commit 跑完全相同的驗證 pipeline，差別只在最後有沒有
+    # 呼叫 commit_rows() 寫入——這樣「預覽顯示成功、確認後卻被擋下」
+    # 的情況不會發生（第 3.2 節）。
+
+    def _bulk_import_read_upload(target: str):
+        """兩支端點共用的上傳檔案讀取與初步解析，回傳 rows（解析成功）
+        或直接 abort（讀取/解析/筆數超限失敗）。target 只用於錯誤訊息，
+        不影響解析邏輯本身。"""
+        if "file" not in request.files:
+            abort(400, "缺少上傳檔案（form field 需為 file）")
+        upload = request.files["file"]
+        if not upload.filename:
+            abort(400, "未選擇檔案")
+
+        suffix = Path(upload.filename).suffix.lower()
+        if suffix not in (".csv", ".json", ".xlsx", ".xlsm"):
+            abort(400, f"不支援的檔案格式：{suffix}（支援 .csv/.json/.xlsx/.xlsm）")
+
+        raw = upload.read()
+        if len(raw) > BULK_IMPORT_MAX_BYTES:
+            abort(400, f"檔案過大（{len(raw)} bytes），上限 {BULK_IMPORT_MAX_BYTES} bytes")
+
+        # ingest_load_file() 只吃路徑，寫到暫存檔用完即刪——不額外實作
+        # 一套讀 file-like object 的解析路徑，CSV/JSON/Excel 三種格式
+        # 都已經是「先有完整檔案內容才能解析」（openpyxl 需要 seekable
+        # 檔案，DictReader 需要完整文字），沒有真正的串流解析需求。
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp.write(raw)
+            tmp_path = Path(tmp.name)
+        try:
+            try:
+                rows = ingest_load_file(tmp_path)
+            except ValueError as e:
+                abort(400, str(e))
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+        if len(rows) > BULK_IMPORT_MAX_ROWS:
+            abort(400, f"來源筆數 {len(rows)} 超過上限 {BULK_IMPORT_MAX_ROWS} 筆")
+        if not rows:
+            abort(400, "來源沒有任何資料列")
+        return rows
+
+    def _bulk_import_validate(rows: list, target: str) -> dict:
+        """preview 與 commit 共用的驗證 pipeline（PLAN 3.2 節：兩者必須
+        跑完全相同的檢查，差別只在有沒有寫入）。回傳結構化結果，errors
+        非空時 commit 端點會拒絕寫入。"""
+        errors = []
+        warnings = []
+
+        dupes = ingest_dedupe_check(rows)
+        if dupes:
+            errors.append({
+                "type": "duplicate",
+                "message": f"來源內有 {len(dupes)} 組重複的 (device_model, code, variant) 組合，"
+                           f"會導致後者覆蓋前者",
+                "detail": [{"device_model": d[0], "code": d[1], "variant": d[2]} for d in dupes],
+            })
+
+        missing, model_counts = ingest_validate_devices_exist(rows, department=target)
+        if missing:
+            errors.append({
+                "type": "missing_device",
+                "message": f"以下機種在部門 {target!r} 的機種表中不存在：" +
+                           "、".join(f"{m}（{n} 筆）" for m, n in sorted(missing.items())),
+                "detail": [{"device_model": m, "count": n} for m, n in sorted(missing.items())],
+            })
+
+        # variant 判定與一致性檢查：逐機種各自進行，不對整份來源判定一次
+        # ——多機種混合來源時，某個多變體機種的重複 code 會讓全域判定
+        # 「啟用」，但實際的一致性檢查本來就是逐機種各自比對既有資料，
+        # 兩者對不上會讓使用者誤以為每個機種都會啟用（外部審查發現）。
+        variant_decisions = []
+        variant_issues = []
+        for model in sorted(model_counts):
+            model_rows = [r for r in rows if r["device_model"] == model]
+            use_variant, reason = ingest_decide_variant_mode(model_rows, "auto")
+            variant_decisions.append({
+                "device_model": model,
+                "use_variant": use_variant,
+                "reason": reason,
+                "row_count": len(model_rows),
+            })
+            issues = ingest_check_variant_consistency(
+                model_rows, department=target, device_model=model, use_variant=use_variant,
+            )
+            # 防禦性檢查：確保「顯示給使用者看的判定」與「實際控制寫入
+            # 的判定」永遠是同一個值——這裡傳的是同一個 use_variant 變數，
+            # 結構上不該分岔，但這條斷言防的是未來有人在這兩行之間插入
+            # 邏輯、或改成兩處分別呼叫 decide_variant_mode() 而不自知
+            # （先前的版本就是這樣出的問題：全域判定一次、逐機種檢查
+            # 各自重算一次，兩者用不同資料範圍卻沒有東西比對）。
+            for issue in issues:
+                assert issue.get("new_has_variant", use_variant) == use_variant, (
+                    "variant_decisions 顯示的判定與 check_variant_consistency() "
+                    "實際使用的判定不一致——不應該發生，檢查是否有第二個計算點"
+                )
+            variant_issues.extend(issues)
+        if variant_issues:
+            errors.append({
+                "type": "variant_inconsistency",
+                "message": "variant 啟用狀態與既有資料不一致，混用會導致主鍵分裂且不會有錯誤訊息",
+                "detail": variant_issues,
+            })
+
+        # 完整度攔截：只看 solution（原廠處置）。低於門檻時 preview 標記
+        # requires_accept_incomplete，commit 沒收到對應理由就拒絕——
+        # 這是唯一能擋住「半年後看到一批空 solution，沒人記得是當初就
+        # 沒有、抽取失敗、還是漏匯」的機制，CLI 端一直是強制的
+        # （--accept-incomplete），後台若只做成可以無視的 warning，等於
+        # 這道防線只存在於「技術端自己操作」的路徑，而後台使用者（部門
+        # 管理員）更不容易判斷「覆蓋率低」代表什麼、更容易略過警示，
+        # 反而是更需要這道防線的地方（外部審查指出方向反了）。
+        #
+        # cause / local_solution 刻意不攔：cause 缺是常見的（很多原廠
+        # 文件只有代碼和標題），local_solution 缺更是常態（本來就靠
+        # 現場累積），對這兩者攔截會讓每次匯入都要填理由，理由最終會
+        # 變成「無」，反而破壞機制的意義——跟 CLI 的判準一致，只看
+        # solution。
+        completeness = ingest_completeness_report(rows)
+        solution_pct = completeness.get("solution", 0) / len(rows) if rows else 0
+        requires_accept_incomplete = solution_pct < INGEST_COMPLETENESS_WARN_THRESHOLD
+        if requires_accept_incomplete:
+            warnings.append({
+                "type": "low_completeness",
+                "message": f"solution 完整度 {solution_pct*100:.1f}%，低於門檻 "
+                           f"{INGEST_COMPLETENESS_WARN_THRESHOLD*100:.0f}%，需填寫理由才能匯入",
+                "detail": completeness,
+            })
+
+        existing = alarms_store.load(department=target)
+        existing_keys = {(a.get("device_model"), a["code"], normalize_variant(a.get("variant", "")))
+                         for a in existing}
+        new_keys = {(r["device_model"], r["code"], r["variant"]) for r in rows}
+        will_create = len(new_keys - existing_keys)
+        will_update = len(new_keys & existing_keys)
+
+        return {
+            "row_count": len(rows),
+            "device_models": sorted(model_counts.keys()),
+            "will_create": will_create,
+            "will_update": will_update,
+            "variant_decisions": variant_decisions,
+            "completeness": completeness,
+            "solution_pct": round(solution_pct * 100, 1),
+            "requires_accept_incomplete": requires_accept_incomplete,
+            "errors": errors,
+            "warnings": warnings,
+        }
+
+    @app.post("/api/admin/bulk-import/<department>/preview")
+    @admin_required
+    def bulk_import_preview(department: str):
+        target = resolve_target_department(department)
+        rows = _bulk_import_read_upload(target)
+        result = _bulk_import_validate(rows, target)
+        return jsonify(result)
+
+    @app.post("/api/admin/bulk-import/<department>/commit")
+    @admin_required
+    def bulk_import_commit(department: str):
+        target = resolve_target_department(department)
+        rows = _bulk_import_read_upload(target)
+        validation = _bulk_import_validate(rows, target)
+        if validation["errors"]:
+            abort(400, "驗證未通過，未寫入任何資料：" +
+                  "；".join(e["message"] for e in validation["errors"]))
+
+        accept_incomplete = (request.form.get("accept_incomplete") or "").strip()
+        if validation["requires_accept_incomplete"] and not accept_incomplete:
+            abort(400, f"原廠處置（solution）覆蓋率 {validation['solution_pct']}%，"
+                       f"低於門檻 {INGEST_COMPLETENESS_WARN_THRESHOLD*100:.0f}%，"
+                       f"需填寫理由才能匯入")
+
+        import_mode = request.form.get("import_mode", "upsert")
+        if import_mode not in ("upsert", "append"):
+            abort(400, f"import_mode 必須為 upsert 或 append，收到：{import_mode!r}")
+
+        result = ingest_commit_rows(rows, department=target, import_mode=import_mode)
+
+        if accept_incomplete:
+            # 同一支 CLI 用的 operation 名稱，稽核查詢時不用分別記兩種
+            # 來源（見 import_alarms.py 的對應寫法）。
+            audit_logger.log(
+                "bulk_import_incomplete", department=target,
+                new_data={
+                    "device_model": ",".join(sorted({r["device_model"] for r in rows})),
+                    "code": f"{result['succeeded']} 筆",
+                    "reason": accept_incomplete,
+                    "solution_pct": validation["solution_pct"],
+                },
+            )
+
+        return jsonify(result)
+
+    # ── 原廠格式匯入：inspect（批次匯入 UI 規劃路線 A）───────────────
+    #
+    # 只做「讀檔 + 偵測欄位」，不轉成 rows、不寫入——欄位對應要等人工
+    # 在前端確認/修改之後才定案（見 alarm_ingest/detect.py 開頭說明：
+    # 若這裡直接呼叫 grid_to_rows() 把 code 切好，等於系統替人做了決定，
+    # 「人工確認」這一步會變成看既成事實而非真正做決定）。
+    #
+    # 跟固定範本路徑（_bulk_import_read_upload）的差異：這裡不要求
+    # REQUIRED_HEADERS，只支援 .xlsx/.xlsm/.csv（PDF/Word 目前仍只在
+    # CLI 走 tools/variant/parse_alarms.py，不開放後台上傳）。
+
+    INSPECT_SAMPLE_COUNT = 3  # 每欄取前 N 筆非空值當內容範例
+
+    def _inspect_sheet_detail(name: str, grid: list, cols) -> dict:
+        """單一分頁的欄位偵測明細：每欄的建議角色 + 內容範例，供前端
+        欄位對應 UI 顯示，讓管理員依實際內容而非欄位名稱判斷（欄位名稱
+        常常是空的或誤導的，見批次匯入 UI 規劃第 3 節）。"""
+        if cols is None:
+            # detect_columns() 回傳 None 不附原因（回傳型態不改，避免動到
+            # CLI 既有呼叫點與 test_alarm_ingest.py 的契約測試）——這裡
+            # 額外組一段診斷文字，让「预期什么、实际看到什么」在後台使用者
+            # 眼前，而不是只有「偵測失敗」四個字（管理員不會打開程式碼看
+            # HEAD 關鍵字表是什麼）。
+            header_preview = [ingest_cell_to_str(c) for c in (grid[0] if grid else [])]
+            return {
+                "name": name, "detected": False, "columns": [], "start_row": None,
+                "diagnostic": (
+                    f"前 5 列找不到含警報代碼的欄位（需要至少一欄有 5 列以上符合"
+                    f"「數字開頭」格式，例如「0024 - ...」或「31033 ...」）。"
+                    f"第一列內容：{header_preview or '(空白)'}"
+                ),
+            }
+
+        desc_i, cause_i, action_i, start = cols
+        role_by_index = {desc_i: "code+variant", cause_i: "cause", action_i: "action"}
+        n_cols = max((len(r) for r in grid[:start] or grid[:1]), default=0)
+        n_cols = max(n_cols, desc_i + 1, (cause_i or 0) + 1, (action_i or 0) + 1)
+
+        columns = []
+        for i in range(n_cols):
+            header = grid[start - 1][i] if start > 0 and start - 1 < len(grid) and i < len(grid[start - 1]) else None
+            samples = []
+            for row in grid[start:]:
+                if i >= len(row):
+                    continue
+                v = ingest_cell_to_str(row[i])
+                if v:
+                    samples.append(v)
+                if len(samples) >= INSPECT_SAMPLE_COUNT:
+                    break
+            columns.append({
+                "index": i,
+                "header": ingest_cell_to_str(header),
+                "suggested": role_by_index.get(i),
+                "samples": samples,
+            })
+
+        return {"name": name, "detected": True, "start_row": start, "columns": columns}
+
+    @app.post("/api/admin/import/<department>/inspect")
+    @admin_required
+    def bulk_import_inspect(department: str):
+        resolve_target_department(department)  # 路由權限一致性檢查（越權/不存在部門一律擋下），inspect 本身不觸碰資料庫
+        if "file" not in request.files:
+            abort(400, "缺少上傳檔案（form field 需為 file）")
+        upload = request.files["file"]
+        if not upload.filename:
+            abort(400, "未選擇檔案")
+
+        suffix = Path(upload.filename).suffix.lower()
+        if suffix not in (".xlsx", ".xlsm", ".csv"):
+            abort(400, f"不支援的檔案格式：{suffix}（支援 .xlsx/.xlsm/.csv）")
+
+        raw = upload.read()
+        if len(raw) > BULK_IMPORT_MAX_BYTES:
+            abort(400, f"檔案過大（{len(raw)} bytes），上限 {BULK_IMPORT_MAX_BYTES} bytes")
+
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp.write(raw)
+            tmp_path = Path(tmp.name)
+        try:
+            try:
+                sheets = ingest_read_grid(tmp_path)
+            except Exception as e:
+                abort(400, f"讀取檔案失敗：{e}")
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+        # inspect 階段還沒有 rows（要等人工確認欄位對應才轉換），這裡
+        # 用 grid 列數把關，門檻跟固定範本路徑（BULK_IMPORT_MAX_ROWS）
+        # 共用同一個常數——雖然口徑不同（那邊是解析後筆數，這裡是原始
+        # 列數），但目的一致：避免過大的檔案拖垮偵測與 samples 抓取。
+        total_rows = sum(len(grid) for _, grid in sheets)
+        if total_rows > BULK_IMPORT_MAX_ROWS:
+            abort(400, f"檔案總列數 {total_rows} 超過上限 {BULK_IMPORT_MAX_ROWS} 列（含所有分頁）")
+
+        sheet_summaries = []
+        selected = request.args.get("sheet")
+        selected_detail = None
+        first_name, first_grid, first_cols = None, None, None
+
+        for name, grid in sheets:
+            cols = ingest_detect_columns(grid)
+            if first_name is None:
+                first_name, first_grid, first_cols = name, grid, cols
+            sheet_summaries.append({
+                "name": name,
+                "row_count": len(grid),
+                "detected": cols is not None,
+            })
+            if selected == name or (selected is None and selected_detail is None and cols is not None):
+                selected_detail = _inspect_sheet_detail(name, grid, cols)
+
+        if selected and selected_detail is None:
+            available = ", ".join(s["name"] for s in sheet_summaries)
+            abort(400, f"找不到分頁 {selected!r}，此檔案的分頁：{available}")
+
+        # 沒指定 sheet、且沒有任何分頁偵測成功時，預設仍顯示第一個分頁的
+        # 診斷明細（而非留 null）——管理員上傳一份完全認不出格式的檔案
+        # 時，最需要看到「為什麼」，不能因為「沒有預設可選」就什麼都不顯示。
+        if selected is None and selected_detail is None and first_name is not None:
+            selected_detail = _inspect_sheet_detail(first_name, first_grid, first_cols)
+
+        return jsonify({
+            "sheets": sheet_summaries,
+            "selected": selected_detail,
+        })
+
+    # ── AI 切分（批次匯入 UI 規劃第 6 階段）─────────────────────────
+    # 把同一儲存格內混雜的原因/處置文字拆成 cause/solution 兩欄。輸入
+    # 是文字陣列，不碰資料庫、不吃 department 寫入邏輯——department 只
+    # 用於 resolve_target_department() 的權限一致性檢查，跟 inspect
+    # 端點同樣的理由（越權/不存在部門一律擋下）。
+
+    @app.post("/api/admin/import/<department>/split")
+    @admin_required
+    def bulk_import_split(department: str):
+        resolve_target_department(department)  # 路由權限一致性檢查，split 本身不觸碰資料庫
+
+        body = request.get_json(silent=True) or {}
+        texts = body.get("texts")
+        if not isinstance(texts, list) or not texts:
+            abort(400, "缺少 texts（需為非空字串陣列）")
+        if not all(isinstance(t, str) for t in texts):
+            abort(400, "texts 陣列內每個元素都必須是字串")
+        if len(texts) > INGEST_SPLIT_MAX_BATCH:
+            abort(400, f"單次最多 {INGEST_SPLIT_MAX_BATCH} 筆，收到 {len(texts)} 筆，請分批呼叫")
+
+        try:
+            results = ingest_split_texts(texts)
+        except Exception as e:
+            abort(502, f"AI 切分呼叫失敗：{e}")
+
+        return jsonify({"results": results})
+
+    # ── 全庫語意品質審核（規劃第 1c 項）──────────────────────────────
+    # tools/variant/scan_semantic_quality.py + suggest_semantic_fixes.py
+    # 離線產出的疑慮清單（含 AI 建議修正文字），一次性工具的產物、不是
+    # 常駐掃描——這裡只提供讀取/審核/採用三個動作，不重新觸發掃描。
+    #
+    # 清單檔案本身不進版控（data/ 整層被 .gitignore 排除），沒有檔案時
+    # 如實回空清單，不是報錯——這代表還沒跑過掃描工具，不是系統壞了。
+    #
+    # 審核狀態（status: pending/accepted/rejected）直接寫回清單檔案本身
+    # （tmp+atomic replace，同 JsonStore 的寫入慣例），不建新表——這份
+    # 清單本來就是一次性產物，跟 alarms 正式表是不同生命週期的東西。
+
+    SEMANTIC_REVIEW_FILENAME = "semantic_scan_fixes.json"
+
+    def _semantic_review_path() -> Path:
+        from storage import _data_dir
+        return _data_dir() / SEMANTIC_REVIEW_FILENAME
+
+    def _load_semantic_review() -> list:
+        path = _semantic_review_path()
+        if not path.exists():
+            return []
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        findings = data.get("findings", data) if isinstance(data, dict) else data
+        for f in findings:
+            f.setdefault("status", "pending")
+        return findings
+
+    def _save_semantic_review(findings: list) -> None:
+        path = _semantic_review_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        with tmp.open("w", encoding="utf-8") as f:
+            json.dump({"findings": findings}, f, ensure_ascii=False, indent=2)
+        tmp.replace(path)
+
+    @app.get("/api/admin/semantic-review/<department>")
+    @admin_required
+    def list_semantic_review(department: str):
+        resolve_target_department(department)  # 路由權限一致性檢查，讀取本身不觸碰資料庫
+        return jsonify({"findings": _load_semantic_review()})
+
+    @app.put("/api/admin/semantic-review/<department>/<int:index>")
+    @admin_required
+    def update_semantic_review(department: str, index: int):
+        """action: "accept"（採用修正並寫入 alarms 正式表）/ "reject"（略過，
+        不寫入）。採用時可帶 final_zh 覆蓋 AI 的 suggested_zh——審核者
+        看過原文後可能要自己微調文字，不強制照抄 AI 的建議。"""
+        target = resolve_target_department(department)  # URL path 決定目標部門，同 inspect/split 端點的規則
+
+        findings = _load_semantic_review()
+        if index < 0 or index >= len(findings):
+            abort(404, "找不到這筆審核項目")
+
+        body = request.get_json(silent=True) or {}
+        action = body.get("action")
+        if action not in ("accept", "reject"):
+            abort(400, 'action 必須為 "accept" 或 "reject"')
+
+        item = findings[index]
+        if item.get("status") != "pending":
+            abort(409, f"這筆已經處理過（{item['status']}），不可重複處理")
+
+        if action == "reject":
+            item["status"] = "rejected"
+            _save_semantic_review(findings)
+            return jsonify(item)
+
+        final_zh = (body.get("final_zh") or item.get("suggested_zh") or "").strip()
+        if not final_zh:
+            abort(400, "採用時必須提供修正後的中文文字（final_zh 或 AI 的 suggested_zh）")
+
+        device_model = item["device_model"]
+        code = item["code"]
+        variant = ""
+
+        # 語意審核採用時的字串組裝邏輯跟 tools/variant/suggest_semantic_fixes.py
+        # 的離線建議工具共用同一份實作（backend/alarm_ingest/quality.py 的
+        # apply_semantic_fix()），避免兩處分岔造成現場審核跟離線建議結果不一致。
+        new_description = ingest_apply_semantic_fix(item["description"], final_zh)
+
+        existing = alarms_store.get_one(
+            department=target,
+            match={"device_model": device_model, "code": code, "variant": variant},
+        )
+        if existing is None:
+            abort(404, f"資料庫中找不到 {device_model}/{code}，可能已被刪除")
+
+        # 採用前先存一筆復原快照（同批次匯入用的 ImportSnapshotStore，
+        # 見 storage.py）——這批是現場人員正在使用的既有正式資料，跟
+        # 批次匯入寫入全新資料的風險不同：改壞了沒有「重新匯入補齊」
+        # 這條退路，只能逐筆對 alarm_history 撈舊值手動改回來。外部
+        # 審查明確指出這個缺口：303 筆逐筆採用途中若發現 AI 建議的用詞
+        # 風格不符合現場慣用語，需要能整批退回，不是簽名式地一筆筆修。
+        # Supabase 模式下才有效，JsonStore fallback 回 None（同批次匯入
+        # 的既有行為，不中斷本次寫入）。
+        snapshot_id = import_snapshot_store.save_snapshot(
+            department=target,
+            device_models=[device_model],
+            rows_before=[{"device_model": device_model, "code": code, "variant": variant, "before_data": existing}],
+            total_rows=1,
+            import_mode="semantic_review_accept",
+        )
+
+        row = alarms_store.upsert_one(
+            {**existing, "description": new_description},
+            department=target, on_conflict="department,device_model,code,variant",
+        )
+        audit_logger.log("UPDATE", department=target, new_data=row, old_data=existing)
+
+        item["status"] = "accepted"
+        item["final_zh"] = final_zh
+        item["snapshot_id"] = snapshot_id
+        _save_semantic_review(findings)
+        return jsonify(item)
+
+    # ── 整批復原（批次匯入 UI 規劃第 5 階段）────────────────────────
+    # 跟 AI 無關的保底機制：commit 時已把每筆寫入前的值存進
+    # import_snapshots（見 alarm_ingest/commit.py 的 commit_rows()）。
+    # 只在 Supabase 模式可用——JsonStore fallback 沒有這張表，
+    # import_snapshot_store 在該模式下所有方法都回傳空結果/None，
+    # 這裡的端點直接把那個「不可用」如實回給前端，不假裝支援。
+
+    @app.get("/api/admin/import/<department>/snapshots")
+    @admin_required
+    def list_import_snapshots(department: str):
+        target = resolve_target_department(department)
+        return jsonify({"snapshots": import_snapshot_store.list_snapshots(target)})
+
+    @app.post("/api/admin/import/<department>/snapshots/<int:snapshot_id>/undo")
+    @admin_required
+    def undo_import_snapshot(department: str, snapshot_id: int):
+        target = resolve_target_department(department)
+        result = ingest_undo_snapshot(snapshot_id, department=target)
+        if not result["found"]:
+            abort(404, "找不到這筆匯入紀錄（可能不存在，或屬於其他部門）")
+        if result.get("already_undone"):
+            abort(409, "這筆匯入已經復原過，不可重複復原")
+        return jsonify(result)
 
     # ── 現場處置做法 local_solution（PLAN_local_solution.md）─────────
 

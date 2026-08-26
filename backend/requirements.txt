@@ -4,3 +4,8 @@ python-dotenv==1.2.1
 gunicorn==23.0.0
 google-genai==1.47.0
 werkzeug==3.1.8
+# 後台批次匯入需要（alarm_ingest.load_excel，固定範本 .xlsx/.xlsm 讀取）。
+# python-docx / pdfplumber / pypdfium2 刻意不加：Word 與 PDF 路徑未經
+# 真實檔案驗證，且 PDF 解析與光柵化在 Render 免費層有 OOM 與 worker
+# 佔用風險，那些路徑維持只在本機 CLI（Variant/parse_alarms.py）執行。
+openpyxl==3.1.5

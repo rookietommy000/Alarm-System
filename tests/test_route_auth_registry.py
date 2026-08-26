@@ -26,6 +26,15 @@ ROUTE_AUTH_REGISTRY = {
     ("/api/alarms/<department>/<device_model>/<code>", "PUT"): "admin",
     ("/api/alarms/<department>/<device_model>/<code>", "DELETE"): "admin",
 
+    ("/api/admin/bulk-import/<department>/preview", "POST"): "admin",
+    ("/api/admin/bulk-import/<department>/commit", "POST"): "admin",
+    ("/api/admin/import/<department>/inspect", "POST"): "admin",
+    ("/api/admin/import/<department>/split", "POST"): "admin",
+    ("/api/admin/import/<department>/snapshots", "GET"): "admin",
+    ("/api/admin/import/<department>/snapshots/<int:snapshot_id>/undo", "POST"): "admin",
+    ("/api/admin/semantic-review/<department>", "GET"): "admin",
+    ("/api/admin/semantic-review/<department>/<int:index>", "PUT"): "admin",
+
     # 現場處置做法（PLAN_local_solution.md）——審核路徑停用決策後，
     # local 端點改為任何登入者皆可編輯，不再限管理員
     ("/api/alarms/<department>/<device_model>/<code>/local", "PUT"): "login",

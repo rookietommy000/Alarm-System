@@ -510,6 +510,12 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
                   <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
                   ＋ 新增警報
                 </button>
+                <button v-if="!isAll" class="btn btn-secondary toolbar-field" @click="openBulkImport">
+                  批次匯入
+                </button>
+                <button v-if="!isAll" class="btn btn-secondary toolbar-field" @click="openVendorImport">
+                  原廠檔案匯入
+                </button>
               </div>
             </div>
             <p v-if="isAll" style="margin:0; font-size:13px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">跨部門檢視可以編輯既有資料，但無法新增——沒有指定部門就無法決定要建立到哪裡。</p>
@@ -581,6 +587,92 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
               </div>
             </div>
             <p v-if="!auditLog.length" style="font-size:13px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">尚無紀錄</p>
+          </section>
+        </div>
+
+        <!-- ══ 全庫語意品質審核 ══
+             AI 逐筆審核既有警報資料的中文欄位是否與英文原文語意相符
+             （全庫語意品質掃描，規劃第 1c 項），這裡呈現的是已經跑完
+             兩階段離線工具（掃描找疑慮 + 產生修正建議）的結果——不在
+             這個頁面觸發任何 AI 呼叫，只做「人工逐筆核對後採用或略過」
+             這一件事。AI 建議必須經人工確認才會寫入 alarms 正式表，
+             這條線不能跳過（同 EXTRACTION_SPEC.md「一條不能跨的線」）。 -->
+        <div v-if="page === 'semantic-review'" style="display:flex; flex-direction:column; gap:18px">
+          <div style="background:color-mix(in srgb, #9a7c1a 10%, transparent); border:1px solid color-mix(in srgb, #9a7c1a 30%, transparent); border-radius:8px; padding:12px 16px; font-size:13px; line-height:1.6">
+            這份清單是 AI 兩階段離線分析的結果（找疑慮 + 產生建議修正文字），逐筆採用前建議先看完整報告的
+            <strong>「詞彙一致性」</strong>分頁（同一英文詞在不同機種的建議譯法是否一致）跟
+            <strong>「漏報抽樣核對」</strong>分頁（AI 判斷沒問題的資料是否真的沒問題）——兩者決定這份清單的可信度，
+            不是逐筆看起來合理就代表整批沒問題。「修正後文字」欄位可直接編輯，AI 的建議只是起點。
+          </div>
+          <section>
+            <div style="display:flex; justify-content:space-between; align-items:baseline; gap:12px; flex-wrap:wrap; margin-bottom:10px">
+              <div style="display:flex; gap:16px; font-size:13px; color:color-mix(in srgb, var(--color-text) 65%, transparent)">
+                <span>共 {{ semanticReview.items.length }} 筆</span>
+                <span>待處理 {{ semanticReviewCounts.pending }}</span>
+                <span style="color:#2e7d32">已採用 {{ semanticReviewCounts.accepted }}</span>
+                <span>已略過 {{ semanticReviewCounts.rejected }}</span>
+              </div>
+              <div style="display:flex; gap:8px; align-items:center">
+                <select class="input" style="width:140px" v-model="semanticReviewFilter.status">
+                  <option value="pending">待處理</option>
+                  <option value="accepted">已採用</option>
+                  <option value="rejected">已略過</option>
+                  <option value="">全部</option>
+                </select>
+                <select class="input" style="width:160px" v-model="semanticReviewFilter.model">
+                  <option value="">全部機種</option>
+                  <option v-for="m in semanticReviewModels" :key="m" :value="m">{{ m }}</option>
+                </select>
+              </div>
+            </div>
+
+            <p v-if="semanticReview.loading" style="font-size:13px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">載入中…</p>
+            <p v-if="semanticReview.error" style="color:#a23b3b; font-size:13px">{{ semanticReview.error }}</p>
+            <p v-if="!semanticReview.loading && !semanticReview.items.length" style="font-size:13px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">
+              尚未執行過語意品質掃描（tools/variant/scan_semantic_quality.py），沒有待審核項目。
+            </p>
+
+            <div style="display:flex; flex-direction:column; gap:10px">
+              <div v-for="row in filteredSemanticReview" :key="row.idx" class="blueprint"
+                   style="border:1px solid var(--color-divider); padding:14px 16px; display:flex; flex-direction:column; gap:8px">
+                <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+                <div style="display:flex; justify-content:space-between; align-items:baseline; gap:12px; flex-wrap:wrap">
+                  <div style="font-family:var(--font-mono, monospace); font-size:12px; color:color-mix(in srgb, var(--color-text) 65%, transparent)">
+                    <span style="color:var(--color-accent); font-weight:700">{{ row.device_model }}</span> {{ row.code }}
+                  </div>
+                  <div style="display:flex; gap:8px; align-items:center">
+                    <span style="font-family:var(--font-mono, monospace); font-size:10px; letter-spacing:0.04em; text-transform:uppercase; padding:2px 8px; border-radius:999px; font-weight:700"
+                          :style="row.confidence==='high' ? 'background:#fbe9e3; color:#b3401f' : 'background:#f8f0da; color:#9a7c1a'">
+                      {{ row.confidence === 'high' ? '高信心' : '中信心' }}
+                    </span>
+                    <span style="font-size:11px; padding:2px 8px; border-radius:999px"
+                          :style="{pending:'background:color-mix(in srgb, var(--color-text) 8%, transparent); color:color-mix(in srgb, var(--color-text) 55%, transparent)',
+                                    accepted:'background:#e3f3e5; color:#2e7d32', rejected:'background:color-mix(in srgb, var(--color-text) 8%, transparent); color:color-mix(in srgb, var(--color-text) 45%, transparent)'}[row.status]">
+                      {{ {pending:'待處理', accepted:'已採用', rejected:'已略過'}[row.status] }}
+                    </span>
+                  </div>
+                </div>
+
+                <div style="font-size:13px; font-family:var(--font-mono, monospace)"><span style="color:color-mix(in srgb, var(--color-text) 45%, transparent); font-size:11px; margin-right:6px; font-family:inherit">原文</span>{{ row.description }}</div>
+                <div v-if="row.suggested_description" style="font-size:13px; font-family:var(--font-mono, monospace); color:#2e7d32"><span style="color:color-mix(in srgb, var(--color-text) 45%, transparent); font-size:11px; margin-right:6px; font-family:inherit">AI 建議</span>{{ row.suggested_description }}</div>
+                <div style="font-size:13px; color:color-mix(in srgb, var(--color-text) 65%, transparent)">{{ row.issue }}</div>
+
+                <div v-if="row.status === 'pending'" style="display:flex; flex-direction:column; gap:6px; padding-top:6px; border-top:1px solid color-mix(in srgb, var(--color-text) 10%, transparent)">
+                  <label style="font-size:11px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">修正後文字（可直接編輯）</label>
+                  <input class="input" style="font-size:13px" v-model="row.editText" />
+                  <div style="display:flex; gap:8px; justify-content:flex-end">
+                    <button class="btn btn-secondary" style="font-size:12px" @click="rejectSemanticReview(row)" :disabled="row.busy">略過</button>
+                    <button class="btn btn-primary" style="font-size:12px" @click="acceptSemanticReview(row)" :disabled="row.busy || !row.editText.trim()">
+                      {{ row.busy ? '處理中…' : '採用並寫入' }}
+                    </button>
+                  </div>
+                  <p v-if="row.rowError" style="color:#a23b3b; font-size:12px; margin:0">{{ row.rowError }}</p>
+                </div>
+                <div v-else-if="row.status === 'accepted'" style="font-size:12px; color:#2e7d32; padding-top:6px; border-top:1px solid color-mix(in srgb, var(--color-text) 10%, transparent)">
+                  ✓ 已寫入：{{ row.final_zh }}
+                </div>
+              </div>
+            </div>
           </section>
         </div>
 
@@ -720,6 +812,228 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
         <div style="display:flex; gap:8px">
           <button class="btn btn-secondary" @click="localEdit = null" :disabled="localEdit.saving">取消</button>
           <button class="btn btn-primary" @click="saveLocalEdit" :disabled="localEdit.saving">{{ localEdit.saving ? '儲存中…' : '儲存' }}</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 批次匯入 Dialog：只收已解析完的標準格式（CSV/JSON/Excel 固定範本），
+       不收原始廠商文件——那條路線留在技術端用 CLI 處理。preview 與 commit
+       在後端跑完全相同的驗證 pipeline，這裡的三步驟（選檔→預覽→確認）
+       只是把那兩支端點的結果依序呈現。 -->
+  <div class="dialog-backdrop" v-if="bulkImport" @click.self="closeBulkImport">
+    <div class="dialog blueprint">
+      <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+      <div class="dialog-title">批次匯入 · {{ writeDept() }}</div>
+      <p style="margin:0; font-size:13px; color:color-mix(in srgb, var(--color-text) 65%, transparent)">
+        僅支援已解析完的標準格式（.csv / .json / .xlsx / .xlsm，固定表頭範本）。原始廠商文件請先交給技術端解析。
+      </p>
+
+      <div class="field">
+        <label>檔案</label>
+        <input type="file" accept=".csv,.json,.xlsx,.xlsm" @change="onBulkImportFileChange" />
+        <div v-if="bulkImport.fileName" style="font-size:12px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">已選擇：{{ bulkImport.fileName }}</div>
+      </div>
+
+      <div class="field">
+        <label>匯入模式</label>
+        <select class="input" v-model="bulkImport.importMode">
+          <option value="upsert">upsert（新增/更新，重送安全）</option>
+          <option value="append">append（新增/更新，重送會撞重複，僅限確定不會中斷時使用）</option>
+        </select>
+      </div>
+
+      <p v-if="bulkImport.error" style="color:#a23b3b; font-size:13px; margin:0">{{ bulkImport.error }}</p>
+
+      <div style="display:flex; gap:8px">
+        <button class="btn btn-secondary" @click="previewBulkImport"
+                :disabled="!bulkImport.file || bulkImport.loading">
+          {{ bulkImport.loading ? '處理中…' : '預覽' }}
+        </button>
+      </div>
+
+      <!-- 預覽結果：errors 存在時擋 commit，只顯示 warnings 不擋 -->
+      <div v-if="bulkImport.preview" style="display:flex; flex-direction:column; gap:10px; padding-top:8px; border-top:1px solid color-mix(in srgb, var(--color-text) 15%, transparent)">
+        <div style="font-size:13px">
+          來源筆數 {{ bulkImport.preview.row_count }}｜機種：{{ bulkImport.preview.device_models.join('、') }}｜
+          將新增 {{ bulkImport.preview.will_create }}，將更新 {{ bulkImport.preview.will_update }}
+        </div>
+        <div v-if="bulkImport.preview.variant_decisions.length" style="display:flex; flex-direction:column; gap:2px">
+          <div style="font-size:12px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">變體模式判定（逐機種各自判斷）</div>
+          <div v-for="d in bulkImport.preview.variant_decisions" :key="d.device_model"
+               style="font-size:12px; color:color-mix(in srgb, var(--color-text) 65%, transparent)">
+            {{ d.device_model }}　{{ d.use_variant ? '啟用' : '不啟用' }}　{{ d.reason }}
+          </div>
+        </div>
+
+        <div v-if="bulkImport.preview.errors.length" style="display:flex; flex-direction:column; gap:4px">
+          <div v-for="(e, i) in bulkImport.preview.errors" :key="'err'+i"
+               style="font-size:13px; color:#a23b3b; padding:6px 8px; background:color-mix(in srgb, #a23b3b 8%, transparent)">
+            {{ e.message }}
+          </div>
+        </div>
+
+        <div v-if="bulkImport.preview.warnings.length" style="display:flex; flex-direction:column; gap:4px">
+          <div v-for="(w, i) in bulkImport.preview.warnings" :key="'warn'+i"
+               style="font-size:13px; padding:6px 8px; background:color-mix(in srgb, var(--color-text) 6%, transparent)">
+            ⚠ {{ w.message }}
+          </div>
+        </div>
+
+        <div v-if="bulkImport.preview.requires_accept_incomplete" class="field">
+          <label>原廠處置（solution）覆蓋率 {{ bulkImport.preview.solution_pct }}%，低於門檻，請說明原因（必填）</label>
+          <textarea class="input" v-model="bulkImport.acceptIncomplete" rows="2"
+                    placeholder="例如：原廠手冊未提供處置說明，僅有本廠自撰內容"></textarea>
+        </div>
+      </div>
+
+      <!-- commit 結果：全部成功 / 部分失敗兩種情況 -->
+      <div v-if="bulkImport.result" style="display:flex; flex-direction:column; gap:6px; padding-top:8px; border-top:1px solid color-mix(in srgb, var(--color-text) 15%, transparent)">
+        <div v-if="!bulkImport.result.partial" style="font-size:13px; color:#2e7d32">
+          ✓ 全部成功，已寫入 {{ bulkImport.result.succeeded }} 筆
+        </div>
+        <div v-else style="display:flex; flex-direction:column; gap:4px">
+          <div style="font-size:13px; color:#a23b3b">
+            ⚠ 部分寫入：成功 {{ bulkImport.result.succeeded }} / {{ bulkImport.result.succeeded + bulkImport.result.failed }} 筆，
+            於第 {{ bulkImport.result.first_failure.row }} 筆中止（{{ bulkImport.result.first_failure.code }}）
+          </div>
+          <div style="font-size:12px; color:color-mix(in srgb, var(--color-text) 65%, transparent)">{{ bulkImport.result.recovery }}</div>
+        </div>
+
+        <!-- 整批復原：只在有 snapshot_id 時可用（JsonStore fallback
+             下永遠是 null，本機/測試模式不提供復原——見
+             storage.ImportSnapshotStore 的說明）。undoResult 存在代表
+             已按過復原，成功後不再顯示按鈕，避免重複點擊撞 409。 -->
+        <div v-if="bulkImport.result.snapshot_id && !bulkImport.undoResult" style="padding-top:4px">
+          <button class="btn btn-secondary" style="font-size:12px" @click="undoBulkImport" :disabled="bulkImport.undoLoading">
+            {{ bulkImport.undoLoading ? '復原中…' : '復原這次匯入' }}
+          </button>
+        </div>
+        <div v-if="bulkImport.undoError" style="color:#a23b3b; font-size:12px">{{ bulkImport.undoError }}</div>
+        <div v-if="bulkImport.undoResult" style="font-size:12px; color:#2e7d32">
+          ✓ 已復原 {{ bulkImport.undoResult.succeeded }} 筆
+        </div>
+      </div>
+
+      <div class="dialog-actions">
+        <div></div>
+        <div style="display:flex; gap:8px">
+          <button class="btn btn-secondary" @click="closeBulkImport">{{ bulkImport.result ? '關閉' : '取消' }}</button>
+          <button v-if="!bulkImport.result" class="btn btn-primary" @click="commitBulkImport" :disabled="!canCommitBulkImport">
+            {{ bulkImport.loading ? '匯入中…' : '確認匯入' }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 原廠檔案匯入 Dialog（路線 A）：收原廠 Excel（無固定表頭），只做
+       「讀檔 + 欄位偵測」給人工確認，不做轉換/寫入——後端 inspect
+       端點本身就是這個定位（見 backend/app.py 的 bulk_import_inspect
+       註解）。真正的匯入（轉 rows + preview + commit）尚未串接，
+       這裡先讓管理員看得到系統怎麼判讀他們的原廠檔案。 -->
+  <div class="dialog-backdrop" v-if="vendorImport" @click.self="closeVendorImport">
+    <div class="dialog blueprint">
+      <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+      <div class="dialog-title">原廠檔案匯入 · {{ writeDept() }}</div>
+      <p style="margin:0; font-size:13px; color:color-mix(in srgb, var(--color-text) 65%, transparent)">
+        支援原廠常見的無固定表頭格式（.xlsx / .xlsm / .csv）。這裡只做欄位對應確認，
+        確認無誤後的實際匯入仍需交由技術端執行。
+      </p>
+
+      <div class="field">
+        <label>檔案</label>
+        <input type="file" accept=".csv,.xlsx,.xlsm" @change="onVendorImportFileChange" />
+        <div v-if="vendorImport.fileName" style="font-size:12px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">已選擇：{{ vendorImport.fileName }}</div>
+      </div>
+
+      <p v-if="vendorImport.error" style="color:#a23b3b; font-size:13px; margin:0">{{ vendorImport.error }}</p>
+
+      <div style="display:flex; gap:8px">
+        <button class="btn btn-secondary" @click="inspectVendorImport"
+                :disabled="!vendorImport.file || vendorImport.loading">
+          {{ vendorImport.loading ? '讀取中…' : '讀取並偵測欄位' }}
+        </button>
+      </div>
+
+      <!-- 多分頁時的分頁選擇：每個分頁各自標示是否偵測到欄位 -->
+      <div v-if="vendorImport.sheets.length > 1" style="display:flex; flex-direction:column; gap:4px; padding-top:8px; border-top:1px solid color-mix(in srgb, var(--color-text) 15%, transparent)">
+        <label style="font-size:12px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">分頁（{{ vendorImport.sheets.length }} 個）</label>
+        <div style="display:flex; flex-wrap:wrap; gap:6px">
+          <button v-for="s in vendorImport.sheets" :key="s.name"
+                  class="btn btn-secondary" style="font-size:12px; padding:4px 10px"
+                  :class="{ 'btn-primary': s.name === vendorImport.selectedSheet }"
+                  @click="inspectVendorImport(s.name)">
+            {{ s.name }} {{ s.detected ? '✓' : '✗' }}（{{ s.row_count }} 列）
+          </button>
+        </div>
+      </div>
+
+      <!-- 偵測失敗：顯示診斷訊息（預期什麼、實際看到什麼），不是只顯示「失敗」 -->
+      <div v-if="vendorImport.selected && !vendorImport.selected.detected"
+           style="font-size:13px; color:#a23b3b; padding:8px; background:color-mix(in srgb, #a23b3b 8%, transparent)">
+        找不到警報欄位：{{ vendorImport.selected.diagnostic }}
+      </div>
+
+      <!-- 偵測成功：欄位對應 + 內容範例 -->
+      <div v-if="vendorImport.selected && vendorImport.selected.detected"
+           style="display:flex; flex-direction:column; gap:8px; padding-top:8px; border-top:1px solid color-mix(in srgb, var(--color-text) 15%, transparent)">
+        <div style="font-size:13px">分頁「{{ vendorImport.selected.name }}」，資料從第 {{ vendorImport.selected.start_row + 1 }} 列開始</div>
+        <div v-for="c in vendorImport.selected.columns" :key="c.index"
+             style="display:flex; flex-direction:column; gap:2px; padding:8px; background:color-mix(in srgb, var(--color-text) 4%, transparent)">
+          <div style="display:flex; justify-content:space-between; font-size:12px">
+            <span>欄位 {{ c.index + 1 }}{{ c.header ? '（' + c.header + '）' : '' }}</span>
+            <span v-if="c.suggested" style="color:#2e7d32">判定為：{{ vendorColumnRoleLabel(c.suggested) }}</span>
+            <span v-else style="color:color-mix(in srgb, var(--color-text) 45%, transparent)">未使用</span>
+          </div>
+          <div v-if="c.samples.length" style="font-size:12px; color:color-mix(in srgb, var(--color-text) 65%, transparent); display:flex; flex-direction:column; gap:1px">
+            <div v-for="(s, i) in c.samples" :key="i">例：{{ s }}</div>
+          </div>
+          <div v-if="c.suggested === 'action' && c.samples.length" style="padding-top:4px">
+            <button class="btn btn-secondary" style="font-size:11px; padding:2px 8px"
+                    @click="trySplitColumn(c)" :disabled="vendorImport.splitLoading">
+              {{ vendorImport.splitLoading ? '切分中…' : '試切分（原因／處置）' }}
+            </button>
+          </div>
+        </div>
+
+        <!-- AI 切分試跑結果：原文並排顯示切出的 cause/solution，僅供
+             預覽判斷 prompt 是否適合這批資料，不寫入、不影響上方欄位
+             對應——切分本身要進資料庫仍要走完整的人工確認流程
+             （EXTRACTION_SPEC.md 第 6 節「一條不能跨的線」）。 -->
+        <div v-if="vendorImport.splitError" style="color:#a23b3b; font-size:13px">{{ vendorImport.splitError }}</div>
+        <div v-if="vendorImport.splitResults" style="display:flex; flex-direction:column; gap:6px; padding-top:8px; border-top:1px solid color-mix(in srgb, var(--color-text) 15%, transparent)">
+          <div style="font-size:12px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">
+            切分試跑結果（僅預覽，未寫入）
+          </div>
+          <div v-for="(r, i) in vendorImport.splitResults" :key="i"
+               style="display:flex; flex-direction:column; gap:4px; padding:8px; background:color-mix(in srgb, var(--color-text) 4%, transparent)">
+            <div style="font-size:12px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">原文：{{ r.original }}</div>
+            <div style="display:flex; gap:12px; font-size:12px">
+              <div style="flex:1">
+                <span style="color:color-mix(in srgb, var(--color-text) 55%, transparent)">原因：</span>
+                <span v-if="r.cause">{{ r.cause }}</span>
+                <span v-else style="color:color-mix(in srgb, var(--color-text) 40%, transparent)">（無）</span>
+              </div>
+              <div style="flex:1">
+                <span style="color:color-mix(in srgb, var(--color-text) 55%, transparent)">處置：</span>{{ r.solution }}
+              </div>
+            </div>
+            <div style="font-size:11px" :style="{ color: r.confident ? '#2e7d32' : 'color-mix(in srgb, var(--color-text) 45%, transparent)' }">
+              {{ r.confident ? '✓ AI 判定有把握' : (r.downgraded ? '⚠ 未通過驗證，已降級為整段放入處置' : '○ AI 判定沒把握，建議人工確認') }}
+            </div>
+          </div>
+        </div>
+
+        <p style="margin:0; font-size:12px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">
+          欄位對應如與實際不符，請告知技術端調整後再行匯入——此畫面尚不支援手動修改對應。
+        </p>
+      </div>
+
+      <div class="dialog-actions">
+        <div></div>
+        <div style="display:flex; gap:8px">
+          <button class="btn btn-secondary" @click="closeVendorImport">關閉</button>
         </div>
       </div>
     </div>
@@ -929,6 +1243,7 @@ createApp({
         { key: 'dashboard', label: 'Dashboard 統計', code: 'D' },
         { key: 'scans', label: '掃描紀錄管理', code: 'S' },
         { key: 'alarms', label: '警報管理', code: 'A' },
+        { key: 'semantic-review', label: 'AI 語意審核', code: 'R', hideOnAll: true },
         { key: 'models', label: '機種管理', code: 'M' },
         { key: 'depts', label: '部門管理', code: 'X', superOnly: true },
       ],
@@ -936,6 +1251,7 @@ createApp({
         dashboard: ['總覽', 'Dashboard 統計'],
         scans: ['紀錄', '掃描紀錄管理'],
         alarms: ['主檔', '警報管理'],
+        'semantic-review': ['AI 輔助', '全庫語意品質審核'],
         models: ['主檔', '機種管理'],
         depts: ['系統', '部門管理'],
       },
@@ -968,6 +1284,10 @@ createApp({
       alarmPageIdx: 0, alarmPageSize: 20,
       alarmDraft: null, isNewAlarm: false, alarmKeywordsText: '', alarmError: '',
       localEdit: null,
+      bulkImport: null,
+      vendorImport: null,
+      semanticReview: { items: [], loading: false, error: '', loaded: false },
+      semanticReviewFilter: { status: 'pending', model: '' },
       deviceDraft: null, deviceError: '',
       toast: '',
 
@@ -981,10 +1301,36 @@ createApp({
     };
   },
   computed: {
+    canCommitBulkImport() {
+      const b = this.bulkImport;
+      if (!b || !b.preview || b.loading) return false;
+      if (b.preview.errors.length) return false;
+      if (b.preview.requires_accept_incomplete && !(b.acceptIncomplete || '').trim()) return false;
+      return true;
+    },
+    semanticReviewCounts() {
+      const items = this.semanticReview.items;
+      return {
+        pending: items.filter(i => i.status === 'pending').length,
+        accepted: items.filter(i => i.status === 'accepted').length,
+        rejected: items.filter(i => i.status === 'rejected').length,
+      };
+    },
+    semanticReviewModels() {
+      return [...new Set(this.semanticReview.items.map(i => i.device_model))].sort();
+    },
+    filteredSemanticReview() {
+      const f = this.semanticReviewFilter;
+      return this.semanticReview.items.filter(i => {
+        if (f.status && i.status !== f.status) return false;
+        if (f.model && i.device_model !== f.model) return false;
+        return true;
+      });
+    },
     isSuper() { return !!this.whoami.superadmin; },
     isAll() { return this.isSuper && this.viewDept === '__all__'; },
     visibleNavItems() {
-      return this.navItems.filter(n => !n.superOnly || this.isSuper);
+      return this.navItems.filter(n => (!n.superOnly || this.isSuper) && !(n.hideOnAll && this.isAll));
     },
     currentDeptName() {
       if (this.isAll) return null;
@@ -1118,6 +1464,20 @@ createApp({
     // 避免陣列越界）。
     filteredAlarms() { this.alarmPageIdx = 0; },
     alarmPageSize() { this.alarmPageIdx = 0; },
+    // 批次匯入：任何會改變解析/驗證結果的輸入變動都要讓 preview 作廢
+    // ——用 watch 而不是在每個 @change 各寫一次，漏掉一個就會出現
+    // 「預覽舊設定、送出新設定」，且那個 bug 很難被發現（數字看起來
+    // 都合理）。importMode 不影響 preview 內容本身（preview 端點不吃
+    // import_mode），但為了讓使用者體感一致（改了模式代表要重新確認）
+    // 仍一併清空。
+    'bulkImport.importMode'() {
+      if (this.bulkImport) { this.bulkImport.preview = null; this.bulkImport.result = null; }
+    },
+    page(next) {
+      if (next === 'semantic-review' && !this.semanticReview.loaded) {
+        this.loadSemanticReview();
+      }
+    },
   },
   async mounted() {
     // 超管的檢視部門：URL query 為唯一權威，sessionStorage 只是重載後的
@@ -1355,6 +1715,227 @@ createApp({
         e.error = '網路錯誤，請稍後再試'; e.saving = false;
       }
     },
+
+    // ── 批次匯入：只收已解析完的標準格式（CSV/JSON/Excel 固定範本）。
+    // preview 與 commit 在後端跑完全相同的驗證 pipeline，這裡只是把
+    // 那兩支端點的結果依序呈現——不在前端重做任何驗證判斷。
+    openBulkImport() {
+      this.bulkImport = {
+        file: null, fileName: '', importMode: 'upsert',
+        acceptIncomplete: '', preview: null, result: null,
+        loading: false, error: '',
+        undoLoading: false, undoError: '', undoResult: null,
+      };
+    },
+    closeBulkImport() {
+      // 完整重置，不只是 bulkImport = null 後下次 openBulkImport() 會
+      // 重建——這裡刻意寫成獨立函式是因為 @click.self 的 backdrop 點擊
+      // 跟關閉按鈕共用同一個入口，若日後有第三個關閉路徑，不用各自
+      // 記得重置。
+      this.bulkImport = null;
+    },
+    onBulkImportFileChange(ev) {
+      const f = ev.target.files && ev.target.files[0];
+      const b = this.bulkImport;
+      b.file = f || null;
+      b.fileName = f ? f.name : '';
+      // 選了新檔案，先前的預覽/結果作廢——避免「預覽舊檔案、送出新檔案」
+      // 這種筆數看起來合理但實際對不上的情況（先前規劃審查時明確提過
+      // 的坑：漏掉任何一個 invalidation 點都會出現這個 bug，且很難被
+      // 使用者發現，因為顯示的數字永遠是「合理的」）。
+      b.preview = null; b.result = null; b.error = '';
+    },
+    async previewBulkImport() {
+      const b = this.bulkImport;
+      if (!b.file) return;
+      b.loading = true; b.error = ''; b.preview = null;
+      try {
+        const fd = new FormData();
+        fd.append('file', b.file);
+        const dept = this.writeDept();
+        const r = await AlarmApi.postForm(`/api/admin/bulk-import/${encodeURIComponent(dept)}/preview`, fd);
+        if (r.status === 403) { location.href = '/admin/login'; return; }
+        if (!r.ok) { b.error = (await r.json().catch(() => ({}))).error || '預覽失敗'; return; }
+        b.preview = await r.json();
+      } catch (err) {
+        b.error = '網路錯誤，請稍後再試';
+      } finally {
+        b.loading = false;
+      }
+    },
+    // ── 原廠檔案匯入（路線 A）：只做 inspect（讀檔 + 欄位偵測），不
+    // 做轉換/寫入——見上方 dialog 註解，後端目前也只到這一步。
+    openVendorImport() {
+      this.vendorImport = {
+        file: null, fileName: '', sheets: [], selected: null,
+        selectedSheet: '', loading: false, error: '',
+        splitLoading: false, splitError: '', splitResults: null,
+      };
+    },
+    closeVendorImport() {
+      this.vendorImport = null;
+    },
+    onVendorImportFileChange(ev) {
+      const f = ev.target.files && ev.target.files[0];
+      const v = this.vendorImport;
+      v.file = f || null;
+      v.fileName = f ? f.name : '';
+      // 選了新檔案，先前的偵測結果作廢——同 bulkImport 的 invalidation
+      // 理由：避免畫面顯示的是舊檔案的欄位判定。
+      v.sheets = []; v.selected = null; v.selectedSheet = ''; v.error = '';
+      v.splitResults = null; v.splitError = '';
+    },
+    vendorColumnRoleLabel(role) {
+      return { 'code+variant': '代碼＋標題', cause: '原因', action: '處置' }[role] || role;
+    },
+    async trySplitColumn(col) {
+      const v = this.vendorImport;
+      const texts = col.samples;
+      if (!texts.length) return;
+      v.splitLoading = true; v.splitError = ''; v.splitResults = null;
+      try {
+        const dept = this.writeDept();
+        const r = await AlarmApi.post(`/api/admin/import/${encodeURIComponent(dept)}/split`, { texts });
+        if (r.status === 403) { location.href = '/admin/login'; return; }
+        if (!r.ok) { v.splitError = (await r.json().catch(() => ({}))).error || '切分失敗'; return; }
+        const body = await r.json();
+        v.splitResults = body.results.map((res, i) => ({ original: texts[i], ...res }));
+      } catch (err) {
+        v.splitError = '網路錯誤，請稍後再試';
+      } finally {
+        v.splitLoading = false;
+      }
+    },
+    async inspectVendorImport(sheetName) {
+      const v = this.vendorImport;
+      if (!v.file) return;
+      v.loading = true; v.error = '';
+      try {
+        const fd = new FormData();
+        fd.append('file', v.file);
+        const dept = this.writeDept();
+        let url = `/api/admin/import/${encodeURIComponent(dept)}/inspect`;
+        if (sheetName) url += `?sheet=${encodeURIComponent(sheetName)}`;
+        const r = await AlarmApi.postForm(url, fd);
+        if (r.status === 403) { location.href = '/admin/login'; return; }
+        if (!r.ok) { v.error = (await r.json().catch(() => ({}))).error || '讀取失敗'; return; }
+        const body = await r.json();
+        v.sheets = body.sheets;
+        v.selected = body.selected;
+        v.selectedSheet = body.selected ? body.selected.name : '';
+      } catch (err) {
+        v.error = '網路錯誤，請稍後再試';
+      } finally {
+        v.loading = false;
+      }
+    },
+
+    async commitBulkImport() {
+      const b = this.bulkImport;
+      if (!this.canCommitBulkImport) return;
+      b.loading = true; b.error = '';
+      try {
+        const fd = new FormData();
+        fd.append('file', b.file);
+        fd.append('import_mode', b.importMode);
+        if (b.preview.requires_accept_incomplete) {
+          fd.append('accept_incomplete', (b.acceptIncomplete || '').trim());
+        }
+        const dept = this.writeDept();
+        const r = await AlarmApi.postForm(`/api/admin/bulk-import/${encodeURIComponent(dept)}/commit`, fd);
+        if (r.status === 403) { location.href = '/admin/login'; return; }
+        if (!r.ok) { b.error = (await r.json().catch(() => ({}))).error || '匯入失敗'; return; }
+        b.result = await r.json();
+        await this.load();
+        this.showToast(b.result.partial
+          ? `部分匯入完成：成功 ${b.result.succeeded} 筆`
+          : `匯入完成：${b.result.succeeded} 筆`);
+      } catch (err) {
+        b.error = '網路錯誤，請稍後再試';
+      } finally {
+        b.loading = false;
+      }
+    },
+    async undoBulkImport() {
+      const b = this.bulkImport;
+      if (!b.result || !b.result.snapshot_id) return;
+      b.undoLoading = true; b.undoError = '';
+      try {
+        const dept = this.writeDept();
+        const r = await AlarmApi.post(
+          `/api/admin/import/${encodeURIComponent(dept)}/snapshots/${b.result.snapshot_id}/undo`);
+        if (r.status === 403) { location.href = '/admin/login'; return; }
+        if (!r.ok) { b.undoError = (await r.json().catch(() => ({}))).error || '復原失敗'; return; }
+        b.undoResult = await r.json();
+        await this.load();
+        this.showToast(`已復原 ${b.undoResult.succeeded} 筆`);
+      } catch (err) {
+        b.undoError = '網路錯誤，請稍後再試';
+      } finally {
+        b.undoLoading = false;
+      }
+    },
+
+    // ── 語意審核（規劃第 1c 項）：讀取離線工具產出的疑慮清單，逐筆
+    // 採用（寫入 alarms 正式表）或略過。AI 建議只是起點，editText
+    // 預先帶入 suggested_zh 但完全可編輯——審核者才是最終決定的人
+    // （EXTRACTION_SPEC.md「一條不能跨的線」同樣適用在這裡）。
+    async loadSemanticReview() {
+      this.semanticReview.loading = true; this.semanticReview.error = '';
+      try {
+        const dept = this.writeDept();
+        const r = await AlarmApi.get(`/api/admin/semantic-review/${encodeURIComponent(dept)}`);
+        if (r.status === 403) { location.href = '/admin/login'; return; }
+        if (!r.ok) { this.semanticReview.error = (await r.json().catch(() => ({}))).error || '載入失敗'; return; }
+        const body = await r.json();
+        this.semanticReview.items = body.findings.map((f, idx) => ({
+          ...f, idx,
+          editText: f.suggested_zh || '',
+          busy: false, rowError: '',
+        }));
+        this.semanticReview.loaded = true;
+      } catch (err) {
+        this.semanticReview.error = '網路錯誤，請稍後再試';
+      } finally {
+        this.semanticReview.loading = false;
+      }
+    },
+    async acceptSemanticReview(row) {
+      row.busy = true; row.rowError = '';
+      try {
+        const dept = this.writeDept();
+        const r = await AlarmApi.put(
+          `/api/admin/semantic-review/${encodeURIComponent(dept)}/${row.idx}`,
+          { action: 'accept', final_zh: row.editText.trim() });
+        if (r.status === 403) { location.href = '/admin/login'; return; }
+        if (!r.ok) { row.rowError = (await r.json().catch(() => ({}))).error || '採用失敗'; return; }
+        const updated = await r.json();
+        Object.assign(row, updated);
+        this.showToast(`${row.device_model} ${row.code} 已採用並寫入`);
+      } catch (err) {
+        row.rowError = '網路錯誤，請稍後再試';
+      } finally {
+        row.busy = false;
+      }
+    },
+    async rejectSemanticReview(row) {
+      row.busy = true; row.rowError = '';
+      try {
+        const dept = this.writeDept();
+        const r = await AlarmApi.put(
+          `/api/admin/semantic-review/${encodeURIComponent(dept)}/${row.idx}`,
+          { action: 'reject' });
+        if (r.status === 403) { location.href = '/admin/login'; return; }
+        if (!r.ok) { row.rowError = (await r.json().catch(() => ({}))).error || '略過失敗'; return; }
+        const updated = await r.json();
+        Object.assign(row, updated);
+      } catch (err) {
+        row.rowError = '網路錯誤，請稍後再試';
+      } finally {
+        row.busy = false;
+      }
+    },
+
     async saveAlarm() {
       this.alarmError = '';
       try {
