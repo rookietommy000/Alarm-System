@@ -1473,7 +1473,7 @@ def create_app() -> Flask:
         scope, dept = scope_department()
         return jsonify(view_store.stats(department=(dept if scope == DeptScope.DEPT else None)))
 
-    ANALYZE_RATE_LIMIT_PER_HOUR = 20
+    ANALYZE_RATE_LIMIT_PER_HOUR = 30
 
     @app.post("/api/analyze")
     @login_required
