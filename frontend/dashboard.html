@@ -233,6 +233,9 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
     </aside>
 
     <main style="flex:1; min-width:0; display:flex; flex-direction:column">
+      <div v-if="degradedThrottle" style="padding:10px 32px; background:color-mix(in srgb, #a23b3b 12%, transparent); border-bottom:1px solid #a23b3b; color:#a23b3b; font-size:13px">
+        ⚠ 登入節流已降級為行程內防護（資料庫查詢異常），保護力較弱但登入功能不受影響——這不影響一般操作，僅供系統管理參考。
+      </div>
       <header class="topbar" style="display:flex; align-items:flex-end; justify-content:space-between; gap:20px; padding:26px 32px 18px; border-bottom:1px solid var(--color-divider)">
         <div style="display:flex; flex-direction:column; gap:4px">
           <div style="font-size:11px; letter-spacing:0.12em; text-transform:uppercase; color:var(--color-accent)">{{ pageTitles[page][0] }}</div>
@@ -1261,6 +1264,7 @@ createApp({
       // ── 多部門狀態（PLAN 5.2/5.2.1 節）──
       whoami: { auth: false, admin: false, superadmin: false, department: null, department_name: null },
       whoamiLoaded: false,
+      degradedThrottle: false,  // 登入節流是否降級為行程內計數（/ping 回報，見 storage.py LoginAttemptStore）
       viewDept: '__all__',   // URL query ?dept= 為唯一權威，見 mounted()
       departments: [],       // 超管專用：部門清單（含 active 狀態）
 
@@ -1503,6 +1507,11 @@ createApp({
     }
     this.setAuditQuickRange('month');  // 預設本月，load() 內的 loadAudit() 會沿用這個區間
     await this.load();
+
+    // 健康檢查性質的呼叫，不阻塞主要載入、失敗不影響頁面正常使用
+    fetch('/ping').then(r => r.json()).then(d => {
+      this.degradedThrottle = !!d.degraded_throttle;
+    }).catch(() => {});
 
     const d = new Date();
     this.nowLabel = '資料更新於 ' + String(d.getMonth()+1).padStart(2,'0') + '/' + String(d.getDate()).padStart(2,'0') + ' ' + String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');

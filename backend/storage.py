@@ -1,5 +1,6 @@
 import json
 import os
+import time
 import urllib.parse
 import urllib.request
 import urllib.error
@@ -1272,9 +1273,51 @@ class LoginAttemptStore:
 
     本機/測試模式（非 Supabase）不記錄，節流形同不啟用（與正式環境的
     JsonStore 單租戶定位一致，PLAN 3.2 節）。
+
+    Supabase 查詢失敗時的降級策略（外部專家 + 使用者裁決）：fail-open，
+    降級為行程內計數，不是完全不節流、也不是 fail-closed 擋下所有人。
+
+    這不是因為「密碼夠長所以節流不重要」——只有 zztest 哨兵部門的密碼是
+    reset_sentinel_password.py 產生的 20 字元隨機字串，正式部門密碼是
+    超管手動輸入、沒有強度驗證，機密性這條防線本來就不算牢固。選擇
+    fail-open 是**誠實的可用性優先取捨**：這裡的節流主要防的是「暴力
+    嘗試把 worker 資源佔滿」這種可用性攻擊，不是最後一道機密性防線；
+    資料庫查詢本身不穩時，讓所有正常使用者（不只攻擊者）被完全鎖在
+    登入頁外，代價比「降級成一個比較寬鬆的行程內節流」更高。
+
+    行程內計數依賴目前的單 worker 部署假設（render.yaml 的 startCommand
+    沒有指定 `-w`，用 gunicorn 預設值）。未來若改成多 worker，各 worker
+    的計數彼此獨立、互不同步，降級模式下的節流精確度會下降（實際能
+    通過的請求數可能是「每 worker 各自的上限」而非全域上限），但不會
+    因此出錯或崩潰——只是防護變得更鬆，這個取捨在多 worker 化時需要
+    重新評估，不是這次修正要解決的範圍。
     """
 
     _TABLE = "login_attempts"
+
+    # 降級節流的窗口/門檻（外部專家建議值，使用者裁決採用）：
+    # Supabase 查詢連續失敗時，5 分鐘內同一 IP 超過此次數才擋，比正常
+    # 模式（_remaining_delay 的指數退避，N=1 就開始）寬鬆得多——降級
+    # 模式本來就該比正常模式寬鬆，這是刻意的，不是疏漏。
+    _FALLBACK_WINDOW_SECONDS = 300
+    _FALLBACK_LIMIT = 20
+
+    def __init__(self):
+        self._fallback_lock = Lock()
+        self._fallback_hits: dict = {}  # ip -> [timestamp, ...]（僅記錄「查詢失敗當下」的請求時間，不是失敗登入次數）
+        self.degraded = False  # /ping、後台橫幅讀這個旗標
+
+    def _fallback_count(self, ip: str) -> int:
+        """行程內計數：清掉窗口外的舊記錄，回傳目前窗口內的次數，並
+        記一筆新的。不是「登入失敗次數」，是「Supabase 查詢失敗、
+        退回行程內計數的次數」——降級期間用來判斷是否還要繼續放行。"""
+        now = time.time()
+        cutoff = now - self._FALLBACK_WINDOW_SECONDS
+        with self._fallback_lock:
+            hits = [t for t in self._fallback_hits.get(ip, []) if t > cutoff]
+            hits.append(now)
+            self._fallback_hits[ip] = hits
+            return len(hits)
 
     def _base_key(self):
         base = os.environ.get("SUPABASE_URL", "").rstrip("/")
@@ -1338,8 +1381,23 @@ class LoginAttemptStore:
             )
             n = len(count_rows)
             last_failure_at = count_rows[0]["attempted_at"] if count_rows else None
+            self.degraded = False
             return (n, last_failure_at)
-        except Exception:
+        except Exception as e:
+            # 查詢失敗不可靜默偽裝成「N=0，沒有任何失敗記錄」——那等於
+            # 節流在資料庫不穩時直接失效且毫無警示。改為 fail-open 降級：
+            # 捕捉例外、記錄、退回行程內計數（見 class docstring 的取捨
+            # 說明），不是完全不節流、也不是讓所有正常使用者被鎖在外面。
+            self.degraded = True
+            import sys as _sys
+            print(f"throttle_degraded: LoginAttemptStore 查詢失敗，退回行程內計數："
+                  f"{type(e).__name__}: {e}", file=_sys.stderr)
+            fallback_n = self._fallback_count(ip)
+            if fallback_n > self._FALLBACK_LIMIT:
+                # 沿用「N、最後失敗時間」這個既有回傳形狀，讓呼叫端
+                # _remaining_delay() 不需要另外處理降級模式的分支——
+                # 直接讓它算出一個非零延遲，效果等同節流生效。
+                return (fallback_n, datetime.now(timezone.utc).isoformat())
             return (0, None)
 
     def count_fine(self, ip: str, department: str) -> tuple:

@@ -1846,13 +1846,17 @@ def create_app() -> Flask:
     @app.get("/ping")
     @public_endpoint
     def ping():
+        # degraded_throttle：登入節流查詢是否已降級為行程內計數（見
+        # LoginAttemptStore class docstring）。順便讓既有的 cron-job.org
+        # 防休眠排程變成節流健康度監控——不算敏感資訊，公開沒有風險。
+        degraded_throttle = login_attempt_store.degraded
         try:
             # 只確認連得到資料庫，不搬資料列——department=None 的 load() 會撈
             # 整張表（外部審查發現：Render cron 每 10 分鐘打一次，白白浪費）
             alarms_store.probe()
-            return {"status": "ok"}, 200
+            return {"status": "ok", "degraded_throttle": degraded_throttle}, 200
         except Exception as e:
-            return {"status": "db_error", "msg": str(e)}, 200
+            return {"status": "db_error", "msg": str(e), "degraded_throttle": degraded_throttle}, 200
 
     @app.get("/")
     @public_endpoint
