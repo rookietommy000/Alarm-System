@@ -85,32 +85,76 @@ class GeminiAnalyzer(BaseAnalyzer):
             )
 
     def analyze(self, image_b64: str, mime_type: str = "image/jpeg") -> dict:
-        from google.genai import types
+        from google.genai import errors, types
+        import httpx
 
-        response = self._client.models.generate_content(
-            model=self.analyzer_model,
-            contents=[
-                types.Part.from_bytes(data=base64.b64decode(image_b64), mime_type=mime_type),
-                _ALARM_PROMPT,
-            ],
-            # 比照 LocalAnalyzer 的 timeout=30（秒）；SDK 的 timeout 單位是毫秒。
-            # 原本沒有設定，Gemini API 請求掛住時會無限期卡住整個 worker。
-            config=types.GenerateContentConfig(http_options=types.HttpOptions(timeout=30000)),
-        )
-        raw = response.text.strip()
-        result = _parse_response(raw, self)
-        # AI 用量統計階段 1：只記錄，不做上限管控（跟 /api/analyze 的呼叫
-        # 頻率節流是分開的機制）。usage_metadata 在 SDK 回應裡可能是
-        # None（例如 API 本身未回傳），這裡不強求一定有值。只有 Gemini
-        # 才有這份資料，LocalAnalyzer 走 Ollama 沒有對應概念，所以放在
-        # GeminiAnalyzer 這層附加，不改動共用的 _parse_response() 簽名。
+        try:
+            response = self._client.models.generate_content(
+                model=self.analyzer_model,
+                contents=[
+                    types.Part.from_bytes(data=base64.b64decode(image_b64), mime_type=mime_type),
+                    _ALARM_PROMPT,
+                ],
+                # 比照 LocalAnalyzer 的 timeout=30（秒）；SDK 的 timeout 單位是毫秒。
+                # 原本沒有設定，Gemini API 請求掛住時會無限期卡住整個 worker。
+                config=types.GenerateContentConfig(http_options=types.HttpOptions(timeout=30000)),
+            )
+        except httpx.TimeoutException as exc:
+            # 我們主動斷線，沒有拿到任何回應——Gemini 那端有沒有處理完、
+            # 有沒有計費不確定（見 usage_stats() 的已知限制說明），這裡
+            # 完全沒有 usage 資料可記。
+            exc.usage_outcome = "timeout"
+            exc.usage = None
+            raise
+        except errors.APIError as exc:
+            # Gemini 明確回了 4xx/5xx，同樣沒有 usage_metadata 可讀。
+            exc.usage_outcome = "http_error"
+            exc.usage = None
+            raise
+
+        # AI 用量統計：優先讀 usage_metadata，早於 response.text/_parse_response
+        # 這些可能失敗的步驟——Gemini 只要回應了就已經算完費用，若解析回應
+        # 內容中途出錯（例如 response.text 觸發 SDK 內部例外），之後才讀
+        # usage 的寫法會讓這次花費完全漏記。usage_metadata 本身在 SDK
+        # 回應裡可能是 None（例如 API 本身未回傳），不強求一定有值。
         usage = response.usage_metadata
-        result["usage"] = {
+        usage_dict = {
             "prompt_token_count": getattr(usage, "prompt_token_count", None),
             "candidates_token_count": getattr(usage, "candidates_token_count", None),
             "thoughts_token_count": getattr(usage, "thoughts_token_count", None),
             "total_token_count": getattr(usage, "total_token_count", None),
         } if usage is not None else None
+
+        # finish_reason=SAFETY 時 response.text 內部邏輯會回 None（不是
+        # 拋例外——SDK 的 _get_text() 對缺 content/parts 的情況是靜默回
+        # None），usage_metadata 通常仍然有值（Gemini 已經跑完模型只是
+        # 內容被擋），所以獨立判斷，不是等 response.text.strip() 對 None
+        # 呼叫 .strip() 自然拋出 AttributeError 才順便歸類——那樣會跟
+        # 其他真正的解析錯誤（parse_fail）混在一起，分不出是安全過濾
+        # 還是我方程式碼真的解析壞掉。
+        candidates = getattr(response, "candidates", None) or []
+        finish_reason = getattr(candidates[0], "finish_reason", None) if candidates else None
+        if finish_reason is not None and str(finish_reason).endswith("SAFETY"):
+            exc = RuntimeError(f"Gemini 內容被安全過濾機制擋下（finish_reason={finish_reason}）")
+            exc.usage_outcome = "safety"
+            exc.usage = usage_dict
+            raise exc
+
+        try:
+            raw = response.text.strip()
+            result = _parse_response(raw, self)
+        except Exception as exc:
+            # 解析回應內容失敗，但 Gemini 已經回應（已計費）——把已經讀到
+            # 的 usage 資訊掛在例外上，讓呼叫端（ai_pipeline.py 的
+            # except 分支）能撈出來一併記錄，不會因為這裡失敗就連用量
+            # 資料都跟著漏記。只有 Gemini 才有這份資料，LocalAnalyzer
+            # 走 Ollama 沒有對應概念，所以放在 GeminiAnalyzer 這層附加，
+            # 不改動共用的 _parse_response() 簽名。
+            exc.usage_outcome = "parse_fail"
+            exc.usage = usage_dict
+            raise
+        result["usage"] = usage_dict
+        result["usage_outcome"] = "ok"
         return result
 
 

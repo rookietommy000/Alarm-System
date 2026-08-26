@@ -421,6 +421,38 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
               </div>
               <p v-if="!planRates.length" style="font-size:13px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">尚無回饋資料</p>
             </section>
+
+            <section class="card blueprint" style="padding:18px; gap:12px">
+              <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+              <div style="display:flex; align-items:baseline; justify-content:space-between">
+                <h2 style="font-size:19px">AI 用量（本月）</h2>
+                <span style="font-size:11px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">D-08</span>
+              </div>
+              <div style="display:flex; gap:24px">
+                <div>
+                  <div style="font-family:var(--font-heading); font-weight:600; font-size:26px; line-height:1">{{ usageStats.month_count }}</div>
+                  <div style="font-size:12px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">呼叫次數</div>
+                </div>
+                <div>
+                  <div style="font-family:var(--font-heading); font-weight:600; font-size:26px; line-height:1; font-variant-numeric:tabular-nums">{{ usageStats.month_total_tokens.toLocaleString() }}</div>
+                  <div style="font-size:12px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">總 tokens</div>
+                </div>
+              </div>
+              <div v-if="usageStats.by_department.length" class="table-wrap">
+              <table class="table" style="min-width:280px">
+                <thead><tr><th>部門</th><th>次數</th><th>tokens</th></tr></thead>
+                <tbody>
+                  <tr v-for="d in usageStats.by_department" :key="d.department">
+                    <td>{{ d.department }}</td>
+                    <td style="font-variant-numeric:tabular-nums">{{ d.count }}</td>
+                    <td style="font-variant-numeric:tabular-nums">{{ d.total_tokens.toLocaleString() }}</td>
+                  </tr>
+                </tbody>
+              </table>
+              </div>
+              <p v-if="!usageStats.month_count" style="font-size:13px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">本月尚無 AI 用量資料</p>
+              <p style="font-size:11px; color:color-mix(in srgb, var(--color-text) 45%, transparent)">僅供估算參考，非精確帳單——逾時斷線或內容被安全過濾擋下的呼叫可能未計入，未來將用實際 Google 帳單核對統計誤差</p>
+            </section>
           </div>
         </div>
 
@@ -1270,6 +1302,7 @@ createApp({
 
       alarms: [], devices: [], feedbackStatsList: [], viewStatsList: [],
       scanStats: { today_count: 0, week_count: 0, total_count: 0, fail_count: 0, fail_rate: 0 },
+      usageStats: { month_count: 0, month_total_tokens: 0, month_prompt_tokens: 0, month_candidates_tokens: 0, by_department: [] },
       scanRecent: [], scanRanking: [], auditLog: [], auditTruncated: false, allScans: [],
 
       scanFilter: { from: '', to: '', model: '', code: '', fix: 'all' },
@@ -1553,7 +1586,7 @@ createApp({
         const endpoints = [
           '/api/alarms' + dq, '/api/devices' + dq, '/api/feedback/stats' + dq, '/api/view/stats' + dq,
           '/api/admin/scan-stats' + dq, '/api/admin/scan-recent' + dq + amp + 'limit=100',
-          '/api/admin/scan-ranking' + dq,
+          '/api/admin/scan-ranking' + dq, '/api/admin/ai-usage-stats' + dq,
         ];
         const results = await Promise.all(endpoints.map(u => AlarmApi.get(u)));
         if (results.some(r => r.status === 403)) { location.href = '/admin/login'; return; }
@@ -1562,7 +1595,7 @@ createApp({
           this.setViewDept('__all__');
           return;
         }
-        const [alarms, devices, fbStats, viewStats, scanStats, scanRecent, scanRanking] = await Promise.all(results.map(r => r.ok ? r.json() : (Array.isArray([]) ? [] : {})));
+        const [alarms, devices, fbStats, viewStats, scanStats, scanRecent, scanRanking, usageStats] = await Promise.all(results.map(r => r.ok ? r.json() : (Array.isArray([]) ? [] : {})));
         this.alarms = alarms;
         this.devices = devices;
         this.feedbackStatsList = fbStats;
@@ -1571,6 +1604,7 @@ createApp({
         this.scanRecent = scanRecent;
         this.allScans = scanRecent;
         this.scanRanking = scanRanking;
+        this.usageStats = usageStats;
         await this.loadAudit();
       } finally {
         this.loading = false;

@@ -59,6 +59,7 @@ ROUTE_AUTH_REGISTRY = {
     ("/api/analyze", "POST"): "login",
     ("/api/confirm", "POST"): "login",
     ("/api/correct", "POST"): "login",
+    ("/api/ai-usage-summary", "GET"): "login",
 
     ("/api/audit", "GET"): "admin",
 
@@ -66,6 +67,7 @@ ROUTE_AUTH_REGISTRY = {
     ("/api/admin/scan-recent", "GET"): "admin",
     ("/api/admin/scan-ranking", "GET"): "admin",
     ("/api/admin/ai-logs", "GET"): "admin",
+    ("/api/admin/ai-usage-stats", "GET"): "admin",
     ("/api/admin/cleanup-expired", "POST"): "superadmin",
 
     ("/api/admin/departments", "GET"): "superadmin",

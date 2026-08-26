@@ -439,6 +439,7 @@
       border: 2px solid #ccc;
     }
     .camera-tip { font-size: 13px; color: rgba(255,255,255,0.5); letter-spacing: 0.04em; }
+    .camera-usage-hint { font-size: 11px; color: rgba(255,255,255,0.3); letter-spacing: 0.02em; margin-top: 4px; }
     .hint-ok  { color: #4ade80; }
     .hint-bad { color: #f87171; }
     .hint-unk { color: rgba(255,255,255,0.4); }
@@ -946,6 +947,7 @@
             <span class="shutter-inner"></span>
           </button>
           <div class="camera-tip" v-if="!camError">將警報畫面對準框內</div>
+          <div class="camera-usage-hint" v-if="!camError && aiUsageMonthCount !== null">本部門本月已使用 AI 辨識 {{ aiUsageMonthCount }} 次</div>
           <button v-if="camError && isDesktopDev" class="btn-secondary" style="margin-top:8px" @click="takePhoto">模擬拍照（開發用）</button>
         </div>
       </div>
@@ -1200,6 +1202,7 @@
           showCorrectionPicker: false,
           isDesktopDev: !/iPhone|iPad|Android/i.test(navigator.userAgent),
           whoami: { department: null, department_name: null, admin: false, auth: false },
+          aiUsageMonthCount: null,  // null = 尚未載入，避免載入前短暫顯示「0次」造成誤解
         };
       },
       computed: {
@@ -1227,6 +1230,10 @@
       },
       mounted() {
         AlarmApi.whoami().then(w => { this.whoami = w; });
+        // 低調的用量提示，非額度警示——失敗不影響拍照分析功能本身
+        AlarmApi.get('/api/ai-usage-summary').then(r => r.ok ? r.json() : null).then(d => {
+          if (d) this.aiUsageMonthCount = d.month_count;
+        }).catch(() => {});
         AlarmApi.get('/api/devices').then(r => r.json()).then(d => { this.devices = d; });
         AlarmApi.get('/api/feedback/stats').then(r => r.json()).then(stats => {
           this.feedbackStats = Object.fromEntries(stats.map(s => [s.device_model + '|' + s.code, s]));

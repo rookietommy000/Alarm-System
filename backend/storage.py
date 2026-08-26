@@ -1111,6 +1111,99 @@ class AiScanStore:
         return self._get("ai_logs",
                          f"select=*&order=created_at.desc&limit={limit}{self._dept_qs(department)}")
 
+    def usage_stats(self, department: Optional[str]) -> dict:
+        """AI 用量統計（本月），department=None 時回傳全部部門的總計＋
+        按部門分列（總管視角）；帶 department 時只回該部門的總計，
+        by_department 為空（跟既有 scan_stats() 的 scope 慣例一致，
+        分列清單只在跨部門視角才有意義）。
+
+        跟 count_recent() 一樣走「撈原始列表、Python 端聚合」而非
+        PostgREST 層聚合——這個 repo 目前所有統計端點（scan_stats/
+        scan_ranking）都是這個風格，維持一致比另外學一套聚合語法
+        風險更低。
+
+        只計入 data.usage 有值的記錄（真正成功拿到 Gemini token 用量
+        的呼叫），不含分析失敗、LocalAnalyzer（沒有 usage 概念）、或
+        usage_metadata 本身為 None 的記錄——這是使用者裁決的統計口徑：
+        次數要反映「實際花了多少 token」，不是「嘗試了幾次」。
+
+        已知限制（誠實揭露，不保證 100% 精確反映 Google 實際帳單）：
+        Google 官方文件沒有明確保證以下兩種灰色地帶的計費狀況——
+        (a) 我們主動 30 秒 timeout 斷線時，Gemini 那端可能已經處理完
+            並計費，但我們這裡連 usage_metadata 都沒收到，這種花費
+            不會出現在這份統計裡；
+        (b) 內容被 Gemini 安全過濾機制擋下的情況，是否計費不確定。
+        這份統計只能反映「我們這邊有紀錄到的部分」，是估算參考，
+        不是精確帳單來源——實際費用請以 Google Cloud/AI Studio 的
+        帳單為準。"""
+        if not _use_supabase():
+            return {
+                "month_count": 0, "month_total_tokens": 0,
+                "month_prompt_tokens": 0, "month_candidates_tokens": 0,
+                "by_department": [],
+            }
+        now = datetime.now(timezone.utc)
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+        base = os.environ.get("SUPABASE_URL", "").rstrip("/")
+        key = os.environ.get("SUPABASE_KEY", "")
+        query = (
+            f"select=department,data&event=eq.scan"
+            f"&created_at=gt.{urllib.parse.quote(month_start, safe='')}"
+            f"{self._dept_qs(department)}&limit=10000"
+        )
+        try:
+            req = urllib.request.Request(
+                f"{base}/rest/v1/ai_logs?{query}",
+                headers={"apikey": key, "Authorization": f"Bearer {key}"},
+                method="GET",
+            )
+            with urllib.request.urlopen(req) as r:
+                rows = json.loads(r.read().decode())
+        except Exception:
+            rows = []
+
+        totals = {"count": 0, "total": 0, "prompt": 0, "candidates": 0}
+        by_dept: dict = {}
+        for row in rows:
+            data = row.get("data")
+            if isinstance(data, str):
+                try:
+                    data = json.loads(data)
+                except Exception:
+                    continue
+            usage = (data or {}).get("usage")
+            # usage 現在一律有 outcome 欄位（見 ai_pipeline.py），但只有
+            # timeout/http_error 這類「完全沒拿到回應」的情況 usage 才會
+            # 是 None；safety/parse_fail 即使解析失敗，usage 字典仍可能
+            # 存在（只是沒有 outcome 以外的 token 欄位，因為 Gemini 那邊
+            # 也沒回傳 usage_metadata）。統計口徑只認真正有 token 數字的
+            # 記錄，不能被「usage 字典存在但只有 outcome、沒有 token 欄位」
+            # 誤判成有效用量。
+            if not usage or usage.get("total_token_count") is None:
+                continue
+            total_tokens = usage.get("total_token_count") or 0
+            prompt_tokens = usage.get("prompt_token_count") or 0
+            candidates_tokens = usage.get("candidates_token_count") or 0
+
+            totals["count"] += 1
+            totals["total"] += total_tokens
+            totals["prompt"] += prompt_tokens
+            totals["candidates"] += candidates_tokens
+
+            dept_key = row.get("department") or "未知"
+            if dept_key not in by_dept:
+                by_dept[dept_key] = {"department": dept_key, "count": 0, "total_tokens": 0}
+            by_dept[dept_key]["count"] += 1
+            by_dept[dept_key]["total_tokens"] += total_tokens
+
+        return {
+            "month_count": totals["count"],
+            "month_total_tokens": totals["total"],
+            "month_prompt_tokens": totals["prompt"],
+            "month_candidates_tokens": totals["candidates"],
+            "by_department": sorted(by_dept.values(), key=lambda x: -x["total_tokens"]) if department is None else [],
+        }
+
     def cleanup_expired(self, retention_days: dict) -> dict:
         """全庫清理，只有總管能按（PLAN 4.4 節：cleanup-expired 改
         superadmin_required，不依部門過濾，語意不變）。"""

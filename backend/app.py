@@ -1699,6 +1699,26 @@ def create_app() -> Flask:
         limit = min(int(request.args.get("limit", 100)), 500)
         return jsonify(ai_scan_store.load_logs(limit=limit, department=(dept if scope == DeptScope.DEPT else None)))
 
+    @app.get("/api/admin/ai-usage-stats")
+    @admin_required
+    def ai_usage_stats():
+        scope, dept = scope_department()
+        return jsonify(ai_scan_store.usage_stats(department=(dept if scope == DeptScope.DEPT else None)))
+
+    @app.get("/api/ai-usage-summary")
+    @login_required
+    def ai_usage_summary():
+        """給前台一般使用者看的低調用量提示（PLAN 用量統計 UI）：只回
+        自己部門本月次數，不含 by_department 明細或 token/金額——那些
+        是留在 /api/admin/ai-usage-stats 的敏感資訊，這支端點刻意只
+        暴露最小必要的一個數字。超管沒有自己的部門（whoami.department
+        為 None），回 0 即可，超管本來就不會走前台一般操作流程。"""
+        dept = session.get("department")
+        if not dept:
+            return jsonify({"month_count": 0})
+        stats = ai_scan_store.usage_stats(department=dept)
+        return jsonify({"month_count": stats["month_count"]})
+
     @app.post("/api/admin/cleanup-expired")
     @superadmin_required
     def cleanup_expired():

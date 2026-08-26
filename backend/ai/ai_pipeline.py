@@ -75,6 +75,14 @@ def run_pipeline(image_b64: str, mime_type: str = "image/jpeg", known_model: str
         }
         # MEM 也要記（連續斷線才會觸發 ALERT_LOW_CONF）
         scan_record = record_scan(None, None, [], [], source="ai", analyzer=analyzer_meta, department=department)
+        # 解析回應失敗/timeout/http_error/safety 這幾種情況，GeminiAnalyzer
+        # 會把 usage_outcome 分類跟已讀到的 usage 資料（若有）掛在例外上
+        # （見 ai_analyzer.py），這裡撈出來一併記錄——outcome 標示這次
+        # 呼叫的結果類型，即使 usage 資料本身是 None（timeout/http_error
+        # 沒有任何回應可讀），outcome 仍要被記下來，未來才能用實際 Google
+        # 帳單反推各類情況的計費誤差，不用現在就查出確切計費規則。
+        exc_usage = getattr(exc, "usage", None)
+        usage_with_outcome = {**(exc_usage or {}), "outcome": getattr(exc, "usage_outcome", "unknown")}
         log_scan(
             level="ERROR",
             model=None,
@@ -84,6 +92,7 @@ def run_pipeline(image_b64: str, mime_type: str = "image/jpeg", known_model: str
             model_warning=None,
             needs_model_selection=True,
             analyzer=analyzer_meta,
+            usage=usage_with_outcome,
             extra={"pipeline_error": str(exc), "scan_id": scan_record["scan_id"]},
         )
         return {
@@ -131,6 +140,8 @@ def run_pipeline(image_b64: str, mime_type: str = "image/jpeg", known_model: str
     # 6. LOG 層
     analyzer_meta = raw.get("analyzer")
     has_block = any(a.get("block") for a in alerts)
+    raw_usage = raw.get("usage")
+    usage_with_outcome = {**raw_usage, "outcome": raw.get("usage_outcome", "ok")} if raw_usage is not None else None
     log_scan(
         level="ERROR" if has_block else ("WARN" if alerts or val["needs_reconfirm"] else "INFO"),
         model=model,
@@ -140,7 +151,7 @@ def run_pipeline(image_b64: str, mime_type: str = "image/jpeg", known_model: str
         model_warning=result.get("model_warning"),
         needs_model_selection=result.get("needs_model_selection", False),
         analyzer=analyzer_meta,
-        usage=raw.get("usage"),
+        usage=usage_with_outcome,
         extra={"scan_id": scan_record["scan_id"], "alerts": [a["code"] for a in alerts], "val_triggered": val["needs_reconfirm"]},
     )
 

@@ -53,11 +53,18 @@ def log_scan(
 
     level: "INFO" | "WARN" | "ERROR"
     analyzer: {name, model, prompt_version} 追溯用
-    usage: Gemini 的 token 用量（prompt_token_count 等），純記錄用途，
-    不做額度上限管控（AI 用量統計階段 1）。只有 GeminiAnalyzer 會提供，
-    LocalAnalyzer/Analyzer 失敗降級時為 None，寫入 data JSONB 的 usage
-    子欄位，不放進頂層 event（頂層 event 固定是 "scan"，usage 只是這
-    筆掃描記錄底下的附屬資料，不是獨立事件類型）。
+    usage: Gemini 的 token 用量（prompt_token_count 等）＋outcome 分類，
+    純記錄用途，不做額度上限管控（AI 用量統計階段 1）。outcome 標示
+    這次呼叫的結果類型："ok"（正常拿到 usage）/"timeout"（我方 30 秒
+    逾時主動斷線）/"http_error"（Gemini 回 4xx/5xx）/"safety"（Gemini
+    安全過濾擋下，finish_reason=SAFETY）/"parse_fail"（Gemini 有回應
+    但我方解析失敗）——這幾種情境下 Gemini 是否計費 Google 官方文件
+    沒有明確保證，先記錄 outcome 分類，未來用實際帳單反推各類情況的
+    誤差，不用現在就查出確切計費規則。只有 GeminiAnalyzer 會提供，
+    LocalAnalyzer/Analyzer 完全沒呼叫到（例如 import 失敗）時為 None，
+    寫入 data JSONB 的 usage 子欄位，不放進頂層 event（頂層 event
+    固定是 "scan"，usage 只是這筆掃描記錄底下的附屬資料，不是獨立
+    事件類型）。
     """
     _write({
         "event": "scan",
