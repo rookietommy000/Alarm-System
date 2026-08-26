@@ -3,7 +3,7 @@
 > 製造四部內部使用 — 設備警報知識庫，快速查詢警報代碼、原因分析與解決方案。
 
 [![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)](https://python.org)
-[![Flask](https://img.shields.io/badge/Flask-3.0-000000?logo=flask)](https://flask.palletsprojects.com)
+[![Flask](https://img.shields.io/badge/Flask-3.1-000000?logo=flask)](https://flask.palletsprojects.com)
 [![Vue 3](https://img.shields.io/badge/Vue-3.x-4FC08D?logo=vue.js&logoColor=white)](https://vuejs.org)
 [![Supabase](https://img.shields.io/badge/Supabase-Database-3ECF8E?logo=supabase&logoColor=white)](https://supabase.com)
 
@@ -28,26 +28,16 @@
 
 ---
 
-## 入口頁設計
+## 多部門隔離架構
 
-入口頁（`/`）是整個系統的組別選擇起點，目前規劃三個部門，各自對應獨立的查詢系統。
+系統以單一部署同時服務多個部門，部門身分綁定在登入 session 上，不是各部門各自部署。`/` 直接導向 `/app`（前台查詢），登入後所有資料存取都限定在自己的部門範圍內。
 
-| 組別 | 狀態 | 說明 |
-|---|---|---|
-| 📦 包裝組 | ✅ 系統運行中 | 已上線，連結至 `/app` |
-| ⚗️ 調劑組 | 🔜 即將上線 | 待建置 |
-| 💊 充填組 | 🔜 即將上線 | 待建置 |
+- **部門識別**：登入時選擇部門，之後所有讀寫 API 的 URL 都帶著 `<department>` 路徑段（例如 `/api/alarms/<department>/...`），伺服器端一律以登入 session 記錄的部門為準，不信任前端傳入值
+- **新增部門**：後台「部門管理」（`/api/admin/departments` 系列端點）直接建立，不需要修改程式碼或新增前端頁面
+- **總管視角**：另有總管（superadmin）身分可跨部門查看與管理，一般部門帳號看不到其他部門資料
+- **隔離驗證**：`sentinel_pack/verify_isolation.sh` 針對正式 Supabase 環境跑一組跨部門洩漏檢查（讀取、寫入、統計端點、搜尋等），本機 pytest 環境因採單租戶 JsonStore 無法測到隔離本身
 
-### 其他部門如何效仿
-
-每個組別的系統架構完全相同，只有**資料內容不同**。新增一個部門的步驟：
-
-1. **建立獨立的 Supabase 資料表**（或沿用同一個，用 `device_model` 區分）
-2. **匯入該部門的警報代碼資料**（CSV 或 JSON 格式）
-3. **在入口頁 `portal.html` 新增一張卡片**，`href` 指向對應的查詢路徑
-4. **設定獨立的登入密碼**（透過環境變數 `LOGIN_PASSWORD`）
-
-> 若要完全隔離（各部門各自部署），Fork 此 repo 後修改資料與密碼即可獨立運作，整體不超過 2 小時可完成初始建置。
+> 完全獨立部署（各部門各自一份服務）仍然可行：Fork 此 repo 後接自己的 Supabase 專案、只建立一個部門即可，但多部門場景下建議直接用本系統內建的部門管理，不需要 Fork。
 
 ---
 
@@ -83,26 +73,28 @@
 ```
 .
 ├── backend/
-│   ├── app.py          # Flask API + 靜態檔伺服器
-│   └── storage.py      # 儲存層抽象（JsonStore / SupabaseStore）
+│   ├── app.py           # Flask API + 靜態檔伺服器
+│   ├── storage.py       # 儲存層抽象（JsonStore / SupabaseStore）
+│   ├── alarm_ingest/    # 批次匯入（欄位偵測、切分、驗證、寫入）
+│   ├── ai/              # AI 拍照辨識與分析
+│   └── migrations/      # Supabase schema 異動腳本
 ├── frontend/
-│   ├── portal.html     # 入口選擇頁（各組別）
-│   ├── index.html      # 前台查詢介面（Vue 3）
-│   ├── admin.html      # 後台管理介面（Vue 3 + Bootstrap 5）
-│   ├── dashboard.html  # 回饋儀表板
-│   ├── login.html      # 使用者登入
-│   ├── admin-login.html# 管理員登入
-│   └── style.css       # 全站深色主題樣式
-├── data/               # 本地開發 JSON 資料（生產用 Supabase）
-└── tests/
-    └── test_api.py     # pytest 整合測試
+│   ├── index.html       # 前台查詢介面（Vue 3，含入口重導）
+│   ├── dashboard.html   # 後台管理介面（/admin 實際指向這支，不是 admin.html）
+│   ├── login.html       # 使用者登入
+│   ├── admin-login.html # 管理員登入
+│   └── style.css        # 全站深色主題樣式
+├── data/                # 本地開發 JSON 資料（生產用 Supabase）
+├── tools/variant/       # 離線資料整理 CLI（語意品質掃描、variant 欄位解析）
+├── sentinel_pack/       # 跨部門隔離驗證用的哨兵測試資料與腳本
+└── tests/               # pytest 整合測試
 ```
 
 **技術特點：**
 - Flask 單一進程同時 serve API 與前端靜態檔，無需額外 Web Server
 - Vue 3 CDN 載入，無需 npm / build step，改檔即生效
 - 儲存層透過環境變數自動切換：有 Supabase 憑證用 Supabase，否則用本地 JSON
-- Supabase 複合主鍵設計：`(device_model, code)` 支援不同機種使用相同代碼
+- Supabase 複合主鍵設計：`(department, device_model, code, variant)` 支援跨部門、跨機種、同機種多變體使用相同代碼
 
 ---
 
@@ -110,7 +102,7 @@
 
 | 路徑 | 說明 | 權限 |
 |---|---|---|
-| `/` | 入口頁（組別選擇） | 公開 |
+| `/` | 導向 `/app` | 公開 |
 | `/login` | 使用者登入 | 公開 |
 | `/app` | 前台查詢主介面 | 登入後 |
 | `/admin/login` | 管理員登入 | 公開 |
@@ -123,26 +115,21 @@
 
 ## API 端點
 
-### 讀取（一般登入即可）
+所有 `/api/*` 端點都需要登入（`/api/departments/public`、`/api/whoami`、`/ping` 除外），讀寫端點的 URL 一律帶 `<department>` 路徑段，伺服器只信任 session 裡的部門、不信任前端傳入值（見上方「多部門隔離架構」）。完整清單以 `backend/app.py` 的路由裝飾器為準，`tests/test_route_auth_registry.py` 強制每個 `/api/*` 路由都要登記權限層級，兩者不會脫節。以下按功能分類列出主要端點：
 
-| Method | 路徑 | 說明 |
+| 分類 | 說明 | 代表端點 |
 |---|---|---|
-| GET | `/api/alarms` | 查詢警報（支援 `?q=&device=&severity=`） |
-| GET | `/api/alarms/<device>/<code>` | 取得單筆警報 |
-| GET | `/api/devices` | 機種清單 |
-| GET | `/api/feedback/stats` | 回饋成功率統計 |
-| POST | `/api/feedback` | 提交回饋（effective / ineffective） |
-| POST | `/api/view` | 記錄查詢瀏覽事件 |
-| GET | `/api/view/stats` | 查詢次數統計（熱門排行） |
-
-### 寫入（需管理員權限）
-
-| Method | 路徑 | 說明 |
-|---|---|---|
-| POST | `/api/alarms` | 新增警報代碼 |
-| PUT | `/api/alarms/<device>/<code>` | 更新警報代碼 |
-| DELETE | `/api/alarms/<device>/<code>` | 刪除警報代碼 |
-| GET | `/api/audit` | 操作歷史紀錄（最新 100 筆） |
+| 警報 CRUD | 查詢、新增、修改、刪除警報代碼 | `/api/alarms/<department>[/<device_model>/<code>]` |
+| 機種管理 | 機種清單與 CRUD | `/api/devices/<department>[/<device_model>]` |
+| 現場處置 | 不覆寫原廠 `solution` 的現場自訂方案，含變更歷史 | `/api/alarms/<department>/<device_model>/<code>/local`、`.../history` |
+| 回饋 / 瀏覽統計 | 使用者標記方案有效性、熱門查詢排行 | `/api/feedback`、`/api/feedback/stats`、`/api/view`、`/api/view/stats` |
+| 操作歷史 | 所有寫入操作的完整 diff 稽核軌跡 | `/api/audit` |
+| 批次匯入 | 上傳範本檔預覽、切分、確認寫入、整批復原 | `/api/admin/bulk-import/<department>/{preview,commit}`、`/api/admin/import/<department>/{inspect,split,snapshots}` |
+| 語意審核 | AI 掃描出的翻譯疑慮，人工逐筆確認採用 | `/api/admin/semantic-review/<department>[/<index>]` |
+| AI 拍照分析 | 拍照辨識警報並提出建議，需人工確認/修正 | `/api/analyze`、`/api/confirm`、`/api/correct` |
+| AI 稽核 | AI 使用量與判斷記錄查詢 | `/api/admin/scan-stats`、`/api/admin/scan-recent`、`/api/admin/scan-ranking`、`/api/admin/ai-logs` |
+| 部門管理（總管限定） | 建立/停用/重設密碼/刪除部門 | `/api/admin/departments[/<dept_id>]` |
+| 身分 | 目前登入狀態、公開部門清單 | `/api/whoami`、`/api/departments/public` |
 
 ---
 
@@ -204,55 +191,15 @@ pytest tests/
 
 ## 資料庫 Schema（Supabase）
 
-```sql
--- 警報代碼（主資料表）
-create table alarms (
-  device_model text not null,
-  code         text not null,
-  severity     text,
-  description  text,
-  cause        text,
-  solution     text,
-  keywords     text[],
-  sol_steps    jsonb,
-  primary key (device_model, code)
-);
+完整 schema 異動歷史見 `backend/migrations/`（依序執行的編號 SQL 檔），這裡只說明核心設計概念：
 
--- 設備清單
-create table devices (
-  id       text primary key,
-  model    text,
-  category text,
-  line     text
-);
-
--- 使用者回饋
-create table feedback (
-  id           bigint generated always as identity primary key,
-  code         text,
-  device_model text,
-  result       text,
-  created_at   timestamptz default now()
-);
-
--- 查詢瀏覽紀錄
-create table alarm_views (
-  id           bigint generated always as identity primary key,
-  code         text,
-  device_model text,
-  viewed_at    timestamptz default now()
-);
-
--- 操作歷史
-create table alarm_history (
-  id         bigint generated always as identity primary key,
-  operation  text,
-  code       text,
-  old_data   jsonb,
-  new_data   jsonb,
-  changed_at timestamptz default now()
-);
-```
+- **`alarms`**：主資料表，`(department, device_model, code, variant)` 複合鍵。`solution` 是原廠欄位、任何路徑都不得覆寫；現場自訂的處置方式走獨立的 `local_solution`/`local_reason` 欄位，兩者並存、互不污染
+- **`departments`**：部門清單，含密碼雜湊、啟用狀態、`session_version`（用於強制舊 session 失效）
+- **`devices`**：機種清單，`(department, model)` 複合唯一約束（同機種名可能分屬不同部門）
+- **variant（機種多變體）**：同一機種型號在不同產線可能有細微差異，`variant` 欄位區分同 `device_model` 下的不同版本，非必要時留空字串即可
+- **`import_snapshots` / `import_snapshot_rows`**：批次匯入的整批復原保底機制，commit 前記錄每筆寫入前的值，支援整批 undo。僅 Supabase 模式生效，本機 JsonStore fallback 不支援
+- **`feedback` / `alarm_views` / `alarm_history`**：使用者回饋、查詢瀏覽紀錄、操作歷史稽核軌跡，皆帶 `department` 欄位供隔離查詢
+- **`ai_scans` / `ai_corrections` / `ai_logs`**：AI 拍照辨識與分析的使用記錄
 
 ### 四段式解決方案欄位（`sol_steps` JSONB）
 
@@ -269,14 +216,15 @@ create table alarm_history (
 
 ## 部署（Render）
 
-本專案部署至 [Render](https://render.com)，透過 GitHub 自動部署：
+本專案部署至 [Render](https://render.com)，透過 GitHub 自動部署，設定見 `render.yaml`：
 
 1. 在 Render 建立 **Web Service**，連接此 GitHub Repo
 2. **Build Command：** `pip install -r backend/requirements.txt`
-3. **Start Command：** `gunicorn -w 2 -b 0.0.0.0:$PORT backend.app:app`
-4. 在 Render Environment 設定環境變數（同上方說明）
+3. **Start Command：** `gunicorn --chdir backend --bind 0.0.0.0:$PORT app:app`
+4. **Health Check Path：** `/api/server-url`
+5. 在 Render Environment 設定環境變數（同上方說明，另需 `GEMINI_API_KEY`、`SUPERADMIN_PASSWORD`——見 `render.yaml` 完整清單）
 
-每次 push 到 `main` 分支即自動重新部署。
+每次 push 到 `main` 分支即自動重新部署。免費層閒置會休眠，搭配 [cron-job.org](https://cron-job.org) 每 5 分鐘 ping `/ping` 端點防止休眠（見上方「線上網址」一節）。
 
 ---
 
