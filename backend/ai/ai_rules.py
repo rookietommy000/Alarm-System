@@ -14,6 +14,7 @@ AI 辨識後處理規則集。
 import json
 import os
 import re
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -217,8 +218,34 @@ def _validate_model(
 
 # ── 工具函式 ─────────────────────────────────────────────────────────────────
 
+class ValidModelsUnavailable(Exception):
+    """load_valid_models() 讀取失敗時拋出——白名單消失會讓 AI 辨識結果
+    全部被判定為不在白名單而遭拒絕，不能用空 list 蒙混成「這台機種真的
+    不存在」，呼叫端必須能區分「暫時性讀取故障」跟「機種真的沒登記」。
+    """
+
+
+# [POST-004] 機種清單變動極少（新增/停用機種是管理員手動操作），加短
+# TTL 記憶體快取：一次讀取失敗不必每次呼叫都重新觸發檔案/資料庫 I/O，
+# 也讓短暫抖動（例如檔案系統瞬斷）不會被使用者感知到；快取時間夠短
+# （預設 5 分鐘），機種變更後不會讓使用者等太久才生效。
+_VALID_MODELS_CACHE_TTL = int(os.environ.get("VALID_MODELS_CACHE_TTL", "300"))
+_valid_models_cache: dict = {"models": None, "expires_at": 0.0}
+
+
 def load_valid_models(data_dir: Optional[str] = None) -> list:
-    """從 devices.json 讀取合法機種列表（只含 active 機種）。"""
+    """從 devices.json 讀取合法機種列表（只含 active 機種）。
+
+    讀取失敗時 fail-closed，拋出 ValidModelsUnavailable，不回傳空
+    list——空 list 在 apply_post_rules() 眼中等同「沒有任何合法機種」，
+    會讓所有辨識結果被判定為不在白名單而全數拒絕，且錯誤訊息（見
+    app.py 的 /api/analyze）容易被誤判成「這台機種真的不在系統裡」，
+    而不是「白名單暫時讀不到」這種故障。
+    """
+    now = time.monotonic()
+    if _valid_models_cache["models"] is not None and now < _valid_models_cache["expires_at"]:
+        return _valid_models_cache["models"]
+
     if data_dir is None:
         data_dir = os.environ.get(
             "ALARM_DATA_DIR",
@@ -228,6 +255,17 @@ def load_valid_models(data_dir: Optional[str] = None) -> list:
     try:
         devices = json.loads(path.read_text(encoding="utf-8"))
         # [POST-003] 只回傳 active != false 的機種（無此欄位視為有效）
-        return [d["model"] for d in devices if d.get("model") and d.get("active", True)]
-    except Exception:
-        return []
+        models = [d["model"] for d in devices if d.get("model") and d.get("active", True)]
+    except Exception as e:
+        # 快取內還有上一次成功讀到的值時，寧可回傳稍舊的白名單也不要
+        # 讓整條辨識路徑掛掉——一次瞬斷不該讓使用者看到 500。快取真的
+        # 是空的（從未成功讀過，或已經過了很久沒成功刷新）才 fail-closed。
+        if _valid_models_cache["models"] is not None:
+            return _valid_models_cache["models"]
+        raise ValidModelsUnavailable(
+            f"機種清單暫時無法讀取，請稍後再試（若持續發生請聯絡管理員）：{type(e).__name__}: {e}"
+        ) from e
+
+    _valid_models_cache["models"] = models
+    _valid_models_cache["expires_at"] = now + _VALID_MODELS_CACHE_TTL
+    return models

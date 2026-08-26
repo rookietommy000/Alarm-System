@@ -1497,7 +1497,7 @@ def create_app() -> Flask:
         if not image_b64:
             abort(400, "image (base64) 為必填")
         try:
-            from ai import run_pipeline
+            from ai import run_pipeline, ValidModelsUnavailable
             return jsonify(run_pipeline(image_b64, mime_type, known_model=known_model,
                                         department=department))
         except ImportError:
@@ -1506,6 +1506,9 @@ def create_app() -> Flask:
         except KeyError:
             app.logger.exception("AI 分析缺少環境變數")
             abort(503, "AI 服務設定不完整，請聯絡管理員")
+        except ValidModelsUnavailable as e:
+            app.logger.exception("機種白名單載入失敗")
+            abort(503, str(e))
         except Exception:
             app.logger.exception("AI 分析失敗")
             abort(500, "AI 分析失敗，請稍後再試或聯絡管理員")
