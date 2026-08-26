@@ -140,6 +140,7 @@ def run_pipeline(image_b64: str, mime_type: str = "image/jpeg", known_model: str
         model_warning=result.get("model_warning"),
         needs_model_selection=result.get("needs_model_selection", False),
         analyzer=analyzer_meta,
+        usage=raw.get("usage"),
         extra={"scan_id": scan_record["scan_id"], "alerts": [a["code"] for a in alerts], "val_triggered": val["needs_reconfirm"]},
     )
 

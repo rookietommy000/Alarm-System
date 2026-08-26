@@ -45,6 +45,7 @@ def log_scan(
     model_warning: Optional[str],
     needs_model_selection: bool,
     analyzer: Optional[dict] = None,
+    usage: Optional[dict] = None,
     extra: Optional[dict] = None,
 ):
     """
@@ -52,6 +53,11 @@ def log_scan(
 
     level: "INFO" | "WARN" | "ERROR"
     analyzer: {name, model, prompt_version} 追溯用
+    usage: Gemini 的 token 用量（prompt_token_count 等），純記錄用途，
+    不做額度上限管控（AI 用量統計階段 1）。只有 GeminiAnalyzer 會提供，
+    LocalAnalyzer/Analyzer 失敗降級時為 None，寫入 data JSONB 的 usage
+    子欄位，不放進頂層 event（頂層 event 固定是 "scan"，usage 只是這
+    筆掃描記錄底下的附屬資料，不是獨立事件類型）。
     """
     _write({
         "event": "scan",
@@ -65,6 +71,7 @@ def log_scan(
         "alarms": [{"code": a["code"], "conf": a.get("conf")} for a in alarms],
         "rejected": [{"code": a["code"], "error": a.get("error")} for a in rejected_alarms],
         "analyzer": analyzer,
+        "usage": usage,
         **(extra or {}),
     })
 
@@ -189,8 +196,15 @@ def _write(record: dict):
                 method="POST",
             )
             urllib.request.urlopen(req)
-        except Exception:
-            pass
+        except Exception as e:
+            # 寫入失敗不可中斷主流程（LOG 層是輔助記錄，不是核心功能），
+            # 但完全吞掉例外會讓「ai_logs 表結構跟預期不符」跟「網路
+            # 抖動」都靜默變成一樣的「什麼都沒發生」，沒有任何線索可查
+            # ——同 storage.py ImportSnapshotStore.save_snapshot() 的
+            # 既有修法：印一行 stderr，不中斷，但至少留下痕跡。
+            import sys as _sys
+            print(f"[ai_logger] _write 寫入 ai_logs 失敗（不影響主流程）："
+                  f"{type(e).__name__}: {e}", file=_sys.stderr)
         return
 
     path = _today_log_path()

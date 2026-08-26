@@ -98,7 +98,20 @@ class GeminiAnalyzer(BaseAnalyzer):
             config=types.GenerateContentConfig(http_options=types.HttpOptions(timeout=30000)),
         )
         raw = response.text.strip()
-        return _parse_response(raw, self)
+        result = _parse_response(raw, self)
+        # AI 用量統計階段 1：只記錄，不做上限管控（跟 /api/analyze 的呼叫
+        # 頻率節流是分開的機制）。usage_metadata 在 SDK 回應裡可能是
+        # None（例如 API 本身未回傳），這裡不強求一定有值。只有 Gemini
+        # 才有這份資料，LocalAnalyzer 走 Ollama 沒有對應概念，所以放在
+        # GeminiAnalyzer 這層附加，不改動共用的 _parse_response() 簽名。
+        usage = response.usage_metadata
+        result["usage"] = {
+            "prompt_token_count": getattr(usage, "prompt_token_count", None),
+            "candidates_token_count": getattr(usage, "candidates_token_count", None),
+            "thoughts_token_count": getattr(usage, "thoughts_token_count", None),
+            "total_token_count": getattr(usage, "total_token_count", None),
+        } if usage is not None else None
+        return result
 
 
 # ── 地端模型佔位（之後實作）────────────────────────────────────────────────
