@@ -202,14 +202,21 @@ def _device_payload_to_row(body: dict) -> dict:
 
 
 class SupabaseStore:
+    # load() 快取 TTL（秒）。只在建構時傳入 cache_ttl > 0 才啟用——目前只有
+    # alarms_store 開啟（PLAN 效能優化第 4 項：/api/alarms 全表掃描+分頁，
+    # mf4d 部門 1759 筆實測約 1.6 秒）。devices/其他表資料量小、變動頻率
+    # 不同，維持預設不快取，不用因為這次改動被迫承擔額外的快取失效風險。
     def __init__(self, table: str, pk: str = "code", pk_fields: list = None,
-                 is_devices: bool = False):
+                 is_devices: bool = False, cache_ttl: int = 0):
         self.table = table
         self.pk = pk
         self.pk_fields = pk_fields or [pk]
         self.is_devices = is_devices
         self._base = os.environ.get("SUPABASE_URL", "").rstrip("/")
         self._key = os.environ.get("SUPABASE_KEY", "")
+        self._cache_ttl = cache_ttl
+        self._cache_lock = Lock()
+        self._cache: dict = {}  # department（None 正規化成 "__all__"）-> (expires_at, items)
 
     def _headers(self, extra: Optional[dict] = None) -> dict:
         h = {
@@ -271,7 +278,29 @@ class SupabaseStore:
 
     def load(self, department: Optional[str]) -> list:
         """department=None 是 DeptScope.ALL 的明確選擇（總管不過濾），
-        不是「忘記傳」的預設值——呼叫端必須每次主動決定（PLAN 3.6 節）。"""
+        不是「忘記傳」的預設值——呼叫端必須每次主動決定（PLAN 3.6 節）。
+
+        快取只在 department 有值時生效（cache_ttl > 0 才啟用，見
+        __init__ 說明）——department=None 代表總管跨部門查詢，範圍不
+        固定、快取鍵不該用一個特殊值（例如 "__all__"）去代表「沒有
+        邊界的查詢」，那會讓快取鍵設計本身承擔部門隔離風險，直接跳過
+        快取最單純：總管本來就是少數、低頻的操作，不快取不影響一般
+        使用者體感的效能改善（PLAN 效能優化第 4 項驗收條件 a：快取鍵
+        必須包含 department，這是安全邊界層級問題，不是效能小事）。
+        """
+        if self._cache_ttl > 0 and department is not None:
+            now = time.time()
+            with self._cache_lock:
+                cached = self._cache.get(department)
+                if cached is not None and cached[0] > now:
+                    return cached[1]
+            result = self._load_uncached(department)
+            with self._cache_lock:
+                self._cache[department] = (now + self._cache_ttl, result)
+            return result
+        return self._load_uncached(department)
+
+    def _load_uncached(self, department: Optional[str]) -> list:
         qs = "select=*"
         if department is not None:
             qs += f"&department=eq.{urllib.parse.quote(department, safe='')}"
@@ -279,6 +308,24 @@ class SupabaseStore:
         if self.is_devices:
             result = [_row_to_device(row) for row in result]
         return result
+
+    def _invalidate_cache(self, department: Optional[str]) -> None:
+        """寫入方法（upsert_one/delete_one/patch_one/save）內部呼叫，
+        寫完該部門的資料後讓對應的快取項目失效，下一次 load() 會重新
+        查詢。內建在 store 層而非要求呼叫端各自記得補——目前 alarms_store
+        的寫入呼叫點有 9 處（app.py 6 處、alarm_ingest/commit.py 3 處），
+        不能要求 9 處各自記得加（PLAN 效能優化第 4 項驗收條件 c）。
+
+        department=None 時清空整個快取（沒有精確的部門邊界可失效，例如
+        save() 在 department=None 時是全表級操作，寧可保守清空也不要
+        漏掉該失效卻沒失效、讓使用者看到過期資料）。"""
+        if self._cache_ttl <= 0:
+            return
+        with self._cache_lock:
+            if department is None:
+                self._cache.clear()
+            else:
+                self._cache.pop(department, None)
 
     def _require_full_pk_match(self, match: dict) -> None:
         """match 必須包含除 department 外的完整主鍵欄位，否則 PostgREST
@@ -358,6 +405,7 @@ class SupabaseStore:
                 qs += f"&department=eq.{urllib.parse.quote(department, safe='')}"
             self._req("DELETE", f"{self.table}?{qs}",
                       extra_headers={"Prefer": "return=minimal"})
+        self._invalidate_cache(department)
 
     def upsert_one(self, item: dict, department: str, on_conflict: str) -> dict:
         """單筆 upsert，明確指定 on_conflict 目標（PLAN 3.1 節第四輪審查補強）。
@@ -377,6 +425,7 @@ class SupabaseStore:
         result = self._req("POST", path, [write_item],
                            extra_headers={"Prefer": "resolution=merge-duplicates,return=representation"})
         row = result[0] if result else write_item
+        self._invalidate_cache(department)
         return _row_to_device(row) if self.is_devices else row
 
     def delete_one(self, department: str, match: dict) -> None:
@@ -388,6 +437,7 @@ class SupabaseStore:
             qs_parts.append(f"{k}=eq.{urllib.parse.quote(str(v), safe='')}")
         qs = "&".join(qs_parts)
         self._req("DELETE", f"{self.table}?{qs}", extra_headers={"Prefer": "return=minimal"})
+        self._invalidate_cache(department)
 
     def patch_one(self, department: str, match: dict, patch: dict) -> Optional[dict]:
         """單筆部分更新（PLAN_local_solution.md 4.3 節：只改呼叫端明確給的
@@ -403,6 +453,7 @@ class SupabaseStore:
         qs = "&".join(qs_parts)
         result = self._req("PATCH", f"{self.table}?{qs}", patch,
                            extra_headers={"Prefer": "return=representation"})
+        self._invalidate_cache(department)
         return result[0] if result else None
 
 
@@ -1562,8 +1613,11 @@ class LoginAttemptStore:
             return -1
 
 
+_ALARMS_CACHE_TTL_SECONDS = 60  # PLAN 效能優化第 4 項：mf4d 部門 1759 筆分頁查詢實測約 1.6 秒
+
 if _use_supabase():
-    alarms_store = SupabaseStore("alarms", pk="code", pk_fields=["department", "device_model", "code", "variant"])
+    alarms_store = SupabaseStore("alarms", pk="code", pk_fields=["department", "device_model", "code", "variant"],
+                                  cache_ttl=_ALARMS_CACHE_TTL_SECONDS)
     devices_store = SupabaseStore("devices", pk="id", pk_fields=["department", "model"], is_devices=True)
 else:
     alarms_store = JsonStore("alarms.json")
