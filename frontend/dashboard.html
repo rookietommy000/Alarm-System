@@ -1578,37 +1578,60 @@ createApp({
     deptQuery() {
       return this.isSuper ? `?dept=${encodeURIComponent(this.viewDept)}` : '';
     },
+    // 主列表（警報+機種）先載入讓使用者能立刻操作；其餘統計類卡片（含
+    // loadAudit()）延後在背景載入，避免 8 支 API 全部卡在單一批次裡
+    // 互相排隊、拖慢使用者最先需要看到的主列表（PLAN 效能優化第 2 項）。
+    // 403 檢查拆到各自批次自己判斷，不能只留在第一批——否則會出現主
+    // 列表已顯示、使用者在操作，幾秒後延後批次才回 403 把人踢出去的
+    // 體驗倒退。
     async load() {
       this.loading = true;
       try {
-        const dq = this.deptQuery();
-        const amp = dq ? '&' : '?';
-        const endpoints = [
-          '/api/alarms' + dq, '/api/devices' + dq, '/api/feedback/stats' + dq, '/api/view/stats' + dq,
-          '/api/admin/scan-stats' + dq, '/api/admin/scan-recent' + dq + amp + 'limit=100',
-          '/api/admin/scan-ranking' + dq, '/api/admin/ai-usage-stats' + dq,
-        ];
-        const results = await Promise.all(endpoints.map(u => AlarmApi.get(u)));
-        if (results.some(r => r.status === 403)) { location.href = '/admin/login'; return; }
-        if (results.some(r => r.status === 404)) {
-          // 超管帶了不存在的部門（打錯字／被刪除），回退到「全部部門」
-          this.setViewDept('__all__');
-          return;
-        }
-        const [alarms, devices, fbStats, viewStats, scanStats, scanRecent, scanRanking, usageStats] = await Promise.all(results.map(r => r.ok ? r.json() : (Array.isArray([]) ? [] : {})));
-        this.alarms = alarms;
-        this.devices = devices;
-        this.feedbackStatsList = fbStats;
-        this.viewStatsList = viewStats;
-        this.scanStats = scanStats;
-        this.scanRecent = scanRecent;
-        this.allScans = scanRecent;
-        this.scanRanking = scanRanking;
-        this.usageStats = usageStats;
-        await this.loadAudit();
+        const primaryOk = await this.loadPrimary();
+        if (!primaryOk) return;
       } finally {
         this.loading = false;
       }
+      this.loadSecondary();
+    },
+    async loadPrimary() {
+      const dq = this.deptQuery();
+      const endpoints = ['/api/alarms' + dq, '/api/devices' + dq];
+      const results = await Promise.all(endpoints.map(u => AlarmApi.get(u)));
+      if (results.some(r => r.status === 403)) { location.href = '/admin/login'; return false; }
+      if (results.some(r => r.status === 404)) {
+        // 超管帶了不存在的部門（打錯字／被刪除），回退到「全部部門」
+        this.setViewDept('__all__');
+        return false;
+      }
+      const [alarms, devices] = await Promise.all(results.map(r => r.ok ? r.json() : []));
+      this.alarms = alarms;
+      this.devices = devices;
+      return true;
+    },
+    async loadSecondary() {
+      const dq = this.deptQuery();
+      const amp = dq ? '&' : '?';
+      const endpoints = [
+        '/api/feedback/stats' + dq, '/api/view/stats' + dq,
+        '/api/admin/scan-stats' + dq, '/api/admin/scan-recent' + dq + amp + 'limit=100',
+        '/api/admin/scan-ranking' + dq, '/api/admin/ai-usage-stats' + dq,
+      ];
+      const results = await Promise.all(endpoints.map(u => AlarmApi.get(u)));
+      if (results.some(r => r.status === 403)) { location.href = '/admin/login'; return; }
+      if (results.some(r => r.status === 404)) {
+        this.setViewDept('__all__');
+        return;
+      }
+      const [fbStats, viewStats, scanStats, scanRecent, scanRanking, usageStats] = await Promise.all(results.map(r => r.ok ? r.json() : (Array.isArray([]) ? [] : {})));
+      this.feedbackStatsList = fbStats;
+      this.viewStatsList = viewStats;
+      this.scanStats = scanStats;
+      this.scanRecent = scanRecent;
+      this.allScans = scanRecent;
+      this.scanRanking = scanRanking;
+      this.usageStats = usageStats;
+      await this.loadAudit();
     },
     // 操作歷史紀錄獨立於 load() 之外重打，篩選條件（機種/時間）變動時
     // 不需要整批八個端點重來一次。回應格式是 {items, truncated, limit}
