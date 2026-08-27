@@ -70,8 +70,33 @@ pytest tests/test_api.py::test_create_alarm -v
 - 寫入端點的目標部門只從 URL path 取（`resolve_target_department()`），不讀 `request.args`、不讀 body 的 `department` 欄位
 - 例外分支不得回傳看似合理的預設值（`abort` 失敗時回 `0`/`[]`/`None` 會造成靜默失敗，難以察覺）
 - 跨部門隔離只能用 `sentinel_pack/verify_isolation.sh` 對真實 Supabase 驗證，pytest 環境（JsonStore 單租戶）測不到這件事——`tests/test_no_fake_isolation_claims.py` 會擋住宣稱驗證這類機制但實際測不到的測試名稱
+- `variant` 是 `alarms` 主鍵的一部分（`(department, device_model, code, variant)`），單筆定位（`get_one`/`patch_one`/`delete_one`）務必帶齊，否則 PostgREST 條件不足時會靜默取任意一筆——`storage.py` 的 `_require_full_pk_match()` 會擋，但呼叫端仍要記得傳
+- 批次匯入走 upsert 語意，`alarm_ingest/parse.py` 的 `OPTIONAL_FIELDS`（`severity`/`keywords`/`sol_steps`）欄位若這次沒填，不會送出覆蓋，避免整列取代把既有值清空（見 `commit.py`）
 
 前台任何需要把 `department` 組進 URL 的地方，走 `frontend/index.html` 的 `deptOf(a)` helper，不要各自寫 fallback——超管的 `whoami.department` 是 `null`，直接塞進字串會產生看起來合理但無效的路徑（`"null"` 字面字串或塌陷成空字串），這個坑在同一輪修過兩次才收斂成單一入口。
+
+## 例外處理判準
+
+全庫系統性盤點過 `except Exception` 的靜默失敗模式後，修一個之前先問：**這個機制失效時，有沒有次一級的備援接住？**
+
+- 有備援（降級後系統仍可用，只是保護力下降）→ fail-open，但降級狀態要留痕（至少一行 log；統計/管控用途的資料要能被外部查詢到，例：`count_fine()` 登入節流查詢失敗時降級成行程內記憶體計數，見 commit `8e4c805`）
+- 無備援（失效後沒有次一級手段）→ fail-closed，讓例外往上拋、附明確錯誤訊息，不要用 `[]`/`0`/`None` 蒙混成「這是真實的業務狀態」（例：`load_valid_models()` 白名單讀取失敗若回空 list，會被 `apply_post_rules()` 誤判成「所有機種都不在白名單」，見 commit `6940019`，改為拋 `ValidModelsUnavailable` + TTL 快取降級）
+- 安全邊界（`scope_department()`/`resolve_target_department()`/`assert_session_valid()`）→ 一律 fail-closed，不允許查詢異常時預設放行，沒有「優雅降級」這回事
+- 不管哪一種，「例外發生過」這件事本身必須可追溯，禁止完全空白的 `except Exception: pass`/`return []`
+
+已知因為這個模式踩過的真實案例：`ImportSnapshotStore.list_snapshots()` 曾經對「資料表不存在」的 404 靜默回空清單，被誤判成「表存在只是沒資料」；`suggest_semantic_fixes.py` 曾因合併時漏掉 `import re`，`_parse_response()` 對任何輸入都拋 `NameError`，被外層 `except Exception` 吞掉、誤記為批次資料本身有問題。完整判準與更多案例見 `DRAFT_error_handling_policy.md`（尚未定案併入本檔）。
+
+## 測試的能力邊界
+
+pytest 環境用的是 `JsonStore`（單租戶本機檔案），測不到：跨部門過濾、session 三態檢查、登入節流、PostgREST 分頁/upsert 語意。這些只能用 `sentinel_pack/verify_isolation.sh` 對真實 Supabase 驗證。任何 pytest 測試如果宣稱驗證了這類機制，那個宣稱本身就是假的——`tests/test_no_fake_isolation_claims.py` 會擋住這類測試名稱/docstring 再次出現。「程式碼裡有這段防護邏輯」跟「這段邏輯經黑箱測試證實真的擋得住」是兩個不同等級的結論，報告/commit message 裡不要混用。
+
+## 已知陷阱
+
+- Flask/Werkzeug 的 `<string>` 路由段不匹配空字串——URL 該段為空時會直接塌陷成路由層 404，不會進到你寫的視圖函式
+- `abort(404)` 不帶訊息時 Werkzeug 會填英文預設值，跟路由層 404 沒有訊息上的區別，容易混淆兩種不同成因的 404——一律用 `app.py` 的 `NOT_FOUND_MSG` 常數
+- `openpyxl` 讀出的儲存格值可能是 `int`/`float` 而非 `str`（例如警報代碼被 Excel 存成數字），涉及 code 欄位一律先過 `alarm_ingest/detect.py` 的 `_cell_to_str()`
+- 前端動態插入的 DOM（例如清單裡的按鈕）要用事件委派（綁在容器上），逐一綁 listener 在重繪後會失效——見 `login.html`/`admin-login.html` 的 `deptList.addEventListener`
+- Supabase 執行 DDL（新增欄位/約束）後，PostgREST 的 schema cache 不會自動刷新，migration 檔案結尾要下 `notify pgrst, 'reload schema';`（見 `006_add_variant.sql`/`007_add_import_snapshots.sql`）
 
 ## 可用 Skill
 
