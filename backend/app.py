@@ -5,6 +5,7 @@ import re
 import socket
 import time
 import urllib.error
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from functools import wraps
@@ -335,10 +336,13 @@ def create_app() -> Flask:
         if _use_supabase():
             if not form_department:
                 return redirect(url_for("login_page", error=1))
-            throttled = _check_login_throttle(form_department, login_page_endpoint="login_page")
+            # 一般部門登入一律需要 get_by_id（沒有 super admin 分岔），
+            # 格式合法才查（同 _do_login 情況 1 的既有規則）。
+            precheck = _fetch_login_precheck(form_department, need_dept_lookup=bool(DEPT_ID_RE.match(form_department)))
+            throttled = _check_login_throttle(precheck, login_page_endpoint="login_page")
             if throttled is not None:
                 return throttled
-            role = _do_login(form_department, pw, admin=False)
+            role = _do_login(form_department, pw, admin=False, precheck=precheck)
             if role is None:
                 return redirect(url_for("login_page", error=1))
             next_url = request.form.get("next") or request.args.get("next", "/app")
@@ -386,7 +390,40 @@ def create_app() -> Flask:
         remaining = full_delay - elapsed
         return max(0, int(remaining) + (1 if remaining % 1 else 0))
 
-    def _check_login_throttle(form_department: str, *, login_page_endpoint: str):
+    def _fetch_login_precheck(form_department: str, *, need_dept_lookup: bool) -> dict:
+        """count_fine、count_coarse、get_by_id 三支查詢彼此不互相依賴
+        （都只讀，互不影響對方的判斷），循序呼叫時 urllib 沒有連線池、
+        每支都要重新 TCP+TLS handshake，序列疊加的延遲是併行化的目標
+        （PLAN 效能優化第 3 項）。用 ThreadPoolExecutor 三支併行送出，
+        回傳 {"n_fine", "last_fine", "n_coarse", "last_coarse", "degraded", "dept"}。
+
+        need_dept_lookup=False 時不查 get_by_id（super admin 分岔或格式
+        不合法時不該查 DB，見 _do_login 原本的行為），"dept" 回傳 None。
+
+        degraded：只要 count_fine/count_coarse 任一降級就是 True，呼叫端
+        負責寫回 login_attempt_store.degraded 並視情況呼叫
+        note_fallback_hit()（見 storage.py 的說明，避免一次登入嘗試被
+        兩支查詢各自降級各記一次、實質砍半降級門檻）。
+        """
+        ip = _client_ip()
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            fine_future = pool.submit(login_attempt_store.count_fine, ip, form_department)
+            coarse_future = pool.submit(login_attempt_store.count_coarse, ip)
+            dept_future = pool.submit(department_store.get_by_id, form_department) if need_dept_lookup else None
+            n_fine, last_fine, degraded_fine = fine_future.result()
+            n_coarse, last_coarse, degraded_coarse = coarse_future.result()
+            dept = dept_future.result() if dept_future is not None else None
+        degraded = degraded_fine or degraded_coarse
+        login_attempt_store.degraded = degraded
+        if degraded:
+            login_attempt_store.note_fallback_hit(ip)
+        return {
+            "n_fine": n_fine, "last_fine": last_fine,
+            "n_coarse": n_coarse, "last_coarse": last_coarse,
+            "dept": dept,
+        }
+
+    def _check_login_throttle(precheck: dict, *, login_page_endpoint: str):
         """PLAN 2.2/2.2.3 節：伺服器不等待，還在延遲窗口內直接回應。細網
         （ip, department）與粗網（ip）取延遲最大值。回傳 None 代表不節流，
         可以繼續走 _do_login()；否則回傳要直接 return 的 Flask response。
@@ -398,19 +435,17 @@ def create_app() -> Flask:
         登入頁自己用 setInterval 算，伺服器端不依賴 JS 才能完成節流——
         沒有 JS 時使用者看到的是「請等 N 秒」的靜態文字加 disabled 按鈕，
         是漸進增強而非依賴。login_page_endpoint 由呼叫端指定要重導回
-        /login 還是 /admin/login。
+        /login 還是 /admin/login。precheck 由 _fetch_login_precheck() 提供，
+        呼叫端只需要在一次登入請求裡取一次三支查詢的結果，不重複打。
         """
-        ip = _client_ip()
-        n_fine, last_fine = login_attempt_store.count_fine(ip, form_department)
-        n_coarse, last_coarse = login_attempt_store.count_coarse(ip)
-        delay_fine = _remaining_delay(n_fine, last_fine, n_threshold=1, n_offset=0)
-        delay_coarse = _remaining_delay(n_coarse, last_coarse, n_threshold=20, n_offset=19)
+        delay_fine = _remaining_delay(precheck["n_fine"], precheck["last_fine"], n_threshold=1, n_offset=0)
+        delay_coarse = _remaining_delay(precheck["n_coarse"], precheck["last_coarse"], n_threshold=20, n_offset=19)
         delay = max(delay_fine, delay_coarse)
         if delay > 0:
             return redirect(url_for(login_page_endpoint, throttled=delay))
         return None
 
-    def _do_login(form_department: str, password: str, admin: bool) -> Optional[str]:
+    def _do_login(form_department: str, password: str, admin: bool, precheck: dict) -> Optional[str]:
         """PLAN 第 2 節：登入路徑在入口就分岔，不做 fallthrough。
         admin=False 時用於一般部門登入（僅走部門 pw_hash）；
         admin=True 時用於管理員登入（含 __super__ 分岔）。
@@ -418,6 +453,8 @@ def create_app() -> Flask:
         呼叫前提：_check_login_throttle() 已確認不在節流窗口內
         （2.2.4 節第 3 種情況由呼叫端在呼叫這個函式之前攔截，這裡
         面只處理「格式不合法」與「部門不存在」兩種情況的記錄）。
+        precheck["dept"] 是 _fetch_login_precheck() 併行查好的結果，
+        這裡不再重打 get_by_id。
         """
         ip = _client_ip()
 
@@ -435,7 +472,7 @@ def create_app() -> Flask:
             check_password_hash(_DUMMY_HASH, password)
             return None
 
-        dept = department_store.get_by_id(form_department)
+        dept = precheck["dept"]
         if dept is None or not dept.get("active"):
             # 2.2.4 節情況 2：格式合法但部門不存在（或已停用），仍要記錄，
             # 且必須計入 N_ip（粗網），這是有價值的稽核訊號
@@ -472,10 +509,14 @@ def create_app() -> Flask:
         if _use_supabase():
             if not form_department:
                 return redirect(url_for("admin_login_page", error=1))
-            throttled = _check_login_throttle(form_department, login_page_endpoint="admin_login_page")
+            # super admin 分岔（__super__）不查 department 表，其餘格式合法
+            # 的部門才需要 get_by_id（同 _do_login 情況 1 的既有規則）。
+            need_dept_lookup = form_department != SUPER_DEPT_SENTINEL and bool(DEPT_ID_RE.match(form_department))
+            precheck = _fetch_login_precheck(form_department, need_dept_lookup=need_dept_lookup)
+            throttled = _check_login_throttle(precheck, login_page_endpoint="admin_login_page")
             if throttled is not None:
                 return throttled
-            role = _do_login(form_department, pw, admin=True)
+            role = _do_login(form_department, pw, admin=True, precheck=precheck)
             if role is None:
                 return redirect(url_for("admin_login_page", error=1))
             return redirect("/admin")

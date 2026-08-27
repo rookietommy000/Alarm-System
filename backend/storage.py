@@ -1400,16 +1400,28 @@ class LoginAttemptStore:
         self._fallback_hits: dict = {}  # ip -> [timestamp, ...]（僅記錄「查詢失敗當下」的請求時間，不是失敗登入次數）
         self.degraded = False  # /ping、後台橫幅讀這個旗標
 
-    def _fallback_count(self, ip: str) -> int:
-        """行程內計數：清掉窗口外的舊記錄，回傳目前窗口內的次數，並
-        記一筆新的。不是「登入失敗次數」，是「Supabase 查詢失敗、
-        退回行程內計數的次數」——降級期間用來判斷是否還要繼續放行。"""
+    def _fallback_count(self, ip: str, record: bool = True) -> int:
+        """行程內計數：清掉窗口外的舊記錄，回傳目前窗口內的次數。
+        不是「登入失敗次數」，是「Supabase 查詢失敗、退回行程內計數的
+        次數」——降級期間用來判斷是否還要繼續放行。
+
+        record=True 時會多記一筆本次呼叫的時間戳。【修正既有計數語意，
+        非併行化引入】fine/coarse 兩支查詢原本各自在查詢失敗時都呼叫
+        一次這個方法並各記一筆，等於一次登入嘗試（同時觸發兩支查詢）
+        會被計成 2 次降級命中，把原本設計成寬鬆的降級門檻
+        （_FALLBACK_LIMIT=20）實質砍半。這個問題在併行化之前就存在
+        （count_fine/count_coarse 循序呼叫時就已經各記一筆），併行化
+        只是讓這次一併修正——呼叫端（_check_login_throttle）改為兩支
+        查詢各自只用 record=False 讀目前次數，等兩支都拿到結果後，若
+        任一降級，由呼叫端統一呼叫一次 record=True 才真正記錄，確保
+        一次登入嘗試最多只計一次降級命中。"""
         now = time.time()
         cutoff = now - self._FALLBACK_WINDOW_SECONDS
         with self._fallback_lock:
             hits = [t for t in self._fallback_hits.get(ip, []) if t > cutoff]
-            hits.append(now)
-            self._fallback_hits[ip] = hits
+            if record:
+                hits.append(now)
+                self._fallback_hits[ip] = hits
             return len(hits)
 
     def _base_key(self):
@@ -1446,18 +1458,27 @@ class LoginAttemptStore:
             pass  # 節流記錄失敗不可影響登入主流程
 
     def _count_since_last_success(self, ip: str, department: Optional[str] = None,
-                                   scope_by_department: bool = True) -> tuple:
+                                   scope_by_department: bool = True,
+                                   label: str = "") -> tuple:
         """該 (ip[, department]) 組合在最近一次成功登入之後、15 分鐘窗口內的
         連續失敗次數（PLAN 2.2.1/2.2.3 節的 N 定義），以及最後一次失敗的時間。
 
-        回傳 (N, last_failure_at)：delay 是相對 last_failure_at 算的倒數計時，
-        不是「只要 N>=1 就永久節流」——過了 2**N 秒窗口，同一個 N 就不再節流，
-        直到下一次失敗才會再次觸發（且 N 會遞增）。
+        回傳 (N, last_failure_at, degraded)：delay 是相對 last_failure_at 算的
+        倒數計時，不是「只要 N>=1 就永久節流」——過了 2**N 秒窗口，同一個 N
+        就不再節流，直到下一次失敗才會再次觸發（且 N 會遞增）。
+
+        degraded 由呼叫端負責寫回 self.degraded（不在這裡直接寫共享屬性）：
+        count_fine/count_coarse 併行執行時，若各自查詢失敗直接寫
+        self.degraded，後寫入的那支會蓋掉先寫入的結果，讓 /ping、後台
+        橫幅讀到的降級狀態失真。呼叫端等兩支都跑完，OR 合併後才寫一次
+        （PLAN 效能優化第 3 項驗收條件 a）。
         """
         if not _use_supabase():
-            return (0, None)
+            return (0, None, False)
         window_start = (datetime.now(timezone.utc) - timedelta(minutes=15)).isoformat()
         dept_qs = f"&department=eq.{urllib.parse.quote(department, safe='')}" if (scope_by_department and department is not None) else ""
+        import sys as _sys
+        t0 = time.monotonic()
         try:
             success_rows = self._req(
                 "GET",
@@ -1474,32 +1495,56 @@ class LoginAttemptStore:
             )
             n = len(count_rows)
             last_failure_at = count_rows[0]["attempted_at"] if count_rows else None
-            self.degraded = False
-            return (n, last_failure_at)
+            elapsed_ms = (time.monotonic() - t0) * 1000
+            # urllib.request.urlopen() 是連線建立+送出查詢+收回應一次完成的
+            # 黑盒呼叫，沒有 API 能單獨量出「連線建立」這一段（要拆的話得換
+            # http.client 手動 connect()/request()，影響面會擴及其他 store
+            # 類別的 _req()，這次先只量總耗時，數字若顯示有必要再另外評估）。
+            print(f"throttle_timing[{label}]: {elapsed_ms:.0f}ms "
+                  f"（連線建立+查詢合計，urllib 無法單獨拆分連線建立耗時）", file=_sys.stderr)
+            return (n, last_failure_at, False)
         except Exception as e:
             # 查詢失敗不可靜默偽裝成「N=0，沒有任何失敗記錄」——那等於
             # 節流在資料庫不穩時直接失效且毫無警示。改為 fail-open 降級：
             # 捕捉例外、記錄、退回行程內計數（見 class docstring 的取捨
             # 說明），不是完全不節流、也不是讓所有正常使用者被鎖在外面。
-            self.degraded = True
-            import sys as _sys
-            print(f"throttle_degraded: LoginAttemptStore 查詢失敗，退回行程內計數："
+            #
+            # 【修正既有計數語意，非併行化引入】這裡只「讀」目前窗口內的
+            # 命中次數（record=False），不在這裡記一筆——一次登入嘗試會
+            # 同時觸發 count_fine + count_coarse 兩支查詢，若兩支查詢失敗
+            # 時都各自在這裡記一筆，等於一次登入嘗試被計成 2 次降級命中，
+            # 把原本設計成寬鬆的降級門檻（_FALLBACK_LIMIT=20）實質砍半。
+            # 真正記錄的時機交給呼叫端（_check_login_throttle）：兩支查詢
+            # 都跑完後，只要任一降級，整個登入嘗試只記一次
+            # （見 LoginAttemptStore.note_fallback_hit()）。
+            print(f"throttle_degraded[{label}]: LoginAttemptStore 查詢失敗，退回行程內計數："
                   f"{type(e).__name__}: {e}", file=_sys.stderr)
-            fallback_n = self._fallback_count(ip)
+            fallback_n = self._fallback_count(ip, record=False)
             if fallback_n > self._FALLBACK_LIMIT:
                 # 沿用「N、最後失敗時間」這個既有回傳形狀，讓呼叫端
                 # _remaining_delay() 不需要另外處理降級模式的分支——
                 # 直接讓它算出一個非零延遲，效果等同節流生效。
-                return (fallback_n, datetime.now(timezone.utc).isoformat())
-            return (0, None)
+                return (fallback_n, datetime.now(timezone.utc).isoformat(), True)
+            return (0, None, True)
+
+    def note_fallback_hit(self, ip: str) -> int:
+        """一次登入嘗試若有任一支查詢（fine/coarse）降級，呼叫端統一
+        呼叫這個方法記一筆，取代兩支查詢各自記錄——避免一次登入嘗試
+        被重複計成 2 次降級命中（見 _count_since_last_success 的說明）。
+        回傳記錄後的目前次數，供呼叫端需要時使用。"""
+        return self._fallback_count(ip, record=True)
 
     def count_fine(self, ip: str, department: str) -> tuple:
-        """細網：(ip, department) 組合的連續失敗數 N_ip_dept 與最後失敗時間。"""
-        return self._count_since_last_success(ip, department, scope_by_department=True)
+        """細網：(ip, department) 組合的連續失敗數 N_ip_dept 與最後失敗時間。
+        回傳 (N, last_failure_at, degraded)——degraded 由呼叫端負責寫回
+        self.degraded（見 _count_since_last_success 的說明）。"""
+        return self._count_since_last_success(ip, department, scope_by_department=True, label="fine")
 
     def count_coarse(self, ip: str) -> tuple:
-        """粗網：只看 ip 的連續失敗數 N_ip 與最後失敗時間（PLAN 2.2.3 節，防止換部門繞過細網）。"""
-        return self._count_since_last_success(ip, None, scope_by_department=False)
+        """粗網：只看 ip 的連續失敗數 N_ip 與最後失敗時間（PLAN 2.2.3 節，防止換部門繞過細網）。
+        回傳 (N, last_failure_at, degraded)——degraded 由呼叫端負責寫回
+        self.degraded（見 _count_since_last_success 的說明）。"""
+        return self._count_since_last_success(ip, None, scope_by_department=False, label="coarse")
 
     def cleanup_expired(self, days: int = 90) -> int:
         """PLAN 2.2.1 節：併入 cleanup-expired 端點，90 天保留期。"""
