@@ -68,7 +68,10 @@ def run_pipeline(image_b64: str, mime_type: str = "image/jpeg", known_model: str
     一路冒到 app.py 變成 500，MEM/LOG 兩邊都不會寫，這次故障排查時
     完全查不到任何線索就是這個結構性缺口。
 
-    做法：用 try/finally 包住整個流程。任何步驟失敗都一律用
+    做法：用 try/except Exception + re-raise 包住整個流程（不是
+    try/finally——這裡只需要攔 Exception，不需要連 BaseException
+    也一起處理，用 finally 字面上會讓人誤以為連 KeyboardInterrupt
+    這類也會觸發下面的補寫，實際上不會）。任何步驟失敗都一律用
     model=None、alarms=[]、rejected_alarms=[] 呼叫 record_scan()——不是
     「盡量帶上已經算到一半的部分結果」，因為部分結果可能來自尚未通過
     完整驗證的中間狀態（例如 POST 層已經算出 model，但 VAL 層才失敗，
