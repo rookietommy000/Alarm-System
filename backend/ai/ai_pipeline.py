@@ -16,6 +16,8 @@ AI 分析主流程（Pipeline）。
   6. LOG 層：記錄決策路徑（ai_logger）
 """
 
+import sys
+import time
 from typing import Optional
 
 from .ai_analyzer import get_analyzer
@@ -141,11 +143,20 @@ def run_pipeline(image_b64: str, mime_type: str = "image/jpeg", known_model: str
             "pipeline_error":      str(exc),
         }
 
+    def _log_timing(segment: str, elapsed_ms: float) -> None:
+        # 比照 storage.py 的 throttle_timing 格式（同一套可觀測性慣例）。
+        # 純觀測用，不影響任何行為邏輯——29 秒的拍照辨識耗時目前完全
+        # 沒有分段數據，只能靠推測，這裡先量出五段真實分佈再決定要不要
+        # 動手優化（PLAN 拍照辨識效能優化：先量測，不要沒有數據就猜）。
+        print(f"pipeline_timing[{segment}]: {elapsed_ms:.0f}ms", file=sys.stderr)
+
     try:
         # 1. Analyzer 辨識
+        t0 = time.monotonic()
         try:
             raw = analyzer.analyze(image_b64, mime_type)
         except Exception as exc:
+            _log_timing("analyzer", (time.monotonic() - t0) * 1000)
             # 解析回應失敗/timeout/http_error/safety 這幾種情況，
             # GeminiAnalyzer 會把 usage_outcome 分類跟已讀到的 usage
             # 資料（若有）掛在例外上（見 ai_analyzer.py），這裡撈出來
@@ -156,6 +167,7 @@ def run_pipeline(image_b64: str, mime_type: str = "image/jpeg", known_model: str
             exc_usage = getattr(exc, "usage", None)
             _state["usage_with_outcome"] = {**(exc_usage or {}), "outcome": getattr(exc, "usage_outcome", "unknown")}
             return _write_failure_record(exc)
+        _log_timing("analyzer", (time.monotonic() - t0) * 1000)
 
         _state["analyzer_meta"] = raw.get("analyzer") or _state["analyzer_meta"]
         raw_usage = raw.get("usage")
@@ -171,11 +183,14 @@ def run_pipeline(image_b64: str, mime_type: str = "image/jpeg", known_model: str
         result = apply_post_rules(raw, valid_models)
 
         # 3. VAL 層
+        t0 = time.monotonic()
         model = result.get("model")
         corrections = _load_records("corrections", model, department=department) if model else []
         val = check_validation(result, corrections)
+        _log_timing("val", (time.monotonic() - t0) * 1000)
 
         # 4. MEM 層（先寫，讓 ALERT 能算到「本次」）
+        t0 = time.monotonic()
         scan_record = record_scan(
             model=model,
             model_conf=result.get("model_conf"),
@@ -184,12 +199,16 @@ def run_pipeline(image_b64: str, mime_type: str = "image/jpeg", known_model: str
             analyzer=raw.get("analyzer"),
             department=department,
         )
+        _log_timing("mem", (time.monotonic() - t0) * 1000)
 
         # 5. ALERT 層（含本次 scan_record）
+        t0 = time.monotonic()
         scan_history = _load_records("history", model or "_unknown", department=department)
         alerts = check_alerts(result, scan_history)
+        _log_timing("alert", (time.monotonic() - t0) * 1000)
 
         # 6. LOG 層
+        t0 = time.monotonic()
         analyzer_meta = raw.get("analyzer")
         has_block = any(a.get("block") for a in alerts)
         log_scan(
@@ -204,6 +223,7 @@ def run_pipeline(image_b64: str, mime_type: str = "image/jpeg", known_model: str
             usage=_state["usage_with_outcome"],
             extra={"scan_id": scan_record["scan_id"], "alerts": [a["code"] for a in alerts], "val_triggered": val["needs_reconfirm"]},
         )
+        _log_timing("log", (time.monotonic() - t0) * 1000)
         _state["logged"] = True
 
         return {

@@ -590,6 +590,22 @@ class TestRunPipelineFailureRecording:
         logs = log_mod.load_logs(limit=50, event="scan")
         assert len(logs) == 1
 
+    def test_success_path_logs_all_five_timing_segments(self, pipeline_mem, monkeypatch, tmp_path, capsys):
+        """效能優化前置：先量測、不要沒有數據就猜（PLAN 拍照辨識效能
+        優化）。這裡驗證五段計時 log 真的有輸出，不驗證數字本身（純觀測
+        用途，不影響行為邏輯，測太細反而在鎖死格式字串）。"""
+        tmp_path_mem, mem_mod, log_mod, pipeline_mod = pipeline_mem
+        monkeypatch.setattr(pipeline_mod, "get_analyzer", lambda: _FakeAnalyzer())
+
+        devices_dir = tmp_path / "devices_data"
+        self._write_devices(devices_dir, [{"model": "PILM004", "active": True}])
+        monkeypatch.setenv("ALARM_DATA_DIR", str(devices_dir))
+
+        pipeline_mod.run_pipeline("ZmFrZQ==", department="test_dept")
+        stderr = capsys.readouterr().err
+        for segment in ("analyzer", "val", "mem", "alert", "log"):
+            assert f"pipeline_timing[{segment}]:" in stderr, f"缺少 {segment} 段的計時 log"
+
 
 class TestRunConfirmation:
     def test_confirmation_returns_ok_and_scan_id(self, mem):
