@@ -325,13 +325,22 @@ def _sb_insert(table: str, row: dict):
 
 
 def _sb_query(table: str, filters: dict) -> list:
+    """呼叫端（例如 ai_alert.py 的 _check_consecutive_low_conf()）用
+    scan_history[-limit:] 取「最新 limit 筆」，隱含假設清單順序等於
+    時間順序（最後幾筆＝最新幾筆）——PostgREST 沒有明確 order 時不
+    保證回傳順序（同 storage.py _paginated_get() 踩過的教訓：並列時
+    ORDER BY 不保證跨多次請求的相對順序一致），必須明確帶 order，
+    否則 ALERT_LOW_CONF（HIGH 等級、會 block=True 擋住流程的安全
+    機制）可能因為順序不保證而誤判或漏判連續低信心。用 created_at
+    升冪排序（舊到新），讓清單最後幾筆確實是時間上最新的幾筆，跟
+    呼叫端 [-limit:] 的既有用法保持一致，不需要改動呼叫端邏輯。"""
     try:
         import urllib.request, urllib.parse
         base = os.environ["SUPABASE_URL"].rstrip("/")
         key = os.environ["SUPABASE_KEY"]
         qs = "&".join(f"{k}=eq.{urllib.parse.quote(str(v))}" for k, v in filters.items() if v is not None)
         req = urllib.request.Request(
-            f"{base}/rest/v1/{table}?select=*&{qs}&limit=1000",
+            f"{base}/rest/v1/{table}?select=*&{qs}&order=created_at.asc&limit=1000",
             headers={"apikey": key, "Authorization": f"Bearer {key}"},
             method="GET",
         )
