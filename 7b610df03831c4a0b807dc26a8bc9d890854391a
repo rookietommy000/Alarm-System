@@ -1,0 +1,11 @@
+歸屬修正說明：本commit意外一併包含了QA對 FeedbackStore._append_supabase /
+ViewStore._append_supabase / AiScanStore._get / AiScanStore.usage_stats
+四處 except Exception: pass → 印 stderr 的例外處理修正（她自己獨立寫的、
+與本commit主題 find_by_code() 無關的WIP，原本留在同一份 working directory
+未commit）。
+
+這是 git add -p 操作失誤造成的意外夾帶，非刻意合併。內容本身正確、對應
+測試 tests/test_ai_scan_store_usage_stats.py（該檔本身沒被誤帶，仍留在
+working directory待QA自行commit）已驗證通過，因此不做 revert，僅在此補記
+歸屬：那4處 except 修正的實際作者是 QA，不是本commit message署名的
+find_by_code() 工作範圍。
