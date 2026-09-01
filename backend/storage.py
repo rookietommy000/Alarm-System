@@ -75,6 +75,15 @@ class JsonStore:
                 return row
         return None
 
+    def find_by_code(self, department: Optional[str], device_model: str, code: str) -> list:
+        """不要求完整主鍵（不知道 variant）——用於 AI 辨識後拿正規化過的
+        code 反查 DB 裡實際存在哪些 variant，可能 0/1/多筆，跟 get_one()
+        要求精確定位單一筆是不同的用途（拍照辨識故障修復：AI 辨識完全
+        不知道 variant 概念，只能靠這個方法把猜到的 code 對應回 DB
+        實際存在的紀錄）。直接複用 load() 後過濾，不另開查詢路徑。"""
+        return [row for row in self.load(department)
+                if row.get("device_model") == device_model and row.get("code") == code]
+
     def save(self, items: list, department: Optional[str] = None, on_conflict: Optional[str] = None) -> None:
         with self._lock:
             write_items = [_device_payload_to_row(i) for i in items] if self.is_devices else items
@@ -358,6 +367,23 @@ class SupabaseStore:
         if not result:
             return None
         return _row_to_device(result[0]) if self.is_devices else result[0]
+
+    def find_by_code(self, department: str, device_model: str, code: str) -> list:
+        """不要求完整主鍵（不知道 variant）——用於 AI 辨識後拿正規化過的
+        code 反查 DB 裡實際存在哪些 variant，可能 0/1/多筆，跟 get_one()
+        要求精確定位單一筆是不同的用途（拍照辨識故障修復：AI 辨識完全
+        不知道 variant 概念，只能靠這個方法把猜到的 code 對應回 DB
+        實際存在的紀錄）。用目標查詢而非 load()：同 get_one() 的理由，
+        alarms 有 1759 筆，不該為了找同一個 code 底下最多幾筆 variant
+        就整個部門撈下來。variant 欄位本身數量少（同一 code 頂多幾個
+        variant），不需要分頁。"""
+        qs_parts = [
+            "select=*",
+            f"department=eq.{urllib.parse.quote(department, safe='')}",
+            f"device_model=eq.{urllib.parse.quote(device_model, safe='')}",
+            f"code=eq.{urllib.parse.quote(code, safe='')}",
+        ]
+        return self._req("GET", f"{self.table}?{'&'.join(qs_parts)}")
 
     def _row_key(self, row: dict) -> tuple:
         return tuple(str(row.get(f, "")) for f in self.pk_fields)
@@ -982,8 +1008,14 @@ class FeedbackStore:
                 method="POST",
             )
             urllib.request.urlopen(req)
-        except Exception:
-            pass
+        except Exception as e:
+            # 寫入失敗不可中斷主流程，但完全吞掉例外會讓「表結構跟預期
+            # 不符」跟「網路抖動」都靜默變成「什麼都沒發生」——同
+            # ai_logger.py _write() 的既有修法：印一行 stderr，不中斷，
+            # 至少留下痕跡。
+            import sys as _sys
+            print(f"[FeedbackStore] _append_supabase 寫入 feedback 失敗（不影響主流程）："
+                  f"{type(e).__name__}: {e}", file=_sys.stderr)
 
     def _load_supabase(self, department: Optional[str] = None) -> list:
         try:
@@ -1066,8 +1098,10 @@ class ViewStore:
                 method="POST",
             )
             urllib.request.urlopen(req)
-        except Exception:
-            pass
+        except Exception as e:
+            import sys as _sys
+            print(f"[ViewStore] _append_supabase 寫入 alarm_views 失敗（不影響主流程）："
+                  f"{type(e).__name__}: {e}", file=_sys.stderr)
 
     def _load_supabase(self, department: Optional[str] = None) -> list:
         try:
@@ -1103,7 +1137,13 @@ class AiScanStore:
             )
             with urllib.request.urlopen(req) as r:
                 return json.loads(r.read().decode())
-        except Exception:
+        except Exception as e:
+            # 唯讀 dashboard 統計用途，查詢失敗回空 list 不影響主流程
+            # （沒有安全邊界問題），但完全吞掉例外會讓查詢失敗跟真的
+            # 沒有資料在畫面上長得一模一樣——印一行 stderr 至少留下痕跡。
+            import sys as _sys
+            print(f"[AiScanStore] _get({table}) 查詢失敗（回退空清單）："
+                  f"{type(e).__name__}: {e}", file=_sys.stderr)
             return []
 
     def _dept_qs(self, department: Optional[str]) -> str:
@@ -1210,7 +1250,10 @@ class AiScanStore:
             )
             with urllib.request.urlopen(req) as r:
                 rows = json.loads(r.read().decode())
-        except Exception:
+        except Exception as e:
+            import sys as _sys
+            print(f"[AiScanStore] usage_stats 查詢 ai_logs 失敗（回退空清單，統計數字會偏低）："
+                  f"{type(e).__name__}: {e}", file=_sys.stderr)
             rows = []
 
         totals = {"count": 0, "total": 0, "prompt": 0, "candidates": 0}
