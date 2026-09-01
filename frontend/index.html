@@ -933,6 +933,15 @@
         <button class="btn-secondary" style="margin-top:8px;width:100%;max-width:360px" @click="resetCamera">重拍</button>
       </div>
 
+      <!-- 分析失敗（伺服器錯誤／網路錯誤，跟「AI 判斷沒看到警報」分開顯示，
+           不然使用者分不出來是系統壞了還是照片真的沒拍到警報） -->
+      <div v-else-if="camState === 'analyze-error'" class="analyzing-panel">
+        <div style="font-size:48px">⚠️</div>
+        <div class="analyzing-title">分析失敗</div>
+        <div style="font-size:14px;color:var(--muted);text-align:center">{{ analyzeErrorMsg || '請稍後再試' }}</div>
+        <button class="btn-secondary" style="margin-top:8px;width:100%;max-width:360px" @click="resetCamera">重拍</button>
+      </div>
+
       <!-- 相機 live view -->
       <div v-else class="camera-view">
         <div class="camera-frame">
@@ -1171,7 +1180,8 @@
             vendorSolution: '', local_solution: '', local_reason: '',
           },
           // camera
-          camState: 'live', // 'live' | 'model-select' | 'analyzing' | 'confirm' | 'results' | 'no-alarm'
+          camState: 'live', // 'live' | 'model-select' | 'analyzing' | 'confirm' | 'results' | 'no-alarm' | 'analyze-error'
+          analyzeErrorMsg: '',
           camResults: [],
           camError: null,
           camStream: null,
@@ -1523,6 +1533,11 @@
             };
           };
 
+          // 先看 r.ok 再決定要不要 r.json()——不管後端有沒有正確回 JSON，
+          // 使用者都要能看到「是伺服器出錯」而不是被 catch 吞掉、跟「AI
+          // 真的沒看到警報」混成同一種「未偵測到警報」畫面（PR-1：後端
+          // 500/503 現在保證 /api/* 回合法 JSON，但前端仍要先判斷狀態碼，
+          // 不能假設回應一定 ok、也不能對網路層錯誤裸 catch 成 null）。
           const apiPromise = this.isDesktopDev
             ? mockApiResult()
             : (this.pendingImageB64
@@ -1530,7 +1545,13 @@
                     image: this.pendingImageB64,
                     mime_type: this.pendingMimeType,
                     model: this.selectedCorrectModel,
-                  }).then(r => r.json()).catch(() => null)
+                  }).then(async r => {
+                    if (!r.ok) {
+                      const body = await r.json().catch(() => ({}));
+                      return { __httpError: true, status: r.status, message: body.error || `伺服器錯誤（${r.status}）` };
+                    }
+                    return r.json();
+                  }).catch(() => ({ __httpError: true, status: 0, message: '網路連線失敗，請檢查網路後重試' }))
                 : Promise.resolve(null));
 
           await new Promise(r => setTimeout(r, 700));
@@ -1543,6 +1564,12 @@
           const apiResult = await apiPromise;
           setStage(3, 'done', '✅');
           this.analyzeProgress = 100;
+
+          if (apiResult && apiResult.__httpError) {
+            this.analyzeErrorMsg = apiResult.message;
+            this.camState = 'analyze-error';
+            return;
+          }
 
           try {
             if (apiResult && !apiResult.error && !apiResult.pipeline_error) {
@@ -1577,6 +1604,12 @@
                   this.silentConfirm(apiResult.scan_id, model, alarms, modelConf, model, apiResult.analyzer);
                 }
               }
+            } else if (apiResult && apiResult.error) {
+              // /api/analyze 回 200 但帶 error 欄位的情況目前後端沒有這種
+              // 設計（不是 abort 就是正常結果），但前端不假設後端契約
+              // 永遠不變——有 error 欄位就當錯誤處理，不要落到 no-alarm。
+              this.analyzeErrorMsg = apiResult.error;
+              this.camState = 'analyze-error';
             } else {
               this.camState = 'no-alarm';
             }
@@ -1588,6 +1621,7 @@
         resetCamera() {
           this.camState = 'live';
           this.confirmError = '';
+          this.analyzeErrorMsg = '';
           this.selectedCorrectModel = '';
           this.showCorrectionPicker = false;
           this.pendingImageB64 = null;

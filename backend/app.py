@@ -17,6 +17,7 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 from flask import Flask, abort, jsonify, redirect, request, send_from_directory, session, url_for
 from flask_cors import CORS
+from werkzeug.exceptions import HTTPException
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from storage import (
@@ -1950,6 +1951,59 @@ def create_app() -> Flask:
     @app.errorhandler(409)
     def handle_error(e):
         return jsonify({"error": e.description}), e.code
+
+    @app.errorhandler(500)
+    @app.errorhandler(503)
+    def handle_server_error(e):
+        """未捕捉例外會被 Flask 轉成 500 送進這裡，此時 e 是原始例外物件，
+        不是 HTTPException——不能用 e.code（不存在，會 AttributeError），
+        要用 getattr(e, "code", 500) 讓「明確 abort(503, ...)」跟「完全
+        未預期的例外」都能落地成合理的狀態碼。
+
+        只有 /api/* 路徑回 JSON——/login、/app、/admin 這些頁面路由用
+        send_from_directory() 回 HTML，若這裡無條件回 JSON，使用者會在
+        瀏覽器看到一坨裸 JSON 而不是任何頁面（比原本的「未偵測到警報」
+        更糟，是體驗倒退）。非 API 路徑維持 Flask 預設的 HTML 錯誤頁行為，
+        不接手處理（既有的 400/403/404/409 handler 目前無條件回 JSON，
+        是因為那幾個狀態碼在這個專案裡全部由 /api/* 端點的 abort() 觸發，
+        沒有非 API 路由會走到——500/503 不一樣，未捕捉例外可能發生在任何
+        路由，不能沿用同樣的假設）。
+
+        訊息來源要分兩種情況，不能一律替換成固定文案，但不能只看
+        isinstance(e, HTTPException)——Flask 對「完全沒被任何 except 接住、
+        一路冒到頂層」的原始例外（例如 TypeError/ConnectionError）也會
+        自動包成 HTTPException（InternalServerError），此時 e.description
+        是 Werkzeug 的制式英文文案，不是我們自己寫的，一樣不該直接回給
+        使用者看（跟真正 abort() 出來的 description 語意完全不同，這裡
+        如果只判斷 isinstance 會誤判成「安全文案」而漏掉這個情況——第一版
+        實作犯過這個錯，被 test_unhandled_exception_on_api_path_returns_
+        generic_json_message 這條測試抓到）。
+
+        正確判斷方式是看 original_exception 這個屬性：Flask 自動包裝
+        原始例外時會把它掛在 e.original_exception 上；開發者自己寫的
+        abort(503, "安全文案") 不會有這個屬性（或是 None）。用這個屬性
+        存在與否來分：
+        - 沒有 original_exception（我們自己 abort() 出來的）：e.description
+          是開發者已經寫好的安全文案，直接用，不要蓋掉。
+        - 有 original_exception（Flask 自動包裝的原始例外）：不管是
+          InternalServerError 的制式文案還是任何原始例外訊息，都可能
+          包含內部細節，一律回固定文案，實際例外內容只寫 log 供除錯。
+
+        app.debug=True 時直接 return e，交回 Flask 內建的 debug traceback
+        頁面，本機開發才看得到完整堆疊。
+        """
+        if app.debug:
+            return e
+        if not request.path.startswith("/api/"):
+            return e
+        code = getattr(e, "code", 500)
+        original = getattr(e, "original_exception", None)
+        if isinstance(e, HTTPException) and original is None:
+            app.logger.error(f"{request.path}: {e.description}")
+            return jsonify({"error": e.description}), code
+        app.logger.error(f"未預期的伺服器錯誤 {request.path}: {type(original or e).__name__}: {original or e}",
+                          exc_info=(original or e))
+        return jsonify({"error": "伺服器錯誤，請稍後再試"}), code
 
     return app
 
