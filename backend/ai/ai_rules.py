@@ -233,34 +233,52 @@ _VALID_MODELS_CACHE_TTL = int(os.environ.get("VALID_MODELS_CACHE_TTL", "300"))
 _valid_models_cache: dict = {"models": None, "expires_at": 0.0}
 
 
-def load_valid_models(data_dir: Optional[str] = None) -> list:
-    """從 devices.json 讀取合法機種列表（只含 active 機種）。
+def load_valid_models() -> set:
+    """讀取合法機種列表（只含 active 機種），透過 devices_store 走
+    JsonStore（本機/測試）或 SupabaseStore（正式環境），不再自己直接
+    讀 devices.json 檔案——跟 app.py 讀 devices 資料走同一個入口，
+    避免正式環境資料實際存在 Supabase，這裡卻讀本機檔案系統看到空的
+    白名單（拍照辨識故障修復 PR-3）。
+
+    department=None 呼叫 devices_store.load()：這是「不加過濾條件，
+    取全部部門的機種」，不是「查 department 為 NULL」——PostgREST 的
+    department=None 語意跟本專案 storage.py 全部 store 類別一致（見
+    SupabaseStore.load() 的同款判斷），白名單本來就該涵蓋所有部門
+    的機種，不限單一部門。
+
+    回傳型別改用 set：呼叫端（_validate_model()）只用 `in`/`for` 走訪，
+    不會索引存取，set 對成員檢查更直接對應這裡的用途（機種名單去重
+    比對，不在意順序）。
 
     讀取失敗時 fail-closed，拋出 ValidModelsUnavailable，不回傳空
-    list——空 list 在 apply_post_rules() 眼中等同「沒有任何合法機種」，
+    set——空集合在 apply_post_rules() 眼中等同「沒有任何合法機種」，
     會讓所有辨識結果被判定為不在白名單而全數拒絕，且錯誤訊息（見
     app.py 的 /api/analyze）容易被誤判成「這台機種真的不在系統裡」，
     而不是「白名單暫時讀不到」這種故障。
+
+    「過期快取優於中斷」：查詢失敗時，只要有任何一次成功讀過的快取
+    （即使已經過期），優先沿用舊值並記一行 warning log，不直接中斷；
+    完全沒有任何快取（從未成功讀過）才真的 fail-closed。這是改用
+    Supabase 後新增的行為——原本讀本機檔案幾乎不會失敗，現在多了
+    網路這個全新的失效路徑，一次瞬斷不該讓正在使用中的辨識功能
+    整個掛掉。
     """
     now = time.monotonic()
     if _valid_models_cache["models"] is not None and now < _valid_models_cache["expires_at"]:
         return _valid_models_cache["models"]
 
-    if data_dir is None:
-        data_dir = os.environ.get(
-            "ALARM_DATA_DIR",
-            str(Path(__file__).resolve().parent.parent.parent / "data")
-        )
-    path = Path(data_dir) / "devices.json"
     try:
-        devices = json.loads(path.read_text(encoding="utf-8"))
+        from storage import devices_store
+        devices = devices_store.load(department=None)
         # [POST-003] 只回傳 active != false 的機種（無此欄位視為有效）
-        models = [d["model"] for d in devices if d.get("model") and d.get("active", True)]
+        models = {d["device_model"] for d in devices if d.get("device_model") and d.get("active", True)}
     except Exception as e:
-        # 快取內還有上一次成功讀到的值時，寧可回傳稍舊的白名單也不要
-        # 讓整條辨識路徑掛掉——一次瞬斷不該讓使用者看到 500。快取真的
-        # 是空的（從未成功讀過，或已經過了很久沒成功刷新）才 fail-closed。
         if _valid_models_cache["models"] is not None:
+            # 過期快取優於中斷：查詢失敗但曾經成功讀過，寧可回傳稍舊的
+            # 白名單也不要讓整條辨識路徑掛掉。
+            import sys as _sys
+            print(f"[ai_rules] load_valid_models() 查詢失敗，沿用過期快取："
+                  f"{type(e).__name__}: {e}", file=_sys.stderr)
             return _valid_models_cache["models"]
         raise ValidModelsUnavailable(
             f"機種清單暫時無法讀取，請稍後再試（若持續發生請聯絡管理員）：{type(e).__name__}: {e}"
