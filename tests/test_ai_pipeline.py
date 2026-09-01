@@ -447,8 +447,149 @@ class TestCooldown:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# ai_pipeline 整合（MEM 入口）
+# ai_pipeline run_pipeline() 結構性保證（拍照辨識故障修復 PR-2）
 # ═══════════════════════════════════════════════════════════════════════════════
+
+class _FakeAnalyzer:
+    """run_pipeline() 內部呼叫 get_analyzer().analyze(...)，這裡給一個
+    永遠成功的假 analyzer，讓測試能聚焦在「某個下游步驟失敗」這件事，
+    不用真的打 Gemini。"""
+    analyzer_name = "fake"
+    analyzer_model = "fake-model-v1"
+
+    def analyze(self, image_b64, mime_type="image/jpeg"):
+        return {
+            "model": "PILM004",
+            "model_conf": 90,
+            "alarms": [{"code": "0001", "conf": 92, "note": "測試"}],
+            "raw": "{}",
+            "analyzer": {"name": self.analyzer_name, "model": self.analyzer_model, "prompt_version": "v1"},
+            "usage": None,
+            "usage_outcome": "ok",
+        }
+
+
+class TestRunPipelineFailureRecording:
+    """不管哪個步驟失敗，MEM（record_scan 寫 ai_scans）跟 LOG（log_scan
+    寫 ai_logs）都必須寫入一筆記錄——修復前只有 analyzer 這一步有保護，
+    其餘步驟失敗時例外一路冒到 app.py 變成 500，兩邊完全沒有任何痕跡，
+    這批參數化測試逐一涵蓋每個步驟，之後新增 pipeline 步驟時只要照
+    同樣的 pattern 加一組 case，測試會自動涵蓋到，不用每次手動記得
+    另外加保護。
+
+    _reset_valid_models_cache 比照 tests/test_ai_rules_valid_models.py
+    的既有 autouse fixture 模式，避免 valid_models 步驟失敗那個 case
+    的模擬被 TTL 快取蓋掉、或污染到其他測試。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_valid_models_cache(self):
+        from backend.ai import ai_rules
+        ai_rules._valid_models_cache["models"] = None
+        ai_rules._valid_models_cache["expires_at"] = 0.0
+        yield
+        ai_rules._valid_models_cache["models"] = None
+        ai_rules._valid_models_cache["expires_at"] = 0.0
+
+    @pytest.fixture
+    def pipeline_mem(self, tmp_path, monkeypatch):
+        """跟現有的 mem fixture 邏輯相同，但額外讓
+        backend.ai.ai_pipeline 內已經 import 進來的 record_scan/log_scan
+        指向重新載入後的新模組——ai_pipeline.py 是用
+        `from .ai_memory import record_scan` 這種具名匯入，模組級變數
+        重新賦值不會自動同步到已經 import 過的呼叫端，需要手動 patch
+        回去，否則測試寫入的 tmp 目錄跟 ai_pipeline 實際呼叫到的函式
+        用的是兩個不同時期的模組物件。"""
+        monkeypatch.setenv("AI_MEM_DIR", str(tmp_path / "mem"))
+        monkeypatch.setenv("AI_LOG_DIR", str(tmp_path / "log"))
+        import importlib
+        import backend.ai.ai_memory as mem_mod
+        import backend.ai.ai_logger as log_mod
+        import backend.ai.ai_pipeline as pipeline_mod
+        importlib.reload(mem_mod)
+        importlib.reload(log_mod)
+        monkeypatch.setattr(pipeline_mod, "record_scan", mem_mod.record_scan)
+        monkeypatch.setattr(pipeline_mod, "log_scan", log_mod.log_scan)
+        monkeypatch.setattr(pipeline_mod, "_load_records", mem_mod._load_records)
+        return tmp_path, mem_mod, log_mod, pipeline_mod
+
+    def _write_devices(self, data_dir, devices):
+        import json
+        data_dir.mkdir(parents=True, exist_ok=True)
+        (data_dir / "devices.json").write_text(json.dumps(devices, ensure_ascii=False), encoding="utf-8")
+
+    @pytest.mark.parametrize("failing_step", ["analyzer", "valid_models", "post_rule", "verify"])
+    def test_step_failure_writes_mem_and_log_record(self, pipeline_mem, monkeypatch, tmp_path, failing_step):
+        tmp_path_mem, mem_mod, log_mod, pipeline_mod = pipeline_mem
+        monkeypatch.setattr(pipeline_mod, "get_analyzer", lambda: _FakeAnalyzer())
+
+        devices_dir = tmp_path / "devices_data"
+        self._write_devices(devices_dir, [{"model": "PILM004", "active": True}])
+        monkeypatch.setenv("ALARM_DATA_DIR", str(devices_dir))
+
+        if failing_step == "analyzer":
+            def _boom_analyze(self, image_b64, mime_type="image/jpeg"):
+                raise RuntimeError("模擬 analyzer 失敗")
+            monkeypatch.setattr(_FakeAnalyzer, "analyze", _boom_analyze)
+        elif failing_step == "valid_models":
+            def _boom_load_valid_models(*a, **k):
+                from backend.ai.ai_rules import ValidModelsUnavailable
+                raise ValidModelsUnavailable("模擬白名單讀取失敗")
+            monkeypatch.setattr(pipeline_mod, "load_valid_models", _boom_load_valid_models)
+        elif failing_step == "post_rule":
+            def _boom_apply_post_rules(*a, **k):
+                raise RuntimeError("模擬 POST 規則套用失敗")
+            monkeypatch.setattr(pipeline_mod, "apply_post_rules", _boom_apply_post_rules)
+        elif failing_step == "verify":
+            def _boom_check_validation(*a, **k):
+                raise RuntimeError("模擬 VAL 層失敗")
+            monkeypatch.setattr(pipeline_mod, "check_validation", _boom_check_validation)
+
+        # analyzer 失敗是既有的降級路徑：run_pipeline() 回傳一個帶
+        # pipeline_error 欄位的降級 dict，不 re-raise（app.py 的
+        # /api/analyze 前端流程本來就預期這種情況是 200 + pipeline_error，
+        # 不是 500——見 frontend/index.html 的 apiResult.pipeline_error
+        # 判斷）。其餘步驟（valid_models/post_rule/verify）目前沒有
+        # 對應的降級語意，例外會繼續往外拋讓 app.py 既有的
+        # except ValidModelsUnavailable / except Exception 接手決定
+        # 對外回應（PR-1 已保證這些路徑會回合法 JSON 而不是裸 HTML）。
+        if failing_step == "analyzer":
+            result = pipeline_mod.run_pipeline("ZmFrZQ==", department="test_dept")
+            assert result.get("pipeline_error"), "analyzer 失敗時應回傳降級 dict，帶 pipeline_error"
+        else:
+            with pytest.raises(Exception):
+                pipeline_mod.run_pipeline("ZmFrZQ==", department="test_dept")
+
+        history = mem_mod._load_records("history", "PILM004", department="test_dept") \
+            + mem_mod._load_records("history", "_unknown", department="test_dept")
+        assert len(history) == 1, f"{failing_step} 失敗時 MEM 層應寫入恰好一筆記錄"
+        assert history[0]["tier"] == "failure"
+
+        logs = log_mod.load_logs(limit=50, event="scan")
+        assert len(logs) == 1, f"{failing_step} 失敗時 LOG 層應寫入恰好一筆記錄"
+        assert logs[0]["level"] == "ERROR"
+
+    def test_success_path_writes_exactly_one_record_not_two(self, pipeline_mem, monkeypatch, tmp_path):
+        """正常成功路徑（沒有任何步驟失敗）只能有一筆記錄——這條測試
+        守住 finally 分支的「_state['logged'] 已為 True 就不再補寫」
+        這個判斷，避免正常路徑意外被算成失敗又多寫一筆。"""
+        tmp_path_mem, mem_mod, log_mod, pipeline_mod = pipeline_mem
+        monkeypatch.setattr(pipeline_mod, "get_analyzer", lambda: _FakeAnalyzer())
+
+        devices_dir = tmp_path / "devices_data"
+        self._write_devices(devices_dir, [{"model": "PILM004", "active": True}])
+        monkeypatch.setenv("ALARM_DATA_DIR", str(devices_dir))
+
+        result = pipeline_mod.run_pipeline("ZmFrZQ==", department="test_dept")
+        assert result["model"] == "PILM004"
+
+        history = mem_mod._load_records("history", "PILM004", department="test_dept")
+        assert len(history) == 1
+        assert history[0]["tier"] != "failure"
+
+        logs = log_mod.load_logs(limit=50, event="scan")
+        assert len(logs) == 1
+
 
 class TestRunConfirmation:
     def test_confirmation_returns_ok_and_scan_id(self, mem):

@@ -60,29 +60,55 @@ def run_pipeline(image_b64: str, mime_type: str = "image/jpeg", known_model: str
         analyzer: { name, model, prompt_version },
       }
 
-    Analyzer 失敗時回傳 pipeline_error，MEM / LOG 仍會寫入，不會全部 500。
+    結構性保證（拍照辨識故障修復 PR-2）：不管哪個步驟（analyzer/
+    valid_models/post_rule/verify...）失敗，MEM 層（record_scan 寫
+    ai_scans）跟 LOG 層（log_scan 寫 ai_logs）都會寫入一筆記錄，不會
+    因為例外從中途冒出去就完全沒有任何痕跡——修復前只有 analyzer 這
+    一步失敗有獨立 try 保護，其餘步驟（POST/VAL/ALERT）失敗時例外會
+    一路冒到 app.py 變成 500，MEM/LOG 兩邊都不會寫，這次故障排查時
+    完全查不到任何線索就是這個結構性缺口。
+
+    做法：用 try/finally 包住整個流程。任何步驟失敗都一律用
+    model=None、alarms=[]、rejected_alarms=[] 呼叫 record_scan()——不是
+    「盡量帶上已經算到一半的部分結果」，因為部分結果可能來自尚未通過
+    完整驗證的中間狀態（例如 POST 層已經算出 model，但 VAL 層才失敗，
+    這次掃描仍然沒有走完整條流程，不該被記成「成功辨識」）。用固定的
+    失敗參數呼叫 record_scan()，讓它內部依這組參數自動算出 tier=failure
+    （見 ai_memory.py:124-139），不自己發明另一套 tier 判斷邏輯，避免
+    兩個地方各自維護一份「失敗時 tier 該是什麼」的規則、之後容易改一邊
+    忘記改另一邊。只有 analyzer/usage 這些「已經確定拿到、不隨後續步驟
+    成敗而變動」的追溯資訊才保留下來一併記錄。
     """
     analyzer = get_analyzer()
-
-    # 1. Analyzer 辨識（獨立 try，失敗時降級回傳，不影響 MEM/LOG）
-    try:
-        raw = analyzer.analyze(image_b64, mime_type)
-    except Exception as exc:
-        analyzer_meta = {
+    _state = {
+        "analyzer_meta": {
             "name": getattr(analyzer, "analyzer_name", "unknown"),
             "model": getattr(analyzer, "analyzer_model", "unknown"),
             "prompt_version": None,
-        }
-        # MEM 也要記（連續斷線才會觸發 ALERT_LOW_CONF）
-        scan_record = record_scan(None, None, [], [], source="ai", analyzer=analyzer_meta, department=department)
-        # 解析回應失敗/timeout/http_error/safety 這幾種情況，GeminiAnalyzer
-        # 會把 usage_outcome 分類跟已讀到的 usage 資料（若有）掛在例外上
-        # （見 ai_analyzer.py），這裡撈出來一併記錄——outcome 標示這次
-        # 呼叫的結果類型，即使 usage 資料本身是 None（timeout/http_error
-        # 沒有任何回應可讀），outcome 仍要被記下來，未來才能用實際 Google
-        # 帳單反推各類情況的計費誤差，不用現在就查出確切計費規則。
-        exc_usage = getattr(exc, "usage", None)
-        usage_with_outcome = {**(exc_usage or {}), "outcome": getattr(exc, "usage_outcome", "unknown")}
+        },
+        "usage_with_outcome": None,
+        "logged": False,  # 正常路徑（步驟 6）已經寫過 LOG 就不再重複補寫
+    }
+
+    def _write_failure_record(exc: Exception) -> dict:
+        """任何步驟失敗時的統一收尾：MEM 先寫（拿到 scan_id），LOG 再寫。
+        record_scan() 本身若寫入失敗，不能整個吞掉（要大聲記 log），但
+        也不能讓「記錄失敗」蓋過原本 pipeline 的例外——原本的例外還是
+        要繼續往外拋，讓 app.py 的既有 500 處理接手。"""
+        try:
+            scan_record = record_scan(
+                None, None, [], [],
+                source="ai", analyzer=_state["analyzer_meta"], department=department,
+            )
+            scan_id = scan_record["scan_id"]
+        except Exception as mem_exc:
+            import logging
+            logging.getLogger("app").error(
+                f"run_pipeline: record_scan() 寫入失敗（例外仍會繼續往外拋）："
+                f"{type(mem_exc).__name__}: {mem_exc}", exc_info=mem_exc,
+            )
+            scan_id = None
+
         log_scan(
             level="ERROR",
             model=None,
@@ -91,12 +117,13 @@ def run_pipeline(image_b64: str, mime_type: str = "image/jpeg", known_model: str
             rejected_alarms=[],
             model_warning=None,
             needs_model_selection=True,
-            analyzer=analyzer_meta,
-            usage=usage_with_outcome,
-            extra={"pipeline_error": str(exc), "scan_id": scan_record["scan_id"]},
+            analyzer=_state["analyzer_meta"],
+            usage=_state["usage_with_outcome"],
+            extra={"pipeline_error": str(exc), "scan_id": scan_id},
         )
+        _state["logged"] = True
         return {
-            "scan_id":             scan_record["scan_id"],
+            "scan_id":             scan_id,
             "model":               None,
             "model_conf":          None,
             "model_valid":         False,
@@ -107,62 +134,92 @@ def run_pipeline(image_b64: str, mime_type: str = "image/jpeg", known_model: str
             "validation":          {"needs_reconfirm": False, "reasons": []},
             "alerts":              [],
             "tier":                "failure",
-            "analyzer":            analyzer_meta,
+            "analyzer":            _state["analyzer_meta"],
             "pipeline_error":      str(exc),
         }
 
-    # 2. POST 層（若操作員已選機種，覆蓋 AI 辨識結果）
-    valid_models = load_valid_models()
-    if known_model:
-        raw["model"] = known_model
-        raw["model_conf"] = 100
-    result = apply_post_rules(raw, valid_models)
+    try:
+        # 1. Analyzer 辨識
+        try:
+            raw = analyzer.analyze(image_b64, mime_type)
+        except Exception as exc:
+            # 解析回應失敗/timeout/http_error/safety 這幾種情況，
+            # GeminiAnalyzer 會把 usage_outcome 分類跟已讀到的 usage
+            # 資料（若有）掛在例外上（見 ai_analyzer.py），這裡撈出來
+            # 一併記錄——outcome 標示這次呼叫的結果類型，即使 usage
+            # 資料本身是 None（timeout/http_error 沒有任何回應可讀），
+            # outcome 仍要被記下來，未來才能用實際 Google 帳單反推各類
+            # 情況的計費誤差，不用現在就查出確切計費規則。
+            exc_usage = getattr(exc, "usage", None)
+            _state["usage_with_outcome"] = {**(exc_usage or {}), "outcome": getattr(exc, "usage_outcome", "unknown")}
+            return _write_failure_record(exc)
 
-    # 3. VAL 層
-    model = result.get("model")
-    corrections = _load_records("corrections", model, department=department) if model else []
-    val = check_validation(result, corrections)
+        _state["analyzer_meta"] = raw.get("analyzer") or _state["analyzer_meta"]
+        raw_usage = raw.get("usage")
+        _state["usage_with_outcome"] = (
+            {**raw_usage, "outcome": raw.get("usage_outcome", "ok")} if raw_usage is not None else None
+        )
 
-    # 4. MEM 層（先寫，讓 ALERT 能算到「本次」）
-    scan_record = record_scan(
-        model=model,
-        model_conf=result.get("model_conf"),
-        alarms=result.get("alarms", []),
-        rejected_alarms=result.get("rejected_alarms", []),
-        analyzer=raw.get("analyzer"),
-        department=department,
-    )
+        # 2. POST 層（若操作員已選機種，覆蓋 AI 辨識結果）
+        valid_models = load_valid_models()
+        if known_model:
+            raw["model"] = known_model
+            raw["model_conf"] = 100
+        result = apply_post_rules(raw, valid_models)
 
-    # 5. ALERT 層（含本次 scan_record）
-    scan_history = _load_records("history", model or "_unknown", department=department)
-    alerts = check_alerts(result, scan_history)
+        # 3. VAL 層
+        model = result.get("model")
+        corrections = _load_records("corrections", model, department=department) if model else []
+        val = check_validation(result, corrections)
 
-    # 6. LOG 層
-    analyzer_meta = raw.get("analyzer")
-    has_block = any(a.get("block") for a in alerts)
-    raw_usage = raw.get("usage")
-    usage_with_outcome = {**raw_usage, "outcome": raw.get("usage_outcome", "ok")} if raw_usage is not None else None
-    log_scan(
-        level="ERROR" if has_block else ("WARN" if alerts or val["needs_reconfirm"] else "INFO"),
-        model=model,
-        model_conf=result.get("model_conf"),
-        alarms=result.get("alarms", []),
-        rejected_alarms=result.get("rejected_alarms", []),
-        model_warning=result.get("model_warning"),
-        needs_model_selection=result.get("needs_model_selection", False),
-        analyzer=analyzer_meta,
-        usage=usage_with_outcome,
-        extra={"scan_id": scan_record["scan_id"], "alerts": [a["code"] for a in alerts], "val_triggered": val["needs_reconfirm"]},
-    )
+        # 4. MEM 層（先寫，讓 ALERT 能算到「本次」）
+        scan_record = record_scan(
+            model=model,
+            model_conf=result.get("model_conf"),
+            alarms=result.get("alarms", []),
+            rejected_alarms=result.get("rejected_alarms", []),
+            analyzer=raw.get("analyzer"),
+            department=department,
+        )
 
-    return {
-        **result,
-        "scan_id":   scan_record["scan_id"],
-        "validation": val,
-        "alerts":    alerts,
-        "tier":      scan_record["tier"],
-        "analyzer":  analyzer_meta,
-    }
+        # 5. ALERT 層（含本次 scan_record）
+        scan_history = _load_records("history", model or "_unknown", department=department)
+        alerts = check_alerts(result, scan_history)
+
+        # 6. LOG 層
+        analyzer_meta = raw.get("analyzer")
+        has_block = any(a.get("block") for a in alerts)
+        log_scan(
+            level="ERROR" if has_block else ("WARN" if alerts or val["needs_reconfirm"] else "INFO"),
+            model=model,
+            model_conf=result.get("model_conf"),
+            alarms=result.get("alarms", []),
+            rejected_alarms=result.get("rejected_alarms", []),
+            model_warning=result.get("model_warning"),
+            needs_model_selection=result.get("needs_model_selection", False),
+            analyzer=analyzer_meta,
+            usage=_state["usage_with_outcome"],
+            extra={"scan_id": scan_record["scan_id"], "alerts": [a["code"] for a in alerts], "val_triggered": val["needs_reconfirm"]},
+        )
+        _state["logged"] = True
+
+        return {
+            **result,
+            "scan_id":   scan_record["scan_id"],
+            "validation": val,
+            "alerts":    alerts,
+            "tier":      scan_record["tier"],
+            "analyzer":  analyzer_meta,
+        }
+    except Exception as exc:
+        if _state["logged"]:
+            # 已經正常走完步驟 6（例如 alerts/val 之後、return 之前的
+            # 純資料組裝萬一意外拋錯——理論上不會，但 finally 的設計
+            # 前提就是不能預設「後面一定不出事」），不要再補寫第二筆，
+            # 否則同一次 scan 會產生兩筆記錄，混淆真正的次數統計。
+            raise
+        _write_failure_record(exc)
+        raise
 
 
 def run_confirmation(
