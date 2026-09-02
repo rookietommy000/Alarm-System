@@ -107,6 +107,8 @@ CAS 更新狀態（PATCH 帶 status=eq.<原狀態> 條件，僅當狀態仍是�
 ```
 **這個 release 步驟不是可省的細節**——把 CAS 提到最前面本身會製造一個新的失敗模式（狀態已轉換但後續動作失敗），比原本的競態更容易發生，不能只做搶佔（claim）不做釋放（release）。
 
+**release 只有「終態之後還有可能失敗的後續動作」時才需要**：accept 分支 claim 成功後還要接著寫 alarms（`patch_one()`/`upsert_one()`），這一步可能失敗，所以 claim 成功要進一步判斷寫入結果、失敗要 release 回原狀態；reject 分支 claim 成功（`to_status="rejected"`）本身就是終態，沒有後續會失敗的動作，不需要 release。**但這不代表 reject 可以跳過 claim 本身**——QA 驗收 accept 修復時另外抓到（2026-09-02）：`review_suggestion()`/`review_pending_alarm_import()` 最初只把 claim-first 套用在 accept 分支，reject 分支仍是無條件 PATCH，繞過了 CAS 保護，會讓已經 accept 成功的一筆資料被稍晚才到、仍讀著舊快照的 reject 請求覆蓋成 rejected 狀態——不影響已寫入的 alarms 資料本身，但稽核記錄失真（狀態顯示 rejected，事實是已核准並寫入）。**同一組 accept/reject 之類的互斥終態，只要有一邊會被非同步覆蓋，就要兩邊都走 claim，不能只顧其中一邊**，修復見 commit `bb6679a`。
+
 架構上：這個模式（claim + 對應的 release）要抽成共用方法讓多個 store 共用，不要在每個需要狀態轉換的 store 各自複製一份順序邏輯——跟本檔其他「把靠人記得換成做不到」的原則一致，讓錯的寫法比對的寫法麻煩，比事後補測試更可靠。
 
 ## 測試的能力邊界
