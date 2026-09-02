@@ -1129,37 +1129,26 @@ def create_app() -> Flask:
     # 離線產出的疑慮清單（含 AI 建議修正文字），一次性工具的產物、不是
     # 常駐掃描——這裡只提供讀取/審核/採用三個動作，不重新觸發掃描。
     #
-    # 清單檔案本身不進版控（data/ 整層被 .gitignore 排除），沒有檔案時
-    # 如實回空清單，不是報錯——這代表還沒跑過掃描工具，不是系統壞了。
+    # 清單存放（2026-09-02 改）：本機/測試模式仍讀 data/semantic_scan_
+    # fixes.json（data/ 整層被 .gitignore 排除，正式環境永遠讀不到這個
+    # 檔案），production 走 Supabase 的 semantic_review_findings 表
+    # （見 migration 009），雙軌邏輯收斂進 storage.SemanticReviewStore，
+    # 這裡的兩個函式維持原本簽名不變、只是委派給 store，呼叫端（下面
+    # 的兩個端點）完全不用改——理由同 variant_translations 的搬遷：
+    # 這批清單會持續被審核/更新，改存 DB 才不用每次都走 commit+部署。
     #
-    # 審核狀態（status: pending/accepted/rejected）直接寫回清單檔案本身
-    # （tmp+atomic replace，同 JsonStore 的寫入慣例），不建新表——這份
-    # 清單本來就是一次性產物，跟 alarms 正式表是不同生命週期的東西。
-
-    SEMANTIC_REVIEW_FILENAME = "semantic_scan_fixes.json"
-
-    def _semantic_review_path() -> Path:
-        from storage import _data_dir
-        return _data_dir() / SEMANTIC_REVIEW_FILENAME
+    # 審核狀態（status: pending/accepted/rejected）的寫回語意不變：讀出
+    # 整個 list、改其中一筆、存回整個 list——SemanticReviewStore.save_all()
+    # 在 Supabase 模式下用 (device_model, code) 當 on_conflict 逐筆
+    # upsert，不是真的整批覆蓋，效果對呼叫端透明。
 
     def _load_semantic_review() -> list:
-        path = _semantic_review_path()
-        if not path.exists():
-            return []
-        with path.open("r", encoding="utf-8") as f:
-            data = json.load(f)
-        findings = data.get("findings", data) if isinstance(data, dict) else data
-        for f in findings:
-            f.setdefault("status", "pending")
-        return findings
+        from storage import semantic_review_store
+        return semantic_review_store.load_all()
 
     def _save_semantic_review(findings: list) -> None:
-        path = _semantic_review_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
-        with tmp.open("w", encoding="utf-8") as f:
-            json.dump({"findings": findings}, f, ensure_ascii=False, indent=2)
-        tmp.replace(path)
+        from storage import semantic_review_store
+        semantic_review_store.save_all(findings)
 
     @app.get("/api/admin/semantic-review/<department>")
     @admin_required

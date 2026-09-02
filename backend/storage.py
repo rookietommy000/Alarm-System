@@ -1745,6 +1745,122 @@ class VariantTranslationStore:
             return {}
 
 
+class SemanticReviewStore:
+    """全庫語意品質審核清單（303 筆 AI 語意疑慮發現，見 migration
+    009_add_semantic_review_findings.sql）。跟 department 無關——既有
+    API（app.py 的 list_semantic_review()）本來就不依 department 過濾，
+    回傳整份清單給任何呼叫的部門看，這裡忠實保留既有行為。
+
+    介面刻意跟 app.py 原本的 _load_semantic_review()/_save_semantic_review()
+    保持相容（load_all() 回傳 list、save_all(findings) 整批覆蓋寫回），
+    這樣 update_semantic_review() 的「讀出整個 list、改一筆、存回整個
+    list」邏輯完全不用改，呼叫端不用感知底層是 JSON 檔案還是 DB 表。
+    順序穩定很重要：前端用陣列 index 當這筆審核項目的識別碼（不是用
+    device_model/code），load_all() 必須每次回傳同一個順序，這裡固定
+    用 created_at 排序，不能讓 Supabase 的預設回傳順序（無 order 時
+    不保證）打亂既有的 index 契約。
+
+    本機/測試模式讀 data/semantic_scan_fixes.json（既有格式，fail-open：
+    找不到檔案回空清單，這代表「還沒跑過離線掃描工具」不是系統壞了，
+    行為完全複製自原本 app.py 的 _load_semantic_review()）。
+    """
+
+    def load_all(self) -> list:
+        if _use_supabase():
+            return self._load_supabase()
+        return self._load_json()
+
+    def save_all(self, findings: list) -> None:
+        if _use_supabase():
+            self._save_supabase(findings)
+        else:
+            self._save_json(findings)
+
+    def _path(self):
+        return _data_dir() / "semantic_scan_fixes.json"
+
+    def _load_json(self) -> list:
+        path = self._path()
+        if not path.exists():
+            return []
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        findings = data.get("findings", data) if isinstance(data, dict) else data
+        for f in findings:
+            f.setdefault("status", "pending")
+        return findings
+
+    def _save_json(self, findings: list) -> None:
+        path = self._path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        with tmp.open("w", encoding="utf-8") as f:
+            json.dump({"findings": findings}, f, ensure_ascii=False, indent=2)
+        tmp.replace(path)
+
+    _FIELDS = ["device_model", "code", "description", "issue", "confidence",
+               "suggested_zh", "suggested_description"]
+
+    def _row_to_finding(self, row: dict) -> dict:
+        finding = {k: row[k] for k in self._FIELDS}
+        finding["status"] = row["review_status"]
+        if row.get("final_zh") is not None:
+            finding["final_zh"] = row["final_zh"]
+        if row.get("snapshot_id") is not None:
+            finding["snapshot_id"] = row["snapshot_id"]
+        return finding
+
+    def _finding_to_row(self, finding: dict) -> dict:
+        row = {k: finding[k] for k in self._FIELDS}
+        row["review_status"] = finding.get("status", "pending")
+        row["final_zh"] = finding.get("final_zh")
+        row["snapshot_id"] = finding.get("snapshot_id")
+        return row
+
+    def _load_supabase(self) -> list:
+        try:
+            base = os.environ.get("SUPABASE_URL", "").rstrip("/")
+            key = os.environ.get("SUPABASE_KEY", "")
+            qs = "select=*&order=created_at.asc&limit=5000"
+            req = urllib.request.Request(
+                f"{base}/rest/v1/semantic_review_findings?{qs}",
+                headers={"apikey": key, "Authorization": f"Bearer {key}"},
+                method="GET",
+            )
+            with urllib.request.urlopen(req) as r:
+                rows = json.loads(r.read().decode())
+            return [self._row_to_finding(row) for row in rows]
+        except Exception as e:
+            # fail-open：跟既有 _load_semantic_review() 對「檔案不存在」
+            # 的處理一致——查詢失敗時如實回空清單，不是報錯，但例外
+            # 本身要留痕（CLAUDE.md 例外處理判準），不能完全空白吞掉。
+            import sys as _sys
+            print(f"[SemanticReviewStore] _load_supabase 查詢失敗（退回空清單）："
+                  f"{type(e).__name__}: {e}", file=_sys.stderr)
+            return []
+
+    def _save_supabase(self, findings: list) -> None:
+        base = os.environ.get("SUPABASE_URL", "").rstrip("/")
+        key = os.environ.get("SUPABASE_KEY", "")
+        data = json.dumps([self._finding_to_row(f) for f in findings]).encode()
+        req = urllib.request.Request(
+            f"{base}/rest/v1/semantic_review_findings?on_conflict=device_model,code",
+            data=data,
+            headers={
+                "apikey": key, "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json",
+                "Prefer": "resolution=merge-duplicates,return=minimal",
+            },
+            method="POST",
+        )
+        # 這裡刻意不 catch——跟 variant_translations/save_snapshot 那類
+        # 「失敗不影響主流程」的加值功能不同，這是審核動作本身唯一的
+        # 寫入路徑：accept/reject 這筆狀態如果沒真的存進去，使用者會
+        # 以為操作成功但下次載入時狀態消失，比拋錯讓 update_semantic_
+        # review() 的呼叫端得到 500 更誤導人。
+        urllib.request.urlopen(req)
+
+
 _ALARMS_CACHE_TTL_SECONDS = 60  # PLAN 效能優化第 4 項：mf4d 部門 1759 筆分頁查詢實測約 1.6 秒
 
 if _use_supabase():
@@ -1764,3 +1880,4 @@ audit_logger = AuditLogger()
 ai_scan_store = AiScanStore()
 import_snapshot_store = ImportSnapshotStore()
 variant_translation_store = VariantTranslationStore()
+semantic_review_store = SemanticReviewStore()
