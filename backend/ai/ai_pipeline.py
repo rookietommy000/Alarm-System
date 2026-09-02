@@ -91,8 +91,7 @@ def _resolve_alarm_codes(alarms: list, department: Optional[str], model: Optiona
         variant_text = row.get("variant") or ""
         entry = translations.get(variant_text)
         return {
-            "variant": variant_text,
-            "code": row["code"],
+            **row,
             "variant_zh": entry["zh"] if entry else None,
             "translation_status": entry["status"] if entry else None,
         }
@@ -104,8 +103,7 @@ def _resolve_alarm_codes(alarms: list, department: Optional[str], model: Optiona
             resolved.append({**alarm, "db_matched": False, "variant": None, "candidates": None})
         elif len(rows) == 1:
             resolved.append({
-                **alarm, "code": rows[0]["code"], "db_matched": True,
-                "variant": rows[0].get("variant"), "candidates": None,
+                **alarm, **rows[0], "db_matched": True, "candidates": None,
             })
         else:
             resolved.append({

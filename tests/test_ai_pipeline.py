@@ -794,9 +794,13 @@ class TestResolveAlarmCodes:
         )
         result = _resolve_alarm_codes([{"code": "0001", "conf": 90}], "mf4d", "PILM004")
 
+        # DB 實際紀錄（含 device_model 等展示欄位）要整筆併入，不能只挑
+        # code/variant 兩個 identifier 覆蓋——這是拍照辨識結果列表曾經
+        # 全部顯示空白「—」的根因（description 從未被帶入，AI 辨識階段
+        # 本來就沒有這個欄位，只能靠 DB 反查補上）。
         assert result == [{
-            "code": "0001", "conf": 90,
-            "db_matched": True, "variant": "V46403", "candidates": None,
+            "code": "0001", "conf": 90, "variant": "V46403", "device_model": "PILM004",
+            "db_matched": True, "candidates": None,
         }]
 
     def test_multiple_matches_returns_candidates_with_translation_lookup(self, monkeypatch):
