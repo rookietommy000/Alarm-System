@@ -594,6 +594,13 @@
     .search-empty { text-align: center; padding: 48px 16px; color: var(--muted); font-size: 15px; }
     .search-count { font-size: 12px; color: var(--muted); letter-spacing: 0.06em; text-transform: uppercase; padding: 4px 0 8px; }
 
+    /* 個人化空狀態引導（裝置端記憶的常用機種/最近查過，取代原本純
+       文字提示的大片留白）。 */
+    .search-empty-guide { display: flex; flex-direction: column; gap: 20px; padding-top: 12px; }
+    .recent-section { display: flex; flex-direction: column; gap: 8px; }
+    .recent-section-title { font-size: 12px; color: var(--muted); letter-spacing: 0.06em; text-transform: uppercase; }
+    .recent-chip-row { display: flex; gap: 6px; flex-wrap: wrap; }
+
     /* 結果卡片 */
     .alarm-card {
       background: var(--surface);
@@ -1063,7 +1070,36 @@
       <div class="search-results">
         <div v-if="loading" class="loading-overlay"><div class="spinner"></div></div>
         <div v-else-if="searchError" class="search-empty">{{ searchError }}</div>
-        <div v-else-if="!q && !severity && !filterDevice" class="search-empty">選擇機種或輸入代碼開始搜尋</div>
+        <!-- 初始空狀態：改用裝置端記憶的「常用機種」+「最近查過」取代
+             原本純文字提示（UI/UX討論：不用全域熱門統計猜使用者要查
+             什麼，改記這個部門這台裝置自己查過/篩過什麼，見methods的
+             recordRecentView/recordRecentDevice說明）。兩者都沒有資料
+             時（新裝置、剛換部門）才退回純文字提示。 -->
+        <div v-else-if="!q && !severity && !filterDevice">
+          <div v-if="!recentDeviceModels.length && !recentQueries.length" class="search-empty">選擇機種或輸入代碼開始搜尋</div>
+          <div v-else class="search-empty-guide">
+            <div v-if="recentDeviceModels.length" class="recent-section">
+              <div class="recent-section-title">常用機種</div>
+              <div class="recent-chip-row">
+                <button v-for="m in recentDeviceModels" :key="m" class="chip" @click="setDevice(m)">{{ m }}</button>
+              </div>
+            </div>
+            <div v-if="recentQueries.length" class="recent-section">
+              <div class="recent-section-title">最近查過</div>
+              <div class="alarm-card" v-for="rq in recentQueries" :key="rq.device_model + rq.code + (rq.variant || '')"
+                   @click="openRecentQuery(rq)">
+                <div class="alarm-card-main">
+                  <div class="alarm-card-top">
+                    <span class="alarm-card-code">{{ rq.code }}</span>
+                    <span class="alarm-card-device">{{ rq.device_model }}</span>
+                  </div>
+                  <div class="alarm-card-desc">{{ rq.description }}</div>
+                </div>
+                <span class="alarm-card-arrow">›</span>
+              </div>
+            </div>
+          </div>
+        </div>
         <div v-else-if="!items.length" class="search-empty">無符合資料</div>
         <template v-else>
           <div class="search-count">共 {{ items.length }} 筆</div>
@@ -1233,6 +1269,12 @@
           selectedDevice: null,
           items: [], selected: null, searchError: '',
           loading: false, timer: null,
+          // 空狀態的個人化引導（UI/UX討論定案：不用/api/view/stats的
+          // 全域熱門統計，那是猜全公司行為，換部門/換人查詢模式不同，
+          // 對個別使用者可能誤導。改用裝置端localStorage記「這個部門
+          // 這台裝置」自己查過什麼，見 _recentViewsKey()/loadRecentViews()）。
+          recentDeviceModels: [],
+          recentQueries: [],
           feedbackSent: false,
           feedbackStats: {},
           viewStats: {},
@@ -1304,7 +1346,15 @@
         },
       },
       mounted() {
-        AlarmApi.whoami().then(w => { this.whoami = w; });
+        // whoami() 有內建快取（api.js 的 whoamiCache/whoamiPromise），
+        // 這裡再呼叫一次不會重打 API。department namespace 要等這個
+        // resolve 後才能正確讀取——this.whoami.department 在此之前
+        // 是初始值 null，若在這之前就同步讀 localStorage 會用錯的
+        // namespace 讀一次、resolve 後才切到正確值，造成畫面內容跳動。
+        AlarmApi.whoami().then(w => {
+          this.whoami = w;
+          this.loadRecentViews();
+        });
         // 低調的用量提示，非額度警示——失敗不影響拍照分析功能本身
         AlarmApi.get('/api/ai-usage-summary').then(r => r.ok ? r.json() : null).then(d => {
           if (d) this.aiUsageMonthCount = d.month_count;
@@ -1322,6 +1372,73 @@
         }
       },
       methods: {
+        // 個人化空狀態引導（裝置端記憶，見 data() 的 recentDeviceModels/
+        // recentQueries 說明）。key 用 department 當 namespace，不能只
+        // 靠登出時清快取這道防線——查證過既有的登出清快取（見檔案結尾
+        // 的 addEventListener('click', ...)）只清 Cache Storage 不是
+        // localStorage，且只在點擊 /logout 連結時觸發；「忘記登出、
+        // 直接用新部門密碼登入蓋掉舊 session」這條路徑不會觸發那個
+        // 機制（session.clear() 是純後端操作，跟 localStorage 是完全
+        // 獨立的兩層儲存）。用 department 當 key 這一層本身就保證了
+        // 隔離，不依賴使用者有沒有正確登出。
+        _recentViewsKey() {
+          const dept = this.whoami.department || '__unknown__';
+          return `alarmSystem.recentViews.${dept}`;
+        },
+        _recentDevicesKey() {
+          const dept = this.whoami.department || '__unknown__';
+          return `alarmSystem.recentDevices.${dept}`;
+        },
+        loadRecentViews() {
+          try {
+            this.recentQueries = JSON.parse(localStorage.getItem(this._recentViewsKey()) || '[]');
+          } catch { this.recentQueries = []; }
+          try {
+            this.recentDeviceModels = JSON.parse(localStorage.getItem(this._recentDevicesKey()) || '[]');
+          } catch { this.recentDeviceModels = []; }
+        },
+        // 記一筆最近查過的代碼（掛在 openDetail()——所有查詢結果被點開
+        // 的統一入口，無論來自搜尋、拍照辨識或單一命中卡片，a 本身已
+        // 帶 description，不用像全域統計方案那樣額外打 API 補描述）。
+        // 最多留 8 筆，同一筆重複查詢移到最前面，不累積重複項目。
+        recordRecentView(a) {
+          if (!a || !a.code || !a.device_model) return;
+          // variant 也要記——mf4c/FILL203 這類多 variant 機種的
+          // 查詢紀錄若不帶 variant，重新查詢時會用預設空字串比對，
+          // 查到錯的（或查不到）紀錄，見 openRecentQuery() 的呼叫。
+          const entry = { code: a.code, device_model: a.device_model,
+                           description: a.description || '', variant: a.variant || '' };
+          const key = e => `${e.device_model}|${e.code}|${e.variant || ''}`;
+          const list = this.recentQueries.filter(e => key(e) !== key(entry));
+          list.unshift(entry);
+          this.recentQueries = list.slice(0, 8);
+          try { localStorage.setItem(this._recentViewsKey(), JSON.stringify(this.recentQueries)); } catch {}
+        },
+        // 記一筆最近篩選過的機種（掛在 setDevice()）。最多留 6 個。
+        recordRecentDevice(model) {
+          if (!model) return;
+          const list = this.recentDeviceModels.filter(m => m !== model);
+          list.unshift(model);
+          this.recentDeviceModels = list.slice(0, 6);
+          try { localStorage.setItem(this._recentDevicesKey(), JSON.stringify(this.recentDeviceModels)); } catch {}
+        },
+        // 點擊「最近查過」卡片：localStorage 只存了 code/device_model/
+        // description 三個欄位（recordRecentView 寫入時就只留這些），
+        // 不能直接當 selected 開 detail——detail 畫面需要 severity/
+        // cause/solution/sol_steps/local_solution/keywords 等欄位，
+        // 直接塞簡化物件會讓 detail 顯示一堆空白，不是真的資料不存在。
+        // 改成重新打單筆查詢 API 拿完整資料再開 detail。
+        async openRecentQuery(rq) {
+          const dept = this.deptOf(rq);
+          if (!dept) return;
+          try {
+            const qs = rq.variant ? `?variant=${encodeURIComponent(rq.variant)}` : '';
+            const r = await AlarmApi.get(`/api/alarms/${encodeURIComponent(dept)}/${encodeURIComponent(rq.device_model)}/${encodeURIComponent(rq.code)}${qs}`);
+            if (!r.ok) return;
+            const full = await r.json();
+            await this.openDetail(full);
+          } catch {}
+        },
         async refreshViewStats() {
           try {
             const r = await AlarmApi.get('/api/view/stats');
@@ -1337,6 +1454,7 @@
           this.showOldSolution = false;
           this.showLocalHistory = false;
           this.localHistory = [];
+          this.recordRecentView(a);
           try {
             await AlarmApi.post('/api/view', { code: a.code, device_model: a.device_model });
             this.refreshViewStats();
@@ -1476,6 +1594,7 @@
         setDevice(model) {
           this.filterDevice = model;
           this.dropdownOpen = false;
+          if (model) this.recordRecentDevice(model);
           this.fetchAlarms();
         },
         setSeverity(s) {
