@@ -75,8 +75,7 @@ ROUTE_AUTH_REGISTRY = {
     ("/api/admin/departments", "GET"): "superadmin",
     ("/api/admin/departments", "POST"): "superadmin",
     ("/api/admin/departments/<dept_id>", "PUT"): "superadmin",
-    ("/api/admin/departments/<dept_id>/reset-password", "PUT"): "superadmin",
-    ("/api/admin/departments/<dept_id>/active", "PUT"): "superadmin",
+    ("/api/admin/department-actions/<dept_id>", "PUT"): "superadmin",
     ("/api/admin/departments/<dept_id>/impact", "GET"): "superadmin",
     ("/api/admin/departments/<dept_id>", "DELETE"): "superadmin",
 

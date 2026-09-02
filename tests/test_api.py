@@ -244,3 +244,109 @@ def test_require_full_pk_match_accepts_complete_match():
 
     store = SupabaseStore("alarms", pk="code", pk_fields=["department", "device_model", "code", "variant"])
     store._require_full_pk_match({"device_model": "ACM001", "code": "0001", "variant": ""})  # 不應拋例外
+
+
+# ── SupabaseStore.upsert_one() 主鍵欄位空值保護（外部審查 2026-09-02）──
+# get_one()/patch_one()/delete_one() 有 _require_full_pk_match()，但
+# upsert_one() 沒有對應保護——review_pending_alarm_import() 的 accept
+# 分支若組裝出 device_model 為空字串的 alarm dict（例如批次匯入格式
+# 異常標記待審、審核者未察覺就核准），會被 upsert_one() 寫成一筆主鍵
+# 含空字串的孤兒資料，之後透過管理介面（要求完整主鍵才能定位）刪不掉。
+# 這裡在地基層（SupabaseStore.upsert_one() 本身）擋下，涵蓋所有寫入
+# 路徑，不只是核准端點這一個呼叫點。純邏輯測試，不需要真實 Supabase
+# 連線——主鍵檢查在 self._req() 呼叫之前就會拋錯。
+
+def test_upsert_one_rejects_empty_pk_field():
+    """match 用完整的固定訊息格式（不是單純子字串 "device_model"）——
+    on_conflict 參數本身就含 "device_model" 這個字串，寬鬆比對會被
+    urllib 對空 SUPABASE_URL 拋出的 ValueError（訊息含 on_conflict 的
+    URL）意外命中，造成保護真的被拿掉時測試依然 PASS 的假陽性（已用
+    反向驗證抓到這個陷阱，改用精確訊息格式後才更正）。"""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
+    from storage import SupabaseStore
+
+    store = SupabaseStore("alarms", pk="code", pk_fields=["department", "device_model", "code", "variant"])
+    with pytest.raises(ValueError, match="主鍵欄位 device_model 不可為空"):
+        store.upsert_one(
+            {"device_model": "", "code": "0001", "description": "d"},
+            department="local", on_conflict="department,device_model,code,variant",
+        )
+
+
+def test_upsert_one_rejects_missing_pk_field():
+    """欄位完全不存在（不只是空字串）也要擋——item.get(f, "") 的
+    fallback 讓「沒帶這個 key」跟「帶了空字串」得到一致的保護。"""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
+    from storage import SupabaseStore
+
+    store = SupabaseStore("alarms", pk="code", pk_fields=["department", "device_model", "code", "variant"])
+    with pytest.raises(ValueError, match="主鍵欄位 code 不可為空"):
+        store.upsert_one(
+            {"device_model": "ACM001", "description": "d"},
+            department="local", on_conflict="department,device_model,code,variant",
+        )
+
+
+def test_upsert_one_allows_empty_variant():
+    """variant 是唯一的例外——空字串代表「無變體」是合法語意（既有
+    1759 筆資料皆如此），不能跟其他主鍵欄位的空值一併擋下。這裡故意
+    不驗證真的成功寫入（那需要真實 Supabase 連線），只驗證沒有在
+    variant 這關就被 ValueError 擋下——用一個會在稍後網路呼叫階段
+    才失敗的假 base url，確認錯誤不是來自主鍵檢查。"""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
+    from storage import SupabaseStore
+
+    store = SupabaseStore("alarms", pk="code", pk_fields=["department", "device_model", "code", "variant"])
+    with pytest.raises(Exception) as exc_info:
+        store.upsert_one(
+            {"device_model": "ACM001", "code": "0001", "variant": "", "description": "d"},
+            department="local", on_conflict="department,device_model,code,variant",
+        )
+    # 拋出的必須不是主鍵檢查的 ValueError（沒設定 SUPABASE_URL/KEY 時
+    # 會在 urllib 網路呼叫階段失敗，不是我們要驗證的邊界，但至少確認
+    # 錯誤訊息不是「variant 不可為空」）
+    assert "variant" not in str(exc_info.value) or "不可為空" not in str(exc_info.value)
+
+
+def test_upsert_one_rejects_empty_device_pk_field_via_model_key():
+    """devices 表用 model 而非 device_model 當主鍵欄位名——確認保護套用
+    在 _device_payload_to_row() 轉換之後的欄位名，而不是呼叫端傳入的
+    原始 key（devices 允許呼叫端傳 device_model 或 model 兩種 key，
+    見 _device_payload_to_row() 的容錯轉換）。"""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
+    from storage import SupabaseStore
+
+    store = SupabaseStore("devices", pk="id", pk_fields=["department", "model"], is_devices=True)
+    with pytest.raises(ValueError, match="主鍵欄位 model 不可為空"):
+        store.upsert_one(
+            {"id": "local-X", "device_model": "", "category": "CNC"},
+            department="local", on_conflict="department,model",
+        )
+
+
+def test_upsert_one_accepts_device_model_key_alias_for_model_pk_field():
+    """呼叫端傳 device_model（而非 model）且值非空時，不該被誤判成
+    model 欄位是空的——這是 _device_payload_to_row() 的既有容錯行為，
+    新的主鍵保護不能破壞它。"""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
+    from storage import SupabaseStore
+
+    store = SupabaseStore("devices", pk="id", pk_fields=["department", "model"], is_devices=True)
+    with pytest.raises(Exception) as exc_info:
+        store.upsert_one(
+            {"id": "local-X", "device_model": "CNC-A100", "category": "CNC"},
+            department="local", on_conflict="department,model",
+        )
+    # 不應該是主鍵檢查擋下的（那樣訊息會含「主鍵欄位 model 不可為空」），
+    # 應該是後續網路呼叫階段的錯誤（沒設定 SUPABASE_URL/KEY）
+    assert "主鍵欄位" not in str(exc_info.value)

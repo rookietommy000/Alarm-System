@@ -2349,12 +2349,12 @@ createApp({
     },
     async resetDeptPassword() {
       this.deptError = '';
-      const body = {};
+      const body = { action: 'reset_password' };
       if (this.deptResetDraft.password) body.password = this.deptResetDraft.password;
       if (this.deptResetDraft.admin_password) body.admin_password = this.deptResetDraft.admin_password;
       this.writeBusy.resetDeptPassword = true;
       try {
-        const r = await AlarmApi.put(`/api/admin/departments/${encodeURIComponent(this.deptTargetId)}/reset-password`, body);
+        const r = await AlarmApi.put(`/api/admin/department-actions/${encodeURIComponent(this.deptTargetId)}`, body);
         if (!r.ok) { this.deptError = (await r.json()).error || '重設失敗'; return; }
         this.closeDeptDialog();
         this.showToast('密碼已重設，該部門所有裝置已登出');
@@ -2373,7 +2373,7 @@ createApp({
       const target = this.deptTarget;
       this.writeBusy.toggleDeptActive = true;
       try {
-        const r = await AlarmApi.put(`/api/admin/departments/${encodeURIComponent(target.id)}/active`, { active: !target.active });
+        const r = await AlarmApi.put(`/api/admin/department-actions/${encodeURIComponent(target.id)}`, { action: 'active', active: !target.active });
         if (!r.ok) { this.showToast('操作失敗'); return; }
         await this.loadDepartments();
         this.closeDeptDialog();

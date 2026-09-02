@@ -292,6 +292,40 @@ def test_accept_releases_claim_when_upsert_fails(client, monkeypatch):
     assert release_calls == [14]
 
 
+def test_accept_returns_400_with_clear_consequence_when_pk_field_empty(client, monkeypatch):
+    """upsert_one() 的主鍵欄位空值保護（storage.py，外部審查
+    2026-09-02）拋出的 ValueError 要被接住轉成明確 400——不能讓這個
+    ValueError 落到 test_accept_releases_claim_when_upsert_fails 驗證
+    的「泛用例外往外拋」分支（那樣會變成 500，技術性訊息直接洩漏給
+    前端）。錯誤訊息要講清楚實際後果（核准後無法透過管理介面刪除，
+    需要工程師介入），不能只寫「不建議核准」這種含糊措辭（老師方案2
+    的具體要求）。release 仍要被呼叫，同其他失敗分支一致。"""
+    import storage as storage_mod
+
+    row = _pending_row(id=16)
+    monkeypatch.setattr(storage_mod.pending_alarm_import_store, "get_by_id", lambda import_id: row)
+    monkeypatch.setattr(storage_mod.pending_alarm_import_store, "claim", lambda *a, **kw: {"id": 16, "status": "approved"})
+    release_calls = []
+    monkeypatch.setattr(
+        storage_mod.pending_alarm_import_store, "release",
+        lambda row_id, **kw: release_calls.append(row_id),
+    )
+
+    def _reject_empty_pk(*a, **kw):
+        raise ValueError("alarms: 主鍵欄位 device_model 不可為空")
+
+    monkeypatch.setattr(storage_mod.alarms_store, "upsert_one", _reject_empty_pk)
+
+    r = client.put("/api/admin/pending-alarm-imports/16", json={"action": "accept"})
+
+    assert r.status_code == 400
+    body = r.get_json()
+    assert "無法核准寫入" in body["error"]
+    assert "無法刪除" in body["error"]
+    assert "工程師" in body["error"]
+    assert release_calls == [16]
+
+
 def test_review_invalid_action_returns_400(client, monkeypatch):
     import storage as storage_mod
 

@@ -17,6 +17,73 @@ def _data_dir() -> Path:
     return Path(__file__).resolve().parent.parent / "data"
 
 
+_WRITE_METHODS = {"POST", "PATCH", "DELETE", "PUT"}
+
+
+def _is_production_runtime() -> bool:
+    """跟 app.py create_app() 的 _is_production 判斷同一個依據
+    （RENDER_EXTERNAL_URL/FLASK_ENV=production），這裡獨立判斷一次而
+    不 import app.py——storage.py 是較底層模組，不該反向依賴 app.py，
+    兩處各自判斷同一組環境變數即可，不是重複定義真相來源（環境變數
+    本身才是真相來源，這裡只是各自讀取）。"""
+    return bool(os.environ.get("RENDER_EXTERNAL_URL")) or os.environ.get("FLASK_ENV") == "production"
+
+
+def _guard_production_write(req) -> None:
+    """本機執行（非正式環境）時，任何對正式 Supabase 的寫入請求一律
+    拒絕，除非明確設定 ALLOW_LOCAL_PRODUCTION_WRITE=1 承認允許（外部
+    審查 2026-09-02：老師跟 QA 在本機重現部門相關問題時，都曾用寫測試
+    腳本的方式不小心打到正式 Supabase 環境——DepartmentStore 完全沒有
+    JsonStore fallback、`load_dotenv()` 會自動載入正式環境憑證，兩者
+    疊加讓「本機執行的腳本」跟「打正式環境」之間的距離比想像中近）。
+
+    攔在 urllib.request.urlopen() 的呼叫入口（見 _urlopen()），這是
+    本檔案所有 HTTP 請求（不管走哪個 store 的 _req()，或哪處內聯的
+    urllib.request.Request）最終都會經過的單一函式——不依賴每個 store
+    各自記得呼叫這個檢查，新增的 store 只要用 _urlopen() 取代直接呼叫
+    urllib.request.urlopen() 就自動受保護，不需要额外接線。
+
+    只擋寫入方法（POST/PATCH/DELETE/PUT），GET 一律放行——本機讀取
+    正式環境資料做除錯調查是合理需求，會造成資料異動的才是這裡要防
+    的風險。只擋指向正式 Supabase 的請求（SUPABASE_URL 網域），本機
+    JsonStore 模式或測試用的假 URL 不受影響。
+
+    pytest 執行環境一律放行，不受這層保護限制——這裡防的是「本機手動
+    執行腳本」誤打正式環境，pytest 測試本身大量用假 SUPABASE_URL（例如
+    https://example.invalid）搭配 monkeypatch 過的 urlopen 驗證 payload
+    組裝邏輯，這些假 URL 天生就會被字串前綴比對誤判成「指向正式環境」
+    （因為守衛的判斷依據只有「有沒有設 SUPABASE_URL」，測試環境也會設，
+    只是值是假的）。`PYTEST_CURRENT_TEST` 是 pytest 執行時自動設定的
+    環境變數（測試框架本身的識別方式，不是本專案自訂），用它排除 pytest
+    環境比嘗試辨認「這個 SUPABASE_URL 是不是假的」更可靠。"""
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return
+    if _is_production_runtime():
+        return  # 正式環境本身執行寫入是正常操作，不受這層保護限制
+    if os.environ.get("ALLOW_LOCAL_PRODUCTION_WRITE") == "1":
+        return
+    method = req.get_method()
+    if method not in _WRITE_METHODS:
+        return
+    supabase_url = os.environ.get("SUPABASE_URL", "")
+    if not supabase_url:
+        return  # 沒設定 SUPABASE_URL，不可能是打正式環境
+    if req.full_url.startswith(supabase_url):
+        raise RuntimeError(
+            f"本機執行環境偵測到對正式 Supabase 的寫入請求（{method} {req.full_url}），"
+            f"已拒絕執行——這通常代表腳本/測試不小心載入了正式環境憑證。"
+            f"若確定要在本機對正式環境執行寫入，設定環境變數 "
+            f"ALLOW_LOCAL_PRODUCTION_WRITE=1 明確承認允許。"
+        )
+
+
+def _urlopen(req, *a, **kw):
+    """取代所有直接呼叫 urllib.request.urlopen() 的地方——單一入口，
+    見 _guard_production_write() 的保護理由。"""
+    _guard_production_write(req)
+    return urllib.request.urlopen(req, *a, **kw)
+
+
 class JsonStore:
     """單租戶 store，僅服務本機開發／pytest（PLAN 3.2 節）。
 
@@ -243,7 +310,7 @@ class SupabaseStore:
         req = urllib.request.Request(url, data=data,
                                      headers=self._headers(extra_headers),
                                      method=method)
-        with urllib.request.urlopen(req) as r:
+        with _urlopen(req) as r:
             raw = r.read().decode()
             return json.loads(raw) if raw.strip() else []
 
@@ -282,7 +349,7 @@ class SupabaseStore:
             headers=self._headers({"Range-Unit": "items", "Range": "0-0"}),
             method="GET",
         )
-        with urllib.request.urlopen(req) as r:
+        with _urlopen(req) as r:
             r.read()
 
     def load(self, department: Optional[str]) -> list:
@@ -439,6 +506,17 @@ class SupabaseStore:
         PostgREST 做 upsert 時衝突目標預設取主鍵，不會自動使用新建的 unique
         index；在中間部署狀態下會安靜打到錯誤約束，因此一律在 URL 明確帶上
         欄位組合，不使用 ON CONFLICT ON CONSTRAINT <名稱>（約束名稱可能變動）。
+
+        主鍵欄位（variant 除外）不可為空——這是本方法唯一的結構性保護
+        （不像 get_one()/patch_one()/delete_one() 有 _require_full_pk_match()）。
+        涵蓋所有寫入路徑，含未來新增的呼叫端，不能只靠個別呼叫端（例如
+        review_pending_alarm_import() 的 accept 分支）自行驗證——那種
+        作法每加一個新呼叫端就要重新記得一次，這裡在地基層擋下才是
+        「讓錯的寫法做不到」（外部審查 2026-09-02：CLAUDE.md 已經寫過
+        `<string>` 路由段不匹配空字串這個陷阱，這次還是被新的待審核
+        流程踩到同一類問題——寫下來的是知識，不是機制）。variant 排除：
+        既有資料 1759 筆 variant 全是空字串，代表「無變體」是合法語意，
+        跟其他主鍵欄位空值代表「資料不完整」的性質不同，不能一併擋。
         """
         write_item = dict(item)
         if self.is_devices:
@@ -447,6 +525,16 @@ class SupabaseStore:
                 row["id"] = item["id"]
             write_item = row
         write_item["department"] = department
+        # 主鍵欄位檢查放在 devices 的 model/device_model 兩種 key 容錯轉換
+        # 跟 department 賦值之後，用最終要送出的 write_item 而非原始
+        # item——否則呼叫端若只傳 device_model（_device_payload_to_row()
+        # 本來就容許這種寫法）會被誤判成「model 欄位是空的」，或
+        # department 一律被誤判成空（它是函式參數，不是靠 item 帶）。
+        for f in self.pk_fields:
+            if f == "variant":
+                continue
+            if not str(write_item.get(f, "")).strip():
+                raise ValueError(f"{self.table}: 主鍵欄位 {f} 不可為空")
         path = f"{self.table}?on_conflict={on_conflict}"
         result = self._req("POST", path, [write_item],
                            extra_headers={"Prefer": "resolution=merge-duplicates,return=representation"})
@@ -512,7 +600,7 @@ class DepartmentStore:
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(f"{base}/rest/v1/{path}", data=data,
                                      headers=headers, method=method)
-        with urllib.request.urlopen(req) as r:
+        with _urlopen(req) as r:
             raw = r.read().decode()
             return json.loads(raw) if raw.strip() else []
 
@@ -533,7 +621,7 @@ class DepartmentStore:
             },
             method="GET",
         )
-        with urllib.request.urlopen(req) as r:
+        with _urlopen(req) as r:
             content_range = r.headers.get("Content-Range", "")
             # 格式："0-0/N"（零列時是 "*/0"，"/" in 判斷涵蓋得到）。
             # 拿不到筆數時必須拋出而不是回 0——這支方法唯一的呼叫端是刪除前
@@ -764,7 +852,7 @@ class AuditLogger:
                 },
                 method="POST",
             )
-            urllib.request.urlopen(req)
+            _urlopen(req)
         except Exception:
             pass  # log failure must never crash the main operation
 
@@ -794,7 +882,7 @@ class AuditLogger:
                 headers={"apikey": key, "Authorization": f"Bearer {key}"},
                 method="GET",
             )
-            with urllib.request.urlopen(req) as r:
+            with _urlopen(req) as r:
                 return json.loads(r.read().decode())
         except Exception:
             return []
@@ -824,7 +912,7 @@ class AuditLogger:
                 headers={"apikey": key, "Authorization": f"Bearer {key}"},
                 method="GET",
             )
-            with urllib.request.urlopen(req) as r:
+            with _urlopen(req) as r:
                 return json.loads(r.read().decode())
         except Exception:
             return []
@@ -868,7 +956,7 @@ class ImportSnapshotStore:
                 headers={"apikey": key, "Authorization": f"Bearer {key}"},
                 method="GET",
             )
-            urllib.request.urlopen(req)
+            _urlopen(req)
             return True
         except Exception as e:
             # fail-closed 方向不變（表不存在/查詢失敗一律視為不可用，
@@ -902,7 +990,7 @@ class ImportSnapshotStore:
                 headers={**headers, "Prefer": "return=representation"},
                 method="POST",
             )
-            with urllib.request.urlopen(snap_req) as r:
+            with _urlopen(snap_req) as r:
                 snapshot = json.loads(r.read().decode())[0]
             snapshot_id = snapshot["id"]
 
@@ -918,7 +1006,7 @@ class ImportSnapshotStore:
                     headers={**headers, "Prefer": "return=minimal"},
                     method="POST",
                 )
-                urllib.request.urlopen(rows_req)
+                _urlopen(rows_req)
             return snapshot_id
         except Exception as e:
             # 快照寫入失敗不得中斷匯入本身——復原是保底機制，不是匯入的
@@ -946,7 +1034,7 @@ class ImportSnapshotStore:
                 headers={"apikey": key, "Authorization": f"Bearer {key}"},
                 method="GET",
             )
-            with urllib.request.urlopen(req) as r:
+            with _urlopen(req) as r:
                 return json.loads(r.read().decode())
         except Exception:
             return []
@@ -965,7 +1053,7 @@ class ImportSnapshotStore:
                 f"&department=eq.{urllib.parse.quote(department, safe='')}",
                 headers=headers, method="GET",
             )
-            with urllib.request.urlopen(snap_req) as r:
+            with _urlopen(snap_req) as r:
                 snaps = json.loads(r.read().decode())
             if not snaps:
                 return None
@@ -973,7 +1061,7 @@ class ImportSnapshotStore:
                 f"{base}/rest/v1/import_snapshot_rows?snapshot_id=eq.{snapshot_id}",
                 headers=headers, method="GET",
             )
-            with urllib.request.urlopen(rows_req) as r:
+            with _urlopen(rows_req) as r:
                 rows = json.loads(r.read().decode())
             return {"snapshot": snaps[0], "rows": rows}
         except Exception:
@@ -995,7 +1083,7 @@ class ImportSnapshotStore:
                          "Content-Type": "application/json", "Prefer": "return=minimal"},
                 method="PATCH",
             )
-            urllib.request.urlopen(req)
+            _urlopen(req)
         except Exception:
             pass
 
@@ -1065,7 +1153,7 @@ class FeedbackStore:
                 },
                 method="POST",
             )
-            urllib.request.urlopen(req)
+            _urlopen(req)
         except Exception as e:
             # 寫入失敗不可中斷主流程，但完全吞掉例外會讓「表結構跟預期
             # 不符」跟「網路抖動」都靜默變成「什麼都沒發生」——同
@@ -1087,7 +1175,7 @@ class FeedbackStore:
                 headers={"apikey": key, "Authorization": f"Bearer {key}"},
                 method="GET",
             )
-            with urllib.request.urlopen(req) as r:
+            with _urlopen(req) as r:
                 return json.loads(r.read().decode())
         except Exception:
             return []
@@ -1155,7 +1243,7 @@ class ViewStore:
                          "Content-Type": "application/json", "Prefer": "return=minimal"},
                 method="POST",
             )
-            urllib.request.urlopen(req)
+            _urlopen(req)
         except Exception as e:
             import sys as _sys
             print(f"[ViewStore] _append_supabase 寫入 alarm_views 失敗（不影響主流程）："
@@ -1173,7 +1261,7 @@ class ViewStore:
                 headers={"apikey": key, "Authorization": f"Bearer {key}"},
                 method="GET",
             )
-            with urllib.request.urlopen(req) as r:
+            with _urlopen(req) as r:
                 return json.loads(r.read().decode())
         except Exception:
             return []
@@ -1193,7 +1281,7 @@ class AiScanStore:
                 headers={"apikey": key, "Authorization": f"Bearer {key}"},
                 method="GET",
             )
-            with urllib.request.urlopen(req) as r:
+            with _urlopen(req) as r:
                 return json.loads(r.read().decode())
         except Exception as e:
             # 唯讀 dashboard 統計用途，查詢失敗回空 list 不影響主流程
@@ -1242,7 +1330,7 @@ class AiScanStore:
                 },
                 method="GET",
             )
-            with urllib.request.urlopen(req) as r:
+            with _urlopen(req) as r:
                 content_range = r.headers.get("Content-Range", "")
                 # 格式 "0-0/N"，N 是總筆數
                 return int(content_range.split("/")[-1]) if "/" in content_range else 0
@@ -1306,7 +1394,7 @@ class AiScanStore:
                 headers={"apikey": key, "Authorization": f"Bearer {key}"},
                 method="GET",
             )
-            with urllib.request.urlopen(req) as r:
+            with _urlopen(req) as r:
                 rows = json.loads(r.read().decode())
         except Exception as e:
             import sys as _sys
@@ -1375,7 +1463,7 @@ class AiScanStore:
                              "Prefer": "return=representation"},
                     method="DELETE",
                 )
-                with urllib.request.urlopen(req) as r:
+                with _urlopen(req) as r:
                     deleted = json.loads(r.read().decode())
                     removed[tier] = len(deleted)
             except Exception:
@@ -1455,7 +1543,7 @@ class AlarmSuggestionStore(StatusTransitionMixin):
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(f"{base}/rest/v1/{path}", data=data,
                                      headers=headers, method=method)
-        with urllib.request.urlopen(req) as r:
+        with _urlopen(req) as r:
             raw = r.read().decode()
             return json.loads(raw) if raw.strip() else []
 
@@ -1520,7 +1608,7 @@ class AlarmSuggestionStore(StatusTransitionMixin):
                      "Prefer": "count=exact", "Range-Unit": "items", "Range": "0-0"},
             method="GET",
         )
-        with urllib.request.urlopen(req) as r:
+        with _urlopen(req) as r:
             content_range = r.headers.get("Content-Range", "")
             if "/" not in content_range:
                 return False
@@ -1631,7 +1719,7 @@ class LoginAttemptStore:
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(f"{base}/rest/v1/{path}", data=data,
                                      headers=headers, method=method)
-        with urllib.request.urlopen(req) as r:
+        with _urlopen(req) as r:
             raw = r.read().decode()
             return json.loads(raw) if raw.strip() else []
 
@@ -1686,7 +1774,7 @@ class LoginAttemptStore:
             n = len(count_rows)
             last_failure_at = count_rows[0]["attempted_at"] if count_rows else None
             elapsed_ms = (time.monotonic() - t0) * 1000
-            # urllib.request.urlopen() 是連線建立+送出查詢+收回應一次完成的
+            # _urlopen() 是連線建立+送出查詢+收回應一次完成的
             # 黑盒呼叫，沒有 API 能單獨量出「連線建立」這一段（要拆的話得換
             # http.client 手動 connect()/request()，影響面會擴及其他 store
             # 類別的 _req()，這次先只量總耗時，數字若顯示有必要再另外評估）。
@@ -1789,7 +1877,7 @@ class VariantTranslationStore:
                 headers={"apikey": key, "Authorization": f"Bearer {key}"},
                 method="GET",
             )
-            with urllib.request.urlopen(req) as r:
+            with _urlopen(req) as r:
                 rows = json.loads(r.read().decode())
             return {
                 row["original_text"]: {"zh": row["translated_text"], "status": row["review_status"]}
@@ -1888,7 +1976,7 @@ class SemanticReviewStore:
                 headers={"apikey": key, "Authorization": f"Bearer {key}"},
                 method="GET",
             )
-            with urllib.request.urlopen(req) as r:
+            with _urlopen(req) as r:
                 rows = json.loads(r.read().decode())
             return [self._row_to_finding(row) for row in rows]
         except Exception as e:
@@ -1919,7 +2007,7 @@ class SemanticReviewStore:
         # 寫入路徑：accept/reject 這筆狀態如果沒真的存進去，使用者會
         # 以為操作成功但下次載入時狀態消失，比拋錯讓 update_semantic_
         # review() 的呼叫端得到 500 更誤導人。
-        urllib.request.urlopen(req)
+        _urlopen(req)
 
 
 class PendingAlarmImportStore(StatusTransitionMixin):
@@ -1958,7 +2046,7 @@ class PendingAlarmImportStore(StatusTransitionMixin):
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(f"{base}/rest/v1/{path}", data=data,
                                      headers=headers, method=method)
-        with urllib.request.urlopen(req) as r:
+        with _urlopen(req) as r:
             raw = r.read().decode()
             return json.loads(raw) if raw.strip() else []
 

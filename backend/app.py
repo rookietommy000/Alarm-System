@@ -139,6 +139,56 @@ class DeptScope(Enum):
 def create_app() -> Flask:
     app = Flask(__name__, static_folder=str(FRONTEND), static_url_path="")
 
+    # ── 路由空段防護（外部審查 2026-09-02：路由重導向端點混淆問題）──
+    #
+    # Werkzeug 預設 merge_slashes=True，對含連續斜線的路徑（例如
+    # /api/alarms//dummy/dummy/local，某段動態參數被傳成空字串時常見
+    # 的形狀）會先發出 308 重導向到「斜線合併後」的路徑，那個目標路徑
+    # 可能剛好匹配到完全不同的路由規則——實測發現的具體案例：帶空
+    # dept_id 段的 reset-password/active 端點被 308 導到
+    # rename_department()，而目標端點的權限要求剛好更寬鬆，等於空字串
+    # 路徑段被合併重導向繞過了原本端點的 authz 邊界。這不是我們自己的
+    # 視圖邏輯錯誤，是 Werkzeug 路由匹配本身的預設行為在這個場景下
+    # 造成的風險，必須在路由匹配之前就擋下，不能指望個別視圖函式各自
+    # 判斷「這個路徑段是不是空的」。
+    #
+    # 關掉 merge_slashes 讓連續斜線不再觸發自動重導向（此時 Werkzeug
+    # 對這類路徑改回傳一般的 404，不會嘗試合併後再匹配）；before_request
+    # 這層是第二道防線，確保任何形式含連續斜線的路徑一律在進入視圖
+    # 函式之前就被擋下，不依賴 merge_slashes 這個設定本身的行為細節。
+    #
+    # merge_slashes 必須在任何路由被 app.route()/app.get() 等裝飾器
+    # 註冊之前設定完成——它是 werkzeug.routing.Map 的建構參數，Flask
+    # 的 url_map 在 Flask() 建構時就已經產生，這裡設定的是同一個 Map
+    # 實例的屬性，之後每次註冊路由都會沿用這個設定，不需要等到所有
+    # 路由都註冊完才設定，但越早設定越不會有僥倖漏放的風險，所以放在
+    # create_app() 最前面。
+    app.url_map.merge_slashes = False
+
+    @app.before_request
+    def _reject_empty_path_segments():
+        """擋兩種形狀的空路徑段風險（QA 2026-09-02 實測發現：這個坑比
+        單純的「連續斜線」更廣，見 tests/test_route_safety.py 開頭說明）：
+
+        1. 連續斜線（例如 .../reset-password 前面帶空 dept_id 段變成
+           //reset-password）——merge_slashes 關閉後這種路徑本身不會
+           再被自動重導向，但這層檢查在路由匹配之前就先擋，是更明確
+           的第二道防線，不依賴 merge_slashes 設定本身的行為細節。
+        2. 路徑以 / 結尾（例如 /api/alarms/ 對應 <department> 段整段
+           消失）——這種情況不會產生 //，Werkzeug 對 <string> converter
+           空字串匹配失敗會落入 static_url_path="" 的靜態檔案 catch-all
+           規則，寫入方法（POST/PUT/DELETE）因為那條規則只允許 GET
+           而回 405，不是 404——405 代表「這個路徑存在於別的規則」，
+           不是我們自己的防護在生效，語意上具有誤導性，一律先擋成
+           404（同 CLAUDE.md 慣例：不透露端點是否存在，一律 404）。
+
+        只在 /api/ 前綴下檢查——這是唯一有動態路徑段的範圍，前台頁面
+        （/app、/admin 等）本身不吃動態參數，不該被這層檢查影響。"""
+        if not request.path.startswith("/api/"):
+            return
+        if "//" in request.path or request.path.endswith("/"):
+            abort(404, NOT_FOUND_MSG)
+
     _DEV_SECRET_KEY = "dev-secret-change-me"
     _is_production = bool(os.environ.get("RENDER_EXTERNAL_URL")) or os.environ.get("FLASK_ENV") == "production"
     _secret_key = os.environ.get("FLASK_SECRET_KEY", "")
@@ -1626,6 +1676,19 @@ def create_app() -> Flask:
             new_row = alarms_store.upsert_one(
                 new_alarm, department=department,
                 on_conflict="department,device_model,code,variant")
+        except ValueError as e:
+            # upsert_one() 的主鍵欄位空值保護（storage.py，外部審查
+            # 2026-09-02）：device_model/code 缺值的待審資料若被核准，
+            # 會被寫成主鍵含空字串的孤兒資料——之後透過管理介面（要求
+            # 完整主鍵才能定位）刪不掉，需要工程師直接操作資料庫才能
+            # 清除。這裡接住 ValueError，轉成明確的 400 訊息並講清楚
+            # 實際後果，不是含糊的「不建議核准」，也不讓 500 把
+            # ValueError 的技術性內容原樣洩漏給前端。
+            pending_alarm_import_store.release(import_id)
+            abort(400, f"這筆待審資料缺少必要欄位，無法核准寫入：{e}。"
+                       f"核准後這類資料在管理介面上會因為主鍵不完整而無法刪除，"
+                       f"需要工程師直接操作資料庫才能清除——請先退回，"
+                       f"或聯絡技術端補齊欄位後再核准。")
         except Exception:
             # claim 已成功但實際寫入失敗——必須 release，否則留下「已標記
             # approved 但 alarms 沒真的新增」的孤兒狀態（CLAUDE.md「狀態
@@ -1995,33 +2058,62 @@ def create_app() -> Flask:
         _invalidate_dept_cache(dept_id)
         return jsonify({"ok": True})
 
-    @app.put("/api/admin/departments/<dept_id>/reset-password")
+    @app.put("/api/admin/department-actions/<dept_id>")
     @superadmin_required
-    def reset_department_password(dept_id: str):
-        body = request.get_json(silent=True) or {}
-        password = body.get("password")
-        admin_password = body.get("admin_password")
-        if not password and not admin_password:
-            abort(400, "password 或 admin_password 至少一個必填")
-        super_pw = os.environ.get("SUPERADMIN_PASSWORD", "")
-        if super_pw and (password == super_pw or admin_password == super_pw):
-            abort(400, "密碼不可與總管理員密碼相同")
-        department_store.update_password(
-            dept_id,
-            pw_hash=generate_password_hash(password, method="pbkdf2:sha256") if password else None,
-            admin_pw_hash=generate_password_hash(admin_password, method="pbkdf2:sha256") if admin_password else None,
-        )
-        _invalidate_dept_cache(dept_id)
-        return jsonify({"ok": True})
+    def department_action(dept_id: str):
+        """合併 reset_password/set_active 兩個原本各自獨立路徑段的動作
+        （外部審查 2026-09-02：字面量路徑段 reset-password/active 落在
+        跟 <dept_id> 相同的路徑位置，一旦 dept_id 段為空、merge_slashes
+        對連續斜線做自動重導向，路徑會「參數位移」後意外匹配到
+        rename_department()（PUT /api/admin/departments/<dept_id>），
+        因為那條路由的動態段位置剛好跟去掉空段後的路徑重疊——這是
+        「字面量路徑段」共用同一個位置命名空間的結構性風險，不是缺
+        某個特定值的白名單擋得住的（使用者裁決：改 URL 設計是根本解，
+        不是加白名單）。
 
-    @app.put("/api/admin/departments/<dept_id>/active")
-    @superadmin_required
-    def set_department_active(dept_id: str):
+        第一版合併成 PUT /api/admin/departments/<dept_id>/actions 仍然
+        沒有真正解決根因——<dept_id> 消失後路徑 collapse 成
+        /api/admin/departments/actions，跟 rename_department() 的路由
+        格式（/api/admin/departments/<dept_id>）同構，"actions" 這個
+        字面量段本身又會被當成 dept_id 的值撞上，只是換了碰撞對象，
+        沒有消除碰撞（scripts/check_route_collisions.py 跑出來證實）。
+
+        路徑改成 /api/admin/department-actions/<dept_id>——把 <dept_id>
+        放到路徑最後一段，前綴用跟 departments 不同的字面量
+        （department-actions），這樣 <dept_id> 消失後路徑 collapse 成
+        /api/admin/department-actions/，前綴字面量本身就跟 departments
+        不同，不會被誤判成任何既有路由的動態段值。這是「動態段+字面量
+        後綴」這種路徑形狀天生跟「單一動態段」路由同構的結構性教訓——
+        任何新端點只要復用這個形狀（<動態段>/<字面量>）都會撞，不是
+        個案，往後新增部門相關動作端點要延續這個路徑設計原則，不要
+        把新的字面量段接在 <dept_id> 之後。
+
+        action 支援 "reset_password"（沿用 reset_department_password()
+        原本的密碼重設邏輯，欄位名不變）與 "active"（沿用
+        set_department_active() 原本的啟用/停用邏輯，欄位名不變）。
+        """
         body = request.get_json(silent=True) or {}
-        active = body.get("active")
-        if active is None:
-            abort(400, "active 為必填")
-        department_store.set_active(dept_id, bool(active))
+        action = body.get("action")
+        if action == "reset_password":
+            password = body.get("password")
+            admin_password = body.get("admin_password")
+            if not password and not admin_password:
+                abort(400, "password 或 admin_password 至少一個必填")
+            super_pw = os.environ.get("SUPERADMIN_PASSWORD", "")
+            if super_pw and (password == super_pw or admin_password == super_pw):
+                abort(400, "密碼不可與總管理員密碼相同")
+            department_store.update_password(
+                dept_id,
+                pw_hash=generate_password_hash(password, method="pbkdf2:sha256") if password else None,
+                admin_pw_hash=generate_password_hash(admin_password, method="pbkdf2:sha256") if admin_password else None,
+            )
+        elif action == "active":
+            active = body.get("active")
+            if active is None:
+                abort(400, "active 為必填")
+            department_store.set_active(dept_id, bool(active))
+        else:
+            abort(400, "action 必須是 reset_password 或 active")
         _invalidate_dept_cache(dept_id)
         return jsonify({"ok": True})
 
