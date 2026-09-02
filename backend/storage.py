@@ -1383,7 +1383,45 @@ class AiScanStore:
         return removed
 
 
-class AlarmSuggestionStore:
+class StatusTransitionMixin:
+    """pending→終態狀態轉換的共用 claim/release 邏輯（CLAUDE.md「狀態轉換
+    鐵則」）。要求子類已定義 `_TABLE`（str）與 `_req()`（同 AlarmSuggestionStore/
+    PendingAlarmImportStore 既有的 urllib 請求 helper 簽名）。
+
+    claim() 是 CAS：PATCH 帶 `status=eq.<from_status>` 條件，只有狀態仍是
+    預期值時才會真的改到，PostgREST 對這種情況回傳空陣列（不是報錯）——
+    呼叫端用回傳是否為 None 判斷「這筆是不是被別人搶走了」，不是看
+    HTTP 狀態碼（PostgREST 條件不匹配的 PATCH 本身仍是 200）。
+
+    release() 只在 claim() 成功之後、實際動作（寫入 alarms 等正式表）失敗時
+    呼叫，把狀態退回原值——不能只做 claim 不做 release，否則會留下「已標記
+    完成但實際動作沒發生」的孤兒狀態（CLAUDE.md 已有明確案例記錄）。
+    """
+
+    def claim(self, row_id: int, *, from_status: str, to_status: str, actor: str,
+              review_note: Optional[str] = None) -> Optional[dict]:
+        if not _use_supabase():
+            return None
+        patch = {
+            "status": to_status, "reviewed_by": actor,
+            "reviewed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if review_note is not None:
+            patch["review_note"] = review_note
+        result = self._req(
+            "PATCH", f"{self._TABLE}?id=eq.{row_id}&status=eq.{urllib.parse.quote(from_status, safe='')}",
+            patch, extra_headers={"Prefer": "return=representation"},
+        )
+        return result[0] if result else None
+
+    def release(self, row_id: int, *, to_status: str = "pending") -> None:
+        if not _use_supabase():
+            return
+        patch = {"status": to_status, "reviewed_by": None, "reviewed_at": None}
+        self._req("PATCH", f"{self._TABLE}?id=eq.{row_id}", patch)
+
+
+class AlarmSuggestionStore(StatusTransitionMixin):
     """alarm_suggestions 表的讀寫（PLAN_local_solution.md 3.2/4.2 節）。
 
     只服務 Supabase——這張表本身就是多部門功能（一般使用者提交建議、
@@ -1884,7 +1922,7 @@ class SemanticReviewStore:
         urllib.request.urlopen(req)
 
 
-class PendingAlarmImportStore:
+class PendingAlarmImportStore(StatusTransitionMixin):
     """異常匯入資料的待審清單（見 migration 010_add_pending_alarm_
     imports.sql）。比照 AlarmSuggestionStore 的既有模式（storage.py
     AlarmSuggestionStore 類別）：只服務 Supabase，_use_supabase()=False

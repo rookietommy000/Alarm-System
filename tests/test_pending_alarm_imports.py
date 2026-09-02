@@ -50,7 +50,7 @@ def test_accept_upserts_full_four_field_primary_key(client, monkeypatch):
 
     row = _pending_row(id=5, variant=None)  # 模擬 variant 為 None 的情境
     monkeypatch.setattr(storage_mod.pending_alarm_import_store, "get_by_id", lambda import_id: row)
-    monkeypatch.setattr(storage_mod.pending_alarm_import_store, "review", lambda *a, **kw: {"id": 5, "status": "approved"})
+    monkeypatch.setattr(storage_mod.pending_alarm_import_store, "claim", lambda *a, **kw: {"id": 5, "status": "approved"})
 
     captured = {}
 
@@ -81,7 +81,7 @@ def test_accept_only_includes_optional_fields_present_in_row(client, monkeypatch
 
     row = _pending_row(id=6, severity="警告", cause=None, solution=None)
     monkeypatch.setattr(storage_mod.pending_alarm_import_store, "get_by_id", lambda import_id: row)
-    monkeypatch.setattr(storage_mod.pending_alarm_import_store, "review", lambda *a, **kw: {"id": 6, "status": "approved"})
+    monkeypatch.setattr(storage_mod.pending_alarm_import_store, "claim", lambda *a, **kw: {"id": 6, "status": "approved"})
 
     captured = {}
     monkeypatch.setattr(
@@ -104,7 +104,7 @@ def test_accept_logs_audit_as_create_with_no_old_data(client, monkeypatch):
 
     row = _pending_row(id=7)
     monkeypatch.setattr(storage_mod.pending_alarm_import_store, "get_by_id", lambda import_id: row)
-    monkeypatch.setattr(storage_mod.pending_alarm_import_store, "review", lambda *a, **kw: {"id": 7, "status": "approved"})
+    monkeypatch.setattr(storage_mod.pending_alarm_import_store, "claim", lambda *a, **kw: {"id": 7, "status": "approved"})
     monkeypatch.setattr(storage_mod.alarms_store, "upsert_one", lambda item, department, on_conflict: {**item})
 
     audit_calls = []
@@ -189,6 +189,91 @@ def test_review_missing_row_returns_404(client, monkeypatch):
     r = client.put("/api/admin/pending-alarm-imports/999", json={"action": "accept"})
 
     assert r.status_code == 404
+
+
+def test_accept_calls_claim_before_upsert_not_review(client, monkeypatch):
+    """accept 分支必須呼叫 claim()（CAS 搶佔）而不是 review()——
+    CLAUDE.md「狀態轉換鐵則」：狀態轉換要在寫入 alarms 之前完成，
+    review() 是舊的、最後才更新狀態的寫法，這支端點從一開始就不該用它。"""
+    import storage as storage_mod
+
+    row = _pending_row(id=12)
+    monkeypatch.setattr(storage_mod.pending_alarm_import_store, "get_by_id", lambda import_id: row)
+
+    claim_calls = []
+    monkeypatch.setattr(
+        storage_mod.pending_alarm_import_store, "claim",
+        lambda row_id, **kw: claim_calls.append((row_id, kw)) or {"id": row_id, "status": "approved"},
+    )
+    review_calls = []
+    monkeypatch.setattr(
+        storage_mod.pending_alarm_import_store, "review",
+        lambda *a, **kw: review_calls.append(1),
+    )
+    monkeypatch.setattr(storage_mod.alarms_store, "upsert_one", lambda item, department, on_conflict: {**item})
+
+    r = client.put("/api/admin/pending-alarm-imports/12", json={"action": "accept"})
+
+    assert r.status_code == 200
+    assert len(claim_calls) == 1
+    row_id, kw = claim_calls[0]
+    assert row_id == 12
+    assert kw["from_status"] == "pending"
+    assert kw["to_status"] == "approved"
+    assert review_calls == []  # accept 分支完全不該碰 review()
+
+
+def test_accept_returns_409_when_claim_fails(client, monkeypatch):
+    """claim() 回 None 代表這筆已被別人搶先審核過（CAS 條件不符），
+    要直接 409、完全不呼叫 upsert_one()——不能繼續往下寫 alarms。"""
+    import storage as storage_mod
+
+    row = _pending_row(id=13)
+    monkeypatch.setattr(storage_mod.pending_alarm_import_store, "get_by_id", lambda import_id: row)
+    monkeypatch.setattr(storage_mod.pending_alarm_import_store, "claim", lambda *a, **kw: None)
+    upsert_calls = []
+    monkeypatch.setattr(
+        storage_mod.alarms_store, "upsert_one",
+        lambda *a, **kw: upsert_calls.append(1),
+    )
+
+    r = client.put("/api/admin/pending-alarm-imports/13", json={"action": "accept"})
+
+    assert r.status_code == 409
+    assert upsert_calls == []
+
+
+def test_accept_releases_claim_when_upsert_fails(client, monkeypatch):
+    """claim 成功後若 upsert_one() 拋錯（例如網路中斷），必須呼叫
+    release() 把狀態退回 pending，不能留下「已標記 approved 但 alarms
+    沒真的新增」的孤兒記錄（CLAUDE.md「狀態轉換鐵則」的 release 步驟）。
+    這裡驗證的是端點層有沒有接住例外並呼叫 release，不驗證 release()
+    本身對真實 Supabase 是否生效（PendingAlarmImportStore 只服務
+    Supabase，pytest 環境測不到那個層級）。"""
+    import storage as storage_mod
+
+    row = _pending_row(id=14)
+    monkeypatch.setattr(storage_mod.pending_alarm_import_store, "get_by_id", lambda import_id: row)
+    monkeypatch.setattr(storage_mod.pending_alarm_import_store, "claim", lambda *a, **kw: {"id": 14, "status": "approved"})
+    release_calls = []
+    monkeypatch.setattr(
+        storage_mod.pending_alarm_import_store, "release",
+        lambda row_id, **kw: release_calls.append(row_id),
+    )
+
+    def _boom(*a, **kw):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(storage_mod.alarms_store, "upsert_one", _boom)
+
+    # TESTING=True 讓 Flask 把例外原樣往外拋（不吞成 500 回應），這裡要
+    # 驗證的是 release() 真的被呼叫到，例外本身有沒有被轉成 500 不是
+    # 這個測試的重點。
+    import pytest
+    with pytest.raises(RuntimeError, match="network down"):
+        client.put("/api/admin/pending-alarm-imports/14", json={"action": "accept"})
+
+    assert release_calls == [14]
 
 
 def test_review_invalid_action_returns_400(client, monkeypatch):

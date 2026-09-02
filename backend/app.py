@@ -1449,14 +1449,29 @@ def create_app() -> Flask:
         # local_updated_by 的原則）。
         reviewer = f"{row['department']}/{role}"
         note = (body.get("review_note") or "").strip() or None
-        if action == "accept":
-            patch = {"local_solution": row["suggestion"], "local_updated_by": reviewer,
-                     "local_updated_at": datetime.now(timezone.utc).isoformat()}
-            if row.get("reason"):
-                patch["local_reason"] = row["reason"]
-            # variant 走 alarm_suggestions 本身的欄位（DDL 006 已加），
-            # 這條路徑停用中但要維持技術正確，見 create_suggestion 的說明。
-            suggestion_variant = normalize_variant(row.get("variant") or "")
+        if action == "reject":
+            updated = alarm_suggestion_store.review(suggestion_id, "rejected", reviewer, note)
+            return jsonify(updated)
+        # accept：CAS 搶佔要放在寫入 alarms 之前，不是之後（CLAUDE.md
+        # 「狀態轉換鐵則」）——先前的順序是「檢查一次 status → 寫 alarms
+        # → 最後才更新 alarm_suggestions 狀態」，兩個請求幾乎同時進來時
+        # 都會通過最前面的檢查、都會真的寫入 alarms，最後的狀態更新只是
+        # 防狀態欄位互相覆蓋，防不住 patch_one() 被執行兩次（外部審查
+        # 2026-09-02 抓到）。claim() 是 CAS：PATCH 帶 status=eq.pending
+        # 條件，只有仍是 pending 時才會真的搶到，回傳 None 代表已被別人
+        # 審核過，直接 409。
+        claimed = alarm_suggestion_store.claim(
+            suggestion_id, from_status="pending", to_status="accepted", actor=reviewer, review_note=note)
+        if claimed is None:
+            abort(409, "這筆建議已經審核過了")
+        patch = {"local_solution": row["suggestion"], "local_updated_by": reviewer,
+                 "local_updated_at": datetime.now(timezone.utc).isoformat()}
+        if row.get("reason"):
+            patch["local_reason"] = row["reason"]
+        # variant 走 alarm_suggestions 本身的欄位（DDL 006 已加），
+        # 這條路徑停用中但要維持技術正確，見 create_suggestion 的說明。
+        suggestion_variant = normalize_variant(row.get("variant") or "")
+        try:
             old = alarms_store.load(department=row["department"])
             old_row = next((a for a in old if a["code"] == row["code"]
                             and a.get("device_model") == row["device_model"]
@@ -1470,11 +1485,14 @@ def create_app() -> Flask:
                 # 有 on delete cascade，理論上這筆建議會跟著消失，走不到這裡；
                 # 但 patch_one() 打空不報錯，保守起見仍要擋，不留靜默寫入 None
                 abort(404, "找不到此建議對應的警報，可能已被刪除")
-            audit_logger.log("local_update", department=row["department"], new_data=new_row, old_data=old_row)
-            updated = alarm_suggestion_store.review(suggestion_id, "accepted", reviewer, note)
-        else:
-            updated = alarm_suggestion_store.review(suggestion_id, "rejected", reviewer, note)
-        return jsonify(updated)
+        except Exception:
+            # claim 已成功但實際動作失敗——必須 release，否則留下「已標記
+            # accepted 但 alarms 沒真的更新」的孤兒狀態（CLAUDE.md「狀態
+            # 轉換鐵則」，不能只做 claim 不做 release）。
+            alarm_suggestion_store.release(suggestion_id)
+            raise
+        audit_logger.log("local_update", department=row["department"], new_data=new_row, old_data=old_row)
+        return jsonify(claimed)
 
     # ── 異常匯入資料待審核（PendingAlarmImportStore，見 migration
     #    010_add_pending_alarm_imports.sql）─────────────────────────────
@@ -1514,43 +1532,57 @@ def create_app() -> Flask:
         # 模式下審核時兩者可能不同。
         reviewer = f"{row['department']}/{role}"
         note = (body.get("review_note") or "").strip() or None
-        if action == "accept":
-            # 明確逐一列出四欄主鍵，不用 row.get("variant") 這種可能漏帶
-            # 導致 None 的寫法——upsert_one() 不像 get_one()/patch_one()/
-            # delete_one() 有 _require_full_pk_match() 這層結構性保護，
-            # variant 若真的傳 None 會被 PostgREST 當成 NULL 寫入，撞上
-            # migration 006 記載過的「複合主鍵含 NULL 是已知的坑」，這裡
-            # 一律用 row.get("variant") or "" 確保 variant 至少是空字串，
-            # 不會是 None（跟 migration 010 的 not null default '' 一致）。
-            #
-            # department/device_model/code 用 row[...] 索引而不是同樣的
-            # .get() fallback：這三欄在 migration 010 是 not null（沒有
-            # default），get_by_id() 的 select=* 查詢回傳的 row 理論上
-            # 一定會有這三個 key 且有值。variant 不一樣，多了 fallback
-            # 是因為 default '' 是 DB 層的保護——如果 Python 這裡拿到的
-            # row.get("variant") 因為某種原因是 None（例如未來若有人改動
-            # 中間的轉換邏輯），DB 的 default 不會補救，因為我們是在
-            # 「寫入前」處理這個值，不是讓 DB 自己補。這是刻意的不對稱
-            # 處理，不是漏了三欄沒對稱防護（QA 2026-09-02 提問確認）。
-            department = row["department"]
-            device_model = row["device_model"]
-            code = row["code"]
-            variant = row.get("variant") or ""
-            new_alarm = {
-                "department": department, "device_model": device_model,
-                "code": code, "variant": variant, "description": row["description"],
-            }
-            for optional_field in ("severity", "cause", "solution", "keywords", "sol_steps"):
-                if row.get(optional_field) is not None:
-                    new_alarm[optional_field] = row[optional_field]
+        if action == "reject":
+            updated = pending_alarm_import_store.review(import_id, "rejected", reviewer, note)
+            return jsonify(updated)
+        # accept：CAS 搶佔在寫入 alarms 之前執行，不是之後（CLAUDE.md
+        # 「狀態轉換鐵則」）——這支端點還沒上線，直接照對的順序寫，不用
+        # 先寫錯再改。claim() 帶 status=eq.pending 條件，回傳 None 代表
+        # 已被別人審核過，直接 409。
+        claimed = pending_alarm_import_store.claim(
+            import_id, from_status="pending", to_status="approved", actor=reviewer, review_note=note)
+        if claimed is None:
+            abort(409, "這筆待審資料已經審核過了")
+        # 明確逐一列出四欄主鍵，不用 row.get("variant") 這種可能漏帶
+        # 導致 None 的寫法——upsert_one() 不像 get_one()/patch_one()/
+        # delete_one() 有 _require_full_pk_match() 這層結構性保護，
+        # variant 若真的傳 None 會被 PostgREST 當成 NULL 寫入，撞上
+        # migration 006 記載過的「複合主鍵含 NULL 是已知的坑」，這裡
+        # 一律用 row.get("variant") or "" 確保 variant 至少是空字串，
+        # 不會是 None（跟 migration 010 的 not null default '' 一致）。
+        #
+        # department/device_model/code 用 row[...] 索引而不是同樣的
+        # .get() fallback：這三欄在 migration 010 是 not null（沒有
+        # default），get_by_id() 的 select=* 查詢回傳的 row 理論上
+        # 一定會有這三個 key 且有值。variant 不一樣，多了 fallback
+        # 是因為 default '' 是 DB 層的保護——如果 Python 這裡拿到的
+        # row.get("variant") 因為某種原因是 None（例如未來若有人改動
+        # 中間的轉換邏輯），DB 的 default 不會補救，因為我們是在
+        # 「寫入前」處理這個值，不是讓 DB 自己補。這是刻意的不對稱
+        # 處理，不是漏了三欄沒對稱防護（QA 2026-09-02 提問確認）。
+        department = row["department"]
+        device_model = row["device_model"]
+        code = row["code"]
+        variant = row.get("variant") or ""
+        new_alarm = {
+            "department": department, "device_model": device_model,
+            "code": code, "variant": variant, "description": row["description"],
+        }
+        for optional_field in ("severity", "cause", "solution", "keywords", "sol_steps"):
+            if row.get(optional_field) is not None:
+                new_alarm[optional_field] = row[optional_field]
+        try:
             new_row = alarms_store.upsert_one(
                 new_alarm, department=department,
                 on_conflict="department,device_model,code,variant")
-            audit_logger.log("CREATE", department=department, new_data=new_row)
-            updated = pending_alarm_import_store.review(import_id, "approved", reviewer, note)
-        else:
-            updated = pending_alarm_import_store.review(import_id, "rejected", reviewer, note)
-        return jsonify(updated)
+        except Exception:
+            # claim 已成功但實際寫入失敗——必須 release，否則留下「已標記
+            # approved 但 alarms 沒真的新增」的孤兒狀態（CLAUDE.md「狀態
+            # 轉換鐵則」，不能只做 claim 不做 release）。
+            pending_alarm_import_store.release(import_id)
+            raise
+        audit_logger.log("CREATE", department=department, new_data=new_row)
+        return jsonify(claimed)
 
     @app.post("/api/feedback")
     @login_required

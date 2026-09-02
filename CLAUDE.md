@@ -86,6 +86,29 @@ pytest tests/test_api.py::test_create_alarm -v
 
 已知因為這個模式踩過的真實案例：`ImportSnapshotStore.list_snapshots()` 曾經對「資料表不存在」的 404 靜默回空清單，被誤判成「表存在只是沒資料」；`suggest_semantic_fixes.py` 曾因合併時漏掉 `import re`，`_parse_response()` 對任何輸入都拋 `NameError`，被外層 `except Exception` 吞掉、誤記為批次資料本身有問題。完整判準與更多案例見 `DRAFT_error_handling_policy.md`（尚未定案併入本檔）。
 
+## 狀態轉換鐵則
+
+任何「一筆資料的狀態只能被處理一次」的流程（審核通過/退回、核准/駁回這類 pending→終態的轉換），**狀態的條件式更新（CAS）必須是流程的第一步，不是最後一步**。
+
+錯誤的順序（PostgREST 沒有跨請求交易，這個模式在這裡格外危險）：
+```
+讀取狀態確認是 pending（僅檢查一次，之後沒有再次確認）
+  → 執行實際動作（寫入 alarms 等正式表）
+  → 最後才更新狀態
+```
+這個順序的漏洞：兩個請求幾乎同時進來，都會通過最前面那次讀取檢查（讀到的都還是舊狀態），都會執行到「實際動作」那一步——最後才做的狀態更新頂多能防住「狀態欄位本身被錯誤覆蓋」，防不住「實際動作被執行兩次」。已知真實案例：`review_suggestion()`（app.py:1426 起）跟原始設計的 `review_pending_alarm_import()` 都是這個順序，外部審查抓到（2026-09-02）。
+
+正確的順序：
+```
+CAS 更新狀態（PATCH 帶 status=eq.<原狀態> 條件，僅當狀態仍是預期值才成功）
+  → 失敗（PostgREST 回空陣列）代表已被別人搶走，直接 abort(409)，不執行任何後續動作
+  → 成功才執行實際動作
+  → 實際動作若失敗（網路中斷等），要把狀態改回原狀態（release），不能留下「已標記完成但實際動作沒發生」的孤兒狀態
+```
+**這個 release 步驟不是可省的細節**——把 CAS 提到最前面本身會製造一個新的失敗模式（狀態已轉換但後續動作失敗），比原本的競態更容易發生，不能只做搶佔（claim）不做釋放（release）。
+
+架構上：這個模式（claim + 對應的 release）要抽成共用方法讓多個 store 共用，不要在每個需要狀態轉換的 store 各自複製一份順序邏輯——跟本檔其他「把靠人記得換成做不到」的原則一致，讓錯的寫法比對的寫法麻煩，比事後補測試更可靠。
+
 ## 測試的能力邊界
 
 pytest 環境用的是 `JsonStore`（單租戶本機檔案），測不到：跨部門過濾、session 三態檢查、登入節流、PostgREST 分頁/upsert 語意。這些只能用 `sentinel_pack/verify_isolation.sh` 對真實 Supabase 驗證。任何 pytest 測試如果宣稱驗證了這類機制，那個宣稱本身就是假的——`tests/test_no_fake_isolation_claims.py` 會擋住這類測試名稱/docstring 再次出現。「程式碼裡有這段防護邏輯」跟「這段邏輯經黑箱測試證實真的擋得住」是兩個不同等級的結論，報告/commit message 裡不要混用。
