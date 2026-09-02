@@ -715,6 +715,91 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
           </section>
         </div>
 
+        <!-- ══ 異常匯入資料待審核 ══
+             批次匯入或AI拍照辨識時被標記格式異常/信心度過低的資料，
+             先進這份待審清單，人工核准後才寫入alarms正式表（見
+             migration 010_add_pending_alarm_imports.sql）。跟alarms
+             正式表不同，這裡不用department路徑段限定單一部門——後端
+             list_pending_alarm_imports()走scope_department()，超管
+             跨部門檢視時可以看到所有部門的待審資料，不像semantic-
+             review那樣限定要先選定部門（那份清單本身是全庫共用不分
+             部門的性質，這份待審資料則是逐筆綁定特定department，跨
+             部門檢視合理有意義），所以navItems沒有加hideOnAll。 -->
+        <div v-if="page === 'pending-imports'" style="display:flex; flex-direction:column; gap:18px">
+          <div style="background:color-mix(in srgb, #9a7c1a 10%, transparent); border:1px solid color-mix(in srgb, #9a7c1a 30%, transparent); border-radius:8px; padding:12px 16px; font-size:13px; line-height:1.6">
+            這份清單是批次匯入或AI拍照辨識時被標記異常、需要人工判斷的資料。「原始輸入」欄位是轉換前的原始快照——
+            最終值看起來合法不代表轉換過程沒問題（例如Excel儲存格被存成數字格式導致前導零被吃掉），核准前務必核對原始輸入。
+            <strong style="color:#a23b3b">若 variant 欄位為空，核准後會直接覆蓋掉該部門/機種/代碼下 variant 也剛好是空字串的既有資料</strong>，不會另外跳出衝突提示。
+          </div>
+          <section>
+            <div style="display:flex; justify-content:space-between; align-items:baseline; gap:12px; flex-wrap:wrap; margin-bottom:10px">
+              <div style="display:flex; gap:16px; font-size:13px; color:color-mix(in srgb, var(--color-text) 65%, transparent)">
+                <span>共 {{ pendingImports.items.length }} 筆</span>
+                <span>待處理 {{ pendingImportsCounts.pending }}</span>
+                <span style="color:#2e7d32">已核准 {{ pendingImportsCounts.approved }}</span>
+                <span>已退回 {{ pendingImportsCounts.rejected }}</span>
+              </div>
+              <select class="input" style="width:140px" v-model="pendingImportsFilter.status">
+                <option value="pending">待處理</option>
+                <option value="approved">已核准</option>
+                <option value="rejected">已退回</option>
+                <option value="">全部</option>
+              </select>
+            </div>
+
+            <p v-if="pendingImports.loading" style="font-size:13px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">載入中…</p>
+            <p v-if="pendingImports.error" style="color:#a23b3b; font-size:13px">{{ pendingImports.error }}</p>
+            <p v-if="!pendingImports.loading && !pendingImports.items.length" style="font-size:13px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">
+              目前沒有待審核的異常匯入資料。
+            </p>
+
+            <div style="display:flex; flex-direction:column; gap:10px">
+              <div v-for="row in filteredPendingImports" :key="row.id" class="blueprint"
+                   style="border:1px solid var(--color-divider); padding:14px 16px; display:flex; flex-direction:column; gap:8px">
+                <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+                <div style="display:flex; justify-content:space-between; align-items:baseline; gap:12px; flex-wrap:wrap">
+                  <div style="font-family:var(--font-mono, monospace); font-size:12px; color:color-mix(in srgb, var(--color-text) 65%, transparent)">
+                    <span style="color:var(--color-accent); font-weight:700">{{ row.device_model }}</span> {{ row.code }}
+                    <span v-if="row.variant" style="color:color-mix(in srgb, var(--color-text) 45%, transparent)">/ {{ row.variant }}</span>
+                    <span v-else style="color:#a23b3b">/（variant 為空，見上方覆蓋風險提示）</span>
+                    <span style="color:color-mix(in srgb, var(--color-text) 45%, transparent)">· {{ deptName(row.department) }}</span>
+                  </div>
+                  <div style="display:flex; gap:8px; align-items:center">
+                    <span style="font-family:var(--font-mono, monospace); font-size:10px; letter-spacing:0.04em; text-transform:uppercase; padding:2px 8px; border-radius:999px; background:color-mix(in srgb, var(--color-text) 8%, transparent); color:color-mix(in srgb, var(--color-text) 55%, transparent)">
+                      {{ row.source === 'ai_recognition' ? 'AI 辨識' : '批次匯入' }}
+                    </span>
+                    <span v-if="row.confidence != null" style="font-family:var(--font-mono, monospace); font-size:10px; padding:2px 8px; border-radius:999px"
+                          :style="row.confidence < 50 ? 'background:#fbe9e3; color:#b3401f' : 'background:#f8f0da; color:#9a7c1a'">
+                      信心度 {{ row.confidence }}%
+                    </span>
+                    <span style="font-size:11px; padding:2px 8px; border-radius:999px"
+                          :style="{pending:'background:color-mix(in srgb, var(--color-text) 8%, transparent); color:color-mix(in srgb, var(--color-text) 55%, transparent)',
+                                    approved:'background:#e3f3e5; color:#2e7d32', rejected:'background:color-mix(in srgb, var(--color-text) 8%, transparent); color:color-mix(in srgb, var(--color-text) 45%, transparent)'}[row.status]">
+                      {{ {pending:'待處理', approved:'已核准', rejected:'已退回'}[row.status] }}
+                    </span>
+                  </div>
+                </div>
+
+                <div style="font-size:13px; color:color-mix(in srgb, var(--color-text) 65%, transparent)">{{ row.flagged_reason }}</div>
+                <div v-if="row.raw_source_text" style="font-size:13px; font-family:var(--font-mono, monospace)">
+                  <span style="color:color-mix(in srgb, var(--color-text) 45%, transparent); font-size:11px; margin-right:6px; font-family:inherit">原始輸入</span>{{ row.raw_source_text }}
+                </div>
+                <div style="font-size:13px; font-family:var(--font-mono, monospace)">
+                  <span style="color:color-mix(in srgb, var(--color-text) 45%, transparent); font-size:11px; margin-right:6px; font-family:inherit">待寫入內容</span>{{ row.description }}
+                </div>
+
+                <div v-if="row.status === 'pending'" style="display:flex; gap:8px; justify-content:flex-end; padding-top:6px; border-top:1px solid color-mix(in srgb, var(--color-text) 10%, transparent)">
+                  <button class="btn btn-secondary" style="font-size:12px" @click="rejectPendingImport(row)" :disabled="row.busy">退回</button>
+                  <button class="btn btn-primary" style="font-size:12px" @click="approvePendingImport(row)" :disabled="row.busy">
+                    {{ row.busy ? '處理中…' : '核准並寫入' }}
+                  </button>
+                </div>
+                <p v-if="row.rowError" style="color:#a23b3b; font-size:12px; margin:0">{{ row.rowError }}</p>
+              </div>
+            </div>
+          </section>
+        </div>
+
         <!-- ══ 機種管理 ══ -->
         <div v-if="page === 'models'">
           <section class="card blueprint" style="padding:16px; gap:12px">
@@ -1283,6 +1368,7 @@ createApp({
         { key: 'scans', label: '掃描紀錄管理', code: 'S' },
         { key: 'alarms', label: '警報管理', code: 'A' },
         { key: 'semantic-review', label: 'AI 語意審核', code: 'R', hideOnAll: true },
+        { key: 'pending-imports', label: '匯入待審核', code: 'P' },
         { key: 'models', label: '機種管理', code: 'M' },
         { key: 'depts', label: '部門管理', code: 'X', superOnly: true },
       ],
@@ -1291,6 +1377,7 @@ createApp({
         scans: ['紀錄', '掃描紀錄管理'],
         alarms: ['主檔', '警報管理'],
         'semantic-review': ['AI 輔助', '全庫語意品質審核'],
+        'pending-imports': ['審核', '異常匯入資料待審核'],
         models: ['主檔', '機種管理'],
         depts: ['系統', '部門管理'],
       },
@@ -1338,6 +1425,8 @@ createApp({
       vendorImport: null,
       semanticReview: { items: [], loading: false, error: '', loaded: false },
       semanticReviewFilter: { status: 'pending', model: '' },
+      pendingImports: { items: [], loading: false, error: '', loaded: false },
+      pendingImportsFilter: { status: 'pending' },
       deviceDraft: null, deviceError: '',
       toast: '',
       loadError: '',
@@ -1377,6 +1466,18 @@ createApp({
         if (f.model && i.device_model !== f.model) return false;
         return true;
       });
+    },
+    pendingImportsCounts() {
+      const items = this.pendingImports.items;
+      return {
+        pending: items.filter(i => i.status === 'pending').length,
+        approved: items.filter(i => i.status === 'approved').length,
+        rejected: items.filter(i => i.status === 'rejected').length,
+      };
+    },
+    filteredPendingImports() {
+      const f = this.pendingImportsFilter;
+      return this.pendingImports.items.filter(i => !f.status || i.status === f.status);
     },
     isSuper() { return !!this.whoami.superadmin; },
     isAll() { return this.isSuper && this.viewDept === '__all__'; },
@@ -1527,6 +1628,14 @@ createApp({
     page(next) {
       if (next === 'semantic-review' && !this.semanticReview.loaded) {
         this.loadSemanticReview();
+      }
+      if (next === 'pending-imports') {
+        // 不用 loaded flag 卡住只載入一次——跟 semantic-review（全庫
+        // 共用清單，跟部門無關）不同，這份清單逐筆綁定 department，
+        // 超管切換檢視部門後內容應該要變，每次切進這個分頁都重新載入
+        // 比較符合實際情況，不需要額外一個 viewDept watcher 來處理
+        // 「已經在這頁時換部門」這種更少見的情境。
+        this.loadPendingImports();
       }
     },
   },
@@ -2041,6 +2150,63 @@ createApp({
           { action: 'reject' });
         if (r.status === 403) { location.href = '/admin/login'; return; }
         if (!r.ok) { row.rowError = (await r.json().catch(() => ({}))).error || '略過失敗'; return; }
+        const updated = await r.json();
+        Object.assign(row, updated);
+      } catch (err) {
+        row.rowError = '網路錯誤，請稍後再試';
+      } finally {
+        row.busy = false;
+      }
+    },
+
+    // ── 異常匯入資料待審核（見 migration 010_add_pending_alarm_
+    // imports.sql）：跟 semantic-review 不同，這裡的 API 不帶
+    // department 路徑段（GET/PUT /api/admin/pending-alarm-imports），
+    // 後端走 scope_department() 自動判斷範圍，不用像 writeDept() 那樣
+    // 明確指定單一部門——超管跨部門檢視時可以看到所有部門的待審資料。
+    // 用資料庫自增 id（row.id）定位單筆，不是像 semantic-review 那樣
+    // 用陣列 index（那份清單本身是陣列型態的 JSON/JsonStore 資料，這
+    // 份清單走真正的 DB 表，有自己的主鍵）。
+    async loadPendingImports() {
+      this.pendingImports.loading = true; this.pendingImports.error = '';
+      try {
+        const r = await AlarmApi.get('/api/admin/pending-alarm-imports');
+        if (r.status === 403) { location.href = '/admin/login'; return; }
+        if (!r.ok) { this.pendingImports.error = (await r.json().catch(() => ({}))).error || '載入失敗'; return; }
+        const rows = await r.json();
+        this.pendingImports.items = rows.map(row => ({ ...row, busy: false, rowError: '' }));
+        this.pendingImports.loaded = true;
+      } catch (err) {
+        this.pendingImports.error = '網路錯誤，請稍後再試';
+      } finally {
+        this.pendingImports.loading = false;
+      }
+    },
+    async approvePendingImport(row) {
+      row.busy = true; row.rowError = '';
+      try {
+        const r = await AlarmApi.put(
+          `/api/admin/pending-alarm-imports/${row.id}`,
+          { action: 'accept' });
+        if (r.status === 403) { location.href = '/admin/login'; return; }
+        if (!r.ok) { row.rowError = (await r.json().catch(() => ({}))).error || '核准失敗'; return; }
+        const updated = await r.json();
+        Object.assign(row, updated);
+        this.showToast(`${row.device_model} ${row.code} 已核准並寫入`);
+      } catch (err) {
+        row.rowError = '網路錯誤，請稍後再試';
+      } finally {
+        row.busy = false;
+      }
+    },
+    async rejectPendingImport(row) {
+      row.busy = true; row.rowError = '';
+      try {
+        const r = await AlarmApi.put(
+          `/api/admin/pending-alarm-imports/${row.id}`,
+          { action: 'reject' });
+        if (r.status === 403) { location.href = '/admin/login'; return; }
+        if (!r.ok) { row.rowError = (await r.json().catch(() => ({}))).error || '退回失敗'; return; }
         const updated = await r.json();
         Object.assign(row, updated);
       } catch (err) {

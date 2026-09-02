@@ -1522,6 +1522,16 @@ def create_app() -> Flask:
             # migration 006 記載過的「複合主鍵含 NULL 是已知的坑」，這裡
             # 一律用 row.get("variant") or "" 確保 variant 至少是空字串，
             # 不會是 None（跟 migration 010 的 not null default '' 一致）。
+            #
+            # department/device_model/code 用 row[...] 索引而不是同樣的
+            # .get() fallback：這三欄在 migration 010 是 not null（沒有
+            # default），get_by_id() 的 select=* 查詢回傳的 row 理論上
+            # 一定會有這三個 key 且有值。variant 不一樣，多了 fallback
+            # 是因為 default '' 是 DB 層的保護——如果 Python 這裡拿到的
+            # row.get("variant") 因為某種原因是 None（例如未來若有人改動
+            # 中間的轉換邏輯），DB 的 default 不會補救，因為我們是在
+            # 「寫入前」處理這個值，不是讓 DB 自己補。這是刻意的不對稱
+            # 處理，不是漏了三欄沒對稱防護（QA 2026-09-02 提問確認）。
             department = row["department"]
             device_model = row["device_model"]
             code = row["code"]
