@@ -1450,8 +1450,15 @@ def create_app() -> Flask:
         reviewer = f"{row['department']}/{role}"
         note = (body.get("review_note") or "").strip() or None
         if action == "reject":
-            updated = alarm_suggestion_store.review(suggestion_id, "rejected", reviewer, note)
-            return jsonify(updated)
+            # reject 也走 claim()（同 accept 的 CAS 保護），對稱一致——
+            # 不留「accept 受保護、reject 沒受保護」的落差。不需要
+            # release：reject 的 claim 成功那一刻就是終態，沒有像 accept
+            # 那樣後續還要寫 alarms、寫入可能失敗的中間風險。
+            claimed = alarm_suggestion_store.claim(
+                suggestion_id, from_status="pending", to_status="rejected", actor=reviewer, review_note=note)
+            if claimed is None:
+                abort(409, "這筆建議已經審核過了")
+            return jsonify(claimed)
         # accept：CAS 搶佔要放在寫入 alarms 之前，不是之後（CLAUDE.md
         # 「狀態轉換鐵則」）——先前的順序是「檢查一次 status → 寫 alarms
         # → 最後才更新 alarm_suggestions 狀態」，兩個請求幾乎同時進來時
@@ -1533,8 +1540,15 @@ def create_app() -> Flask:
         reviewer = f"{row['department']}/{role}"
         note = (body.get("review_note") or "").strip() or None
         if action == "reject":
-            updated = pending_alarm_import_store.review(import_id, "rejected", reviewer, note)
-            return jsonify(updated)
+            # reject 也走 claim()（同 accept 的 CAS 保護），對稱一致——
+            # 不留「accept 受保護、reject 沒受保護」的落差。不需要
+            # release：reject 的 claim 成功那一刻就是終態，沒有像 accept
+            # 那樣後續還要寫 alarms、寫入可能失敗的中間風險。
+            claimed = pending_alarm_import_store.claim(
+                import_id, from_status="pending", to_status="rejected", actor=reviewer, review_note=note)
+            if claimed is None:
+                abort(409, "這筆待審資料已經審核過了")
+            return jsonify(claimed)
         # accept：CAS 搶佔在寫入 alarms 之前執行，不是之後（CLAUDE.md
         # 「狀態轉換鐵則」）——這支端點還沒上線，直接照對的順序寫，不用
         # 先寫錯再改。claim() 帶 status=eq.pending 條件，回傳 None 代表

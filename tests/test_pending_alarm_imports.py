@@ -127,16 +127,17 @@ def test_accept_logs_audit_as_create_with_no_old_data(client, monkeypatch):
 
 
 def test_reject_does_not_touch_alarms_store(client, monkeypatch):
-    """reject 只更新 pending_alarm_imports 本身狀態，完全不呼叫
-    upsert_one()——退回不該對 alarms 表有任何寫入動作。"""
+    """reject 只更新 pending_alarm_imports 本身狀態（透過 claim()，同
+    accept 的 CAS 保護），完全不呼叫 upsert_one()——退回不該對 alarms
+    表有任何寫入動作。"""
     import storage as storage_mod
 
     row = _pending_row(id=8)
     monkeypatch.setattr(storage_mod.pending_alarm_import_store, "get_by_id", lambda import_id: row)
-    review_calls = []
+    claim_calls = []
     monkeypatch.setattr(
-        storage_mod.pending_alarm_import_store, "review",
-        lambda import_id, status, reviewed_by, review_note: review_calls.append(status) or {"id": import_id, "status": status},
+        storage_mod.pending_alarm_import_store, "claim",
+        lambda row_id, **kw: claim_calls.append(kw["to_status"]) or {"id": row_id, "status": kw["to_status"]},
     )
     upsert_calls = []
     monkeypatch.setattr(
@@ -147,8 +148,23 @@ def test_reject_does_not_touch_alarms_store(client, monkeypatch):
     r = client.put("/api/admin/pending-alarm-imports/8", json={"action": "reject"})
 
     assert r.status_code == 200
-    assert review_calls == ["rejected"]
+    assert claim_calls == ["rejected"]
     assert upsert_calls == []
+
+
+def test_reject_returns_409_when_claim_fails(client, monkeypatch):
+    """reject 分支也要有 CAS 保護——claim() 回 None 代表這筆已經被
+    別人審核過，要 409，不能讓 reject 落成「accept 受保護、reject
+    沒受保護」的不對稱。"""
+    import storage as storage_mod
+
+    row = _pending_row(id=15)
+    monkeypatch.setattr(storage_mod.pending_alarm_import_store, "get_by_id", lambda import_id: row)
+    monkeypatch.setattr(storage_mod.pending_alarm_import_store, "claim", lambda *a, **kw: None)
+
+    r = client.put("/api/admin/pending-alarm-imports/15", json={"action": "reject"})
+
+    assert r.status_code == 409
 
 
 def test_review_endpoint_returns_uniform_404_when_department_mismatches(client, monkeypatch):

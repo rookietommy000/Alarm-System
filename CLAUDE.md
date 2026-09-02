@@ -96,7 +96,7 @@ pytest tests/test_api.py::test_create_alarm -v
   → 執行實際動作（寫入 alarms 等正式表）
   → 最後才更新狀態
 ```
-這個順序的漏洞：兩個請求幾乎同時進來，都會通過最前面那次讀取檢查（讀到的都還是舊狀態），都會執行到「實際動作」那一步——最後才做的狀態更新頂多能防住「狀態欄位本身被錯誤覆蓋」，防不住「實際動作被執行兩次」。已知真實案例：`review_suggestion()`（app.py:1426 起）跟原始設計的 `review_pending_alarm_import()` 都是這個順序，外部審查抓到（2026-09-02）。
+這個順序的漏洞：兩個請求幾乎同時進來，都會通過最前面那次讀取檢查（讀到的都還是舊狀態），都會執行到「實際動作」那一步——最後才做的狀態更新頂多能防住「狀態欄位本身被錯誤覆蓋」，防不住「實際動作被執行兩次」。已知真實案例：`review_suggestion()`（app.py:1426 起）跟原始設計的 `review_pending_alarm_import()` 都是這個順序，外部審查抓到（2026-09-02），修復見 commit `2237191`（`StatusTransitionMixin.claim()`/`release()`，storage.py:1386 起）。
 
 正確的順序：
 ```
