@@ -615,6 +615,24 @@
     .alarm-card-desc { font-size: 14px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .alarm-card-arrow { color: var(--muted); font-size: 18px; flex-shrink: 0; }
 
+    /* 多 variant 候選選擇卡片（拍照辨識故障修復 Q3）：variant 是完整
+       英文語意描述，不是短編號，允許換行完整顯示，不做省略號截斷。 */
+    .variant-picker-hint { font-size: 13px; color: var(--muted); margin: 4px 0 8px; }
+    .variant-picker-list { display: flex; flex-direction: column; gap: 6px; }
+    .variant-picker-item {
+      display: block; width: 100%; text-align: left;
+      background: var(--surface2, rgba(255,255,255,0.04));
+      border: 1px solid var(--border, rgba(255,255,255,0.1));
+      border-radius: 8px; padding: 10px 12px; cursor: pointer;
+      font: inherit; color: var(--text);
+    }
+    .variant-picker-item:hover { border-color: var(--accent, #4a90d9); }
+    .variant-picker-text { display: block; font-size: 14px; white-space: normal; word-break: break-word; }
+    .variant-picker-zh {
+      display: block; margin-top: 4px; font-size: 13px; color: var(--muted);
+      white-space: normal; word-break: break-word;
+    }
+
     /* 機種選擇 modal */
     .model-picker-backdrop {
       position: fixed; inset: 0;
@@ -899,26 +917,58 @@
         </div>
       </div>
 
-      <!-- 解析結果列表 -->
+      <!-- 解析結果列表（拍照辨識故障修復 Q3：多 variant 用選擇卡片，
+           不靜默攤開幾張幾乎一樣的卡片讓使用者自己猜是哪一個） -->
       <div v-else-if="camState === 'results'" class="confirm-panel">
         <div class="confirm-header">
           <div class="confirm-title">解析結果</div>
           <div class="confirm-sub">{{ selectedCorrectModel }} · 共 {{ camResults.length }} 筆警報</div>
         </div>
         <div style="display:flex;flex-direction:column;gap:8px;flex:1;overflow-y:auto;">
-          <div class="alarm-card" v-for="a in camResults" :key="a.device_model + a.code"
-               :class="sevBorderClass(a.severity)"
-               @click="openDetail(a)">
-            <div class="alarm-card-main">
+          <template v-for="a in camResults" :key="selectedCorrectModel + '|' + a.code + '|' + (a.variant || '')">
+            <!-- 單一命中：直接可點進詳情 -->
+            <div v-if="!a.candidates" class="alarm-card"
+                 :class="sevBorderClass(a.severity)"
+                 @click="openDetail({...a, device_model: selectedCorrectModel})">
+              <div class="alarm-card-main">
+                <div class="alarm-card-top">
+                  <span class="alarm-card-code">{{ a.code }}</span>
+                  <span class="tag" :class="sevClass(a.severity)">{{ a.severity || '—' }}</span>
+                  <span class="alarm-card-device">{{ selectedCorrectModel || '—' }}</span>
+                </div>
+                <div class="alarm-card-desc">{{ a.description }}</div>
+              </div>
+              <span class="alarm-card-arrow">›</span>
+            </div>
+            <!-- 多 variant：先選變體，不靜默攤平。variant 是完整英文
+                 語意描述（非短編號，查證過 mf4c 真實資料後確認），
+                 保守方案直接列出完整句子、按字母排序，不做前綴淡化
+                 這類針對短編號設計的排版——套在完整句子上可讀性只會
+                 更差。中文翻譯是 AI 批次翻譯、尚未人工校對，顧問明確
+                 要求不能讓未校對翻譯看起來像已經確認過的正式文字
+                 （這是安全相關的警報訊息，翻譯錯了會誤導現場判斷）：
+                 英文原文一律置頂、翻譯只作輔助放在下方並標記待校對，
+                 沒有翻譯時只顯示英文，不硬湊。 -->
+            <div v-else class="alarm-card variant-picker">
               <div class="alarm-card-top">
                 <span class="alarm-card-code">{{ a.code }}</span>
-                <span class="tag" :class="sevClass(a.severity)">{{ a.severity || '—' }}</span>
-                <span class="alarm-card-device">{{ a.device_model || '—' }}</span>
+                <span class="tag" style="background:var(--warn-bg,#3a2f1a);color:var(--warn,#e0b04a)">{{ a.candidates.length }} 個版本</span>
               </div>
-              <div class="alarm-card-desc">{{ a.description }}</div>
+              <div class="variant-picker-hint">這個代碼有多個版本，請對照HMI螢幕上顯示的完整英文訊息選擇：</div>
+              <div class="variant-picker-list">
+                <button v-for="c in sortedCandidates(a.candidates)" :key="c.variant"
+                        class="variant-picker-item"
+                        @click="selectVariant(a.code, c.variant)">
+                  <span class="variant-picker-text">{{ c.variant }}</span>
+                  <span v-if="c.variant_zh" class="variant-picker-zh">
+                    {{ c.variant_zh }}
+                    <span v-if="c.translation_status === 'ai_translated_pending_review'"
+                          class="tag" style="background:var(--warn-bg,#3a2f1a);color:var(--warn,#e0b04a)">AI翻譯，待人工校對</span>
+                  </span>
+                </button>
+              </div>
             </div>
-            <span class="alarm-card-arrow">›</span>
-          </div>
+          </template>
         </div>
         <div class="confirm-actions">
           <button class="btn-secondary" style="flex:1" @click="resetCamera">重拍</button>
@@ -1700,33 +1750,52 @@
           }).catch(() => {});
         },
 
-        // 查詢 DB 並在拍照頁顯示結果
+        // 顯示拍照頁結果（拍照辨識故障修復 Q2）：alarms 已經是後端
+        // run_pipeline() 的 _resolve_alarm_codes() 反查 DB 之後的結果，
+        // 每筆帶 db_matched/variant/candidates——不再由前端自己打
+        // `/api/alarms?device=` 重新查一次、也不用自己 normalize 比對。
+        // 前端曾經有一份獨立的 normalize（`c.replace(/\D/g,'').replace
+        // (/^0+/,'')`）比後端更容易碰撞（QATEST01/0001/ZZC001 去前導零
+        // 後全部變成 '1'），這是 QA 黑箱測試發現的碰撞事故的第二個
+        // 根源，直接移除，不留兩份各自維護的正規化邏輯。
         async lookupAndShowAlarms(model, alarms) {
-          const codes = alarms.map(a => a.code.trim()).filter(Boolean);
-          if (!model || codes.length === 0) {
+          if (!model || alarms.length === 0) {
             this.camState = 'no-alarm';
             return;
           }
 
-          let allAlarms = [];
-          try {
-            const res = await AlarmApi.get(`/api/alarms?device=${encodeURIComponent(model)}`);
-            if (res.ok) allAlarms = await res.json();
-          } catch {}
-
-          const normalize = c => c.replace(/\D/g, '').replace(/^0+/, '');
-          const results = allAlarms.filter(a =>
-            codes.some(c => normalize(a.code) === normalize(c))
-          );
-
-          if (results.length === 0) {
+          const matched = alarms.filter(a => a.db_matched);
+          if (matched.length === 0) {
+            const codes = alarms.map(a => a.code).filter(Boolean);
             this.confirmError = `找不到 ${model} 的警報代碼：${codes.join(', ')}`;
             this.camState = 'no-alarm';
-          } else {
-            this.confirmError = '';
-            this.camResults = results;
-            this.camState = 'results';
+            return;
           }
+
+          this.confirmError = '';
+          this.camResults = matched;
+          this.camState = 'results';
+        },
+
+        // 多 variant 候選按字母排序（拍照辨識故障修復 Q3）。真實 variant
+        // 是完整英文語意描述，不是短編號（查證過 mf4c 真實資料），
+        // 保守方案只做字母排序，不做前綴淡化——那類排版是為短編號設計的，
+        // 套在完整句子上可讀性只會更差。
+        sortedCandidates(candidates) {
+          return [...candidates].sort((a, b) => a.variant.localeCompare(b.variant));
+        },
+
+        // 使用者從多 variant 候選中選定一筆，原地把該筆 camResults 項目
+        // 換成單一命中（清掉 candidates、補上選定的 variant），直接開詳情。
+        // 不重新查一次 API——candidates 陣列裡本來就帶了完整資料。
+        selectVariant(code, variant) {
+          const idx = this.camResults.findIndex(a => a.code === code && a.candidates);
+          if (idx === -1) return;
+          const chosen = this.camResults[idx].candidates.find(c => c.variant === variant);
+          if (!chosen) return;
+          const resolved = { ...this.camResults[idx], ...chosen, candidates: undefined };
+          delete resolved.candidates;
+          this.openDetail({ ...resolved, device_model: this.selectedCorrectModel });
         },
       }
     }).directive('click-outside', {

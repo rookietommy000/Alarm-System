@@ -1656,6 +1656,60 @@ class LoginAttemptStore:
             return -1
 
 
+class VariantTranslationStore:
+    """variant 英文原文 -> 中文翻譯查找表（拍照辨識故障修復 Q3 延伸）。
+
+    跟 department 無關：翻譯只跟文字本身有關，不比照 alarms 帶
+    department 欄位。本機/測試模式讀 data/variant_translations.json
+    （JsonStore 慣例，_load_json 找不到檔案時回傳空 dict，fail-open——
+    翻譯只是顯示用的加值資訊，找不到就退回顯示英文原文，不應該讓
+    整個拍照辨識流程掛掉）。
+    """
+
+    def load_all(self) -> dict:
+        """回傳 {original_text: {"zh": ..., "status": ...}}。"""
+        if _use_supabase():
+            return self._load_supabase()
+        return self._load_json()
+
+    def _load_json(self) -> dict:
+        path = _data_dir() / "variant_translations.json"
+        if not path.exists():
+            return {}
+        with path.open("r", encoding="utf-8") as f:
+            raw = json.load(f)
+        return {
+            text: {"zh": entry.get("zh", ""), "status": entry.get("status", "")}
+            for text, entry in raw.items()
+        }
+
+    def _load_supabase(self) -> dict:
+        try:
+            base = os.environ.get("SUPABASE_URL", "").rstrip("/")
+            key = os.environ.get("SUPABASE_KEY", "")
+            qs = "select=original_text,translated_text,review_status&limit=5000"
+            req = urllib.request.Request(
+                f"{base}/rest/v1/variant_translations?{qs}",
+                headers={"apikey": key, "Authorization": f"Bearer {key}"},
+                method="GET",
+            )
+            with urllib.request.urlopen(req) as r:
+                rows = json.loads(r.read().decode())
+            return {
+                row["original_text"]: {"zh": row["translated_text"], "status": row["review_status"]}
+                for row in rows
+            }
+        except Exception as e:
+            # fail-open：翻譯查無資料時前端退回顯示英文原文，不影響
+            # 主流程（拍照辨識/variant 選擇本身跟翻譯是否可用無關），
+            # 但例外發生過這件事本身要留痕（CLAUDE.md 例外處理判準），
+            # 不能完全空白吞掉。
+            import sys as _sys
+            print(f"[VariantTranslationStore] _load_supabase 查詢失敗（退回空dict，"
+                  f"前端顯示英文原文）：{type(e).__name__}: {e}", file=_sys.stderr)
+            return {}
+
+
 _ALARMS_CACHE_TTL_SECONDS = 60  # PLAN 效能優化第 4 項：mf4d 部門 1759 筆分頁查詢實測約 1.6 秒
 
 if _use_supabase():
@@ -1674,3 +1728,4 @@ view_store = ViewStore()
 audit_logger = AuditLogger()
 ai_scan_store = AiScanStore()
 import_snapshot_store = ImportSnapshotStore()
+variant_translation_store = VariantTranslationStore()

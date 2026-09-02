@@ -46,6 +46,82 @@ class TestFilterByConf:
         assert len(passed) == 1
 
 
+class TestNormalizeCode:
+    r"""外部審查修法（QA黑箱測試發現的碰撞事故）：原本 _normalize_code()
+    用 re.sub(r"\D", "", code) 無差別剝除所有非數字字元再補零，
+    QATEST01/0001/ZZC001 這三個完全不相關的代碼會全部碰撞成同一個
+    "0001"。修法：只去掉規則明確設定的 strip_prefix，去除後不是純
+    數字就判 ERR_CODE_FORMAT，不再猜測性地硬轉成純數字——這裡直接
+    復現當初的碰撞案例，確保回歸不會再發生。"""
+
+    def setup_method(self):
+        from backend.ai.ai_rules import _normalize_code
+        self._fn = _normalize_code
+
+    def test_previously_colliding_codes_no_longer_collide(self):
+        """QATEST01/0001/ZZC001 曾經全部正規化成 "0001"（碰撞事故的
+        具體案例）。修法後只有真正的純數字代碼 "0001" 能通過，另外
+        兩個因為不是純數字被判格式錯誤，不會再被誤判成同一筆。"""
+        ok_result, ok_err = self._fn({"code": "0001", "conf": 90}, {})
+        assert ok_err is None
+        assert ok_result["code"] == "0001"
+
+        for colliding_code in ["QATEST01", "ZZC001"]:
+            result, err = self._fn({"code": colliding_code, "conf": 90}, {})
+            assert err == "ERR_CODE_FORMAT", (
+                f"{colliding_code} 不是純數字，應該判格式錯誤，"
+                f"不該被硬轉成跟 0001 相同的正規化值"
+            )
+
+    def test_pad_from_rule_applies_after_prefix_strip(self):
+        """strip_prefix 是唯一允許的「已知格式」轉換，去除前綴後若是
+        純數字才補零；不在規則裡的前綴不會被猜測性剝除。"""
+        result, err = self._fn({"code": "E-514", "conf": 90}, {"strip_prefix": "E-", "pad": 4})
+        assert err is None
+        assert result["code"] == "0514"
+
+    def test_department_rule_pad_five_for_mf4c_format(self):
+        """mf4c 部門的真實格式是 5 位純數字，不是 mf4d 慣用的 4 位——
+        規則要能同時涵蓋兩種固定格式，不能寫死成必須 4 位。"""
+        result, err = self._fn({"code": "31033", "conf": 90}, {"pad": 5})
+        assert err is None
+        assert result["code"] == "31033"
+
+
+class TestGetNormalizeRule:
+    """查找優先權：機種覆寫 > 部門預設 > 全域預設，明確寫成三段式
+    函式，不用 dict.get() 鏈式嘗試藏優先權。"""
+
+    def setup_method(self):
+        from backend.ai import ai_rules
+        self._ai_rules = ai_rules
+        self._original_rules = dict(ai_rules.NORMALIZE_RULES)
+
+    def teardown_method(self):
+        self._ai_rules.NORMALIZE_RULES.clear()
+        self._ai_rules.NORMALIZE_RULES.update(self._original_rules)
+
+    def test_model_override_wins_over_department_default(self):
+        self._ai_rules.NORMALIZE_RULES.clear()
+        self._ai_rules.NORMALIZE_RULES["mf4c"] = {"pad": 5}
+        self._ai_rules.NORMALIZE_RULES[("mf4c", "FILL203")] = {"pad": 3, "strip_prefix": "X-"}
+
+        rule = self._ai_rules._get_normalize_rule("mf4c", "FILL203")
+        assert rule == {"pad": 3, "strip_prefix": "X-"}
+
+    def test_department_default_used_when_no_model_override(self):
+        self._ai_rules.NORMALIZE_RULES.clear()
+        self._ai_rules.NORMALIZE_RULES["mf4c"] = {"pad": 5}
+
+        rule = self._ai_rules._get_normalize_rule("mf4c", "OTHER_MODEL")
+        assert rule == {"pad": 5}
+
+    def test_global_default_when_department_unknown(self):
+        self._ai_rules.NORMALIZE_RULES.clear()
+        rule = self._ai_rules._get_normalize_rule("unknown_dept", "PILM004")
+        assert rule == {}
+
+
 class TestValidateModel:
     def setup_method(self):
         from backend.ai.ai_rules import _validate_model
@@ -675,3 +751,137 @@ class TestRunCorrection:
         )
         corrections = m.load_corrections("PILM004", department="test_dept")
         assert any(r.get("scan_id") == "scan011" for r in corrections)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# _resolve_alarm_codes()：DB 比對層（拍照辨識故障修復 Q2）
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestResolveAlarmCodes:
+    """AI 辨識+正規化後的 code 只是猜測值，這支函式反查 DB 換成實際
+    存在的 code/variant——0/1/多筆命中要各自產生正確的 db_matched/
+    variant/candidates 標記，這是前端刪掉自己 normalize 後唯一的資料
+    來源，錯了會直接影響使用者看到的結果，不能只信 run_pipeline() 既有
+    測試綠燈（那些測試都用 model=None 或跟這支函式無關的失敗情境，
+    完全沒有真正跑到這段邏輯）。"""
+
+    def test_zero_match_keeps_original_code_marks_unmatched(self, monkeypatch):
+        # ai_pipeline.py 內部用 `from storage import alarms_store`（相對
+        # backend/ 目錄的匯入路徑，見 conftest.py 把 backend/ 加進
+        # sys.path）。這裡必須用同一條路徑 import，不能用
+        # `backend.storage`——那是從 repo 根目錄視角的另一條匯入路徑
+        # （test_ai_pipeline.py 自己也把 repo 根目錄加進 sys.path，見
+        # 檔案開頭），Python 會把它們當成兩個不同模組、各自的
+        # alarms_store 是不同物件，patch 錯的那個不會影響
+        # _resolve_alarm_codes() 實際呼叫到的 store（曾經因為 patch
+        # backend.storage 導致 monkeypatch 靜默失效、斷言失敗，才發現
+        # 這個雙重 sys.path 的落差）。
+        import storage as storage_mod
+        from backend.ai.ai_pipeline import _resolve_alarm_codes
+
+        monkeypatch.setattr(storage_mod.alarms_store, "find_by_code", lambda dept, model, code: [])
+        result = _resolve_alarm_codes([{"code": "9999", "conf": 90}], "mf4d", "PILM004")
+
+        assert result == [{"code": "9999", "conf": 90, "db_matched": False, "variant": None, "candidates": None}]
+
+    def test_single_match_replaces_code_and_fills_variant(self, monkeypatch):
+        import storage as storage_mod
+        from backend.ai.ai_pipeline import _resolve_alarm_codes
+
+        monkeypatch.setattr(
+            storage_mod.alarms_store, "find_by_code",
+            lambda dept, model, code: [{"code": "0001", "variant": "V46403", "device_model": model}],
+        )
+        result = _resolve_alarm_codes([{"code": "0001", "conf": 90}], "mf4d", "PILM004")
+
+        assert result == [{
+            "code": "0001", "conf": 90,
+            "db_matched": True, "variant": "V46403", "candidates": None,
+        }]
+
+    def test_multiple_matches_returns_candidates_with_translation_lookup(self, monkeypatch):
+        """同 code 多 variant：不能隨便挑一筆當作正確答案，必須把全部
+        候選列出來交給前端 Q3 的選擇 UI，variant 留 None 明確表示
+        「還沒決定是哪一個」。每筆候選還要帶 variant_zh/translation_status
+        （拍照辨識故障修復 Q3：mf4c 的 variant 是完整英文描述，顧問
+        裁決先用 AI 翻譯一版標記待校對狀態，不能讓沒校對過的翻譯看起來
+        像正式版本）——有翻譯的補上，沒翻譯的兩個欄位都是 None，不
+        拼湊看起來像翻譯但其實沒有的文字。"""
+        import backend.ai.ai_pipeline as pipeline_mod
+        import storage as storage_mod
+        from backend.ai.ai_pipeline import _resolve_alarm_codes
+
+        monkeypatch.setattr(pipeline_mod, "_variant_translations_cache", {
+            "Guard door open CIP/SIP cabinet 1": {
+                "zh": "清洗滅菌系統控制櫃1安全門開啟", "status": "ai_translated_pending_review",
+            },
+        })
+        rows = [
+            {"code": "31033", "variant": "Guard door open CIP/SIP cabinet 1"},
+            {"code": "31033", "variant": "沒有翻譯的英文原句"},
+        ]
+        monkeypatch.setattr(storage_mod.alarms_store, "find_by_code", lambda dept, model, code: rows)
+        result = _resolve_alarm_codes([{"code": "31033", "conf": 88}], "mf4c", "FILL203")
+
+        assert result[0]["db_matched"] is True
+        assert result[0]["variant"] is None
+        assert result[0]["candidates"] == [
+            {
+                "variant": "Guard door open CIP/SIP cabinet 1", "code": "31033",
+                "variant_zh": "清洗滅菌系統控制櫃1安全門開啟",
+                "translation_status": "ai_translated_pending_review",
+            },
+            {
+                "variant": "沒有翻譯的英文原句", "code": "31033",
+                "variant_zh": None, "translation_status": None,
+            },
+        ]
+
+    def test_model_none_skips_lookup_marks_all_unmatched(self):
+        """機種都辨識不出來時，沒有 model 可以查，不該報錯，直接標記
+        全部未命中——這是既有 needs_model_selection 流程要處理的情況，
+        不是這支函式的責任。"""
+        from backend.ai.ai_pipeline import _resolve_alarm_codes
+
+        result = _resolve_alarm_codes([{"code": "0001", "conf": 90}], "mf4d", None)
+        assert result == [{"code": "0001", "conf": 90, "db_matched": False, "variant": None, "candidates": None}]
+
+
+class TestLoadVariantTranslations:
+    """variant 翻譯對照表的 fail-open 行為：讀取失敗（檔案不存在/格式
+    錯誤）要回空字典，不能讓整個拍照辨識流程掛掉——翻譯是錦上添花的
+    輔助資訊，不是安全機制，缺翻譯只影響顯示，不影響核心比對邏輯
+    （這跟 load_valid_models() 的 fail-closed 不同類：那個缺白名單會讓
+    所有辨識結果被誤判，這個缺翻譯只是使用者少看到中文，兩者判準
+    依據不同，見 DRAFT_error_handling_policy.md 的四條判準）。"""
+
+    def setup_method(self):
+        import backend.ai.ai_pipeline as pipeline_mod
+        self._pipeline_mod = pipeline_mod
+        self._original_cache = pipeline_mod._variant_translations_cache
+        pipeline_mod._variant_translations_cache = None
+
+    def teardown_method(self):
+        self._pipeline_mod._variant_translations_cache = self._original_cache
+
+    def test_missing_data_returns_empty_dict_not_raise(self, monkeypatch):
+        import storage as storage_mod
+        monkeypatch.setattr(storage_mod.variant_translation_store, "load_all", lambda: {})
+        result = self._pipeline_mod._load_variant_translations()
+        assert result == {}
+
+    def test_cache_hit_avoids_second_store_call(self, monkeypatch):
+        import storage as storage_mod
+        calls = []
+
+        def fake_load_all():
+            calls.append(1)
+            return {"a": {"zh": "甲", "status": "ai_translated_pending_review"}}
+
+        monkeypatch.setattr(storage_mod.variant_translation_store, "load_all", fake_load_all)
+
+        first = self._pipeline_mod._load_variant_translations()
+        second = self._pipeline_mod._load_variant_translations()
+
+        assert first == second == {"a": {"zh": "甲", "status": "ai_translated_pending_review"}}
+        assert len(calls) == 1  # 快取命中，第二次呼叫不該再打 store

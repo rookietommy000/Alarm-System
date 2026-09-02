@@ -13,7 +13,6 @@ AI 辨識後處理規則集。
 
 import json
 import os
-import re
 import time
 from pathlib import Path
 from typing import Optional
@@ -31,10 +30,19 @@ MODEL_BYPASS_CONF = _POST_CFG["model_bypass_conf"]
 # [POST-001] 代碼補零位數
 CODE_PAD = _POST_CFG["code_pad"]
 
-# [POST-001] 各機種的代碼正規化規則（預設：純數字補零4位）
-# 格式：{ "機種": { "strip_prefix": "E-", "pad": 4 } }
-# 若機種不在此表，套用預設規則
-NORMALIZE_RULES: dict = {}
+# [POST-001] 代碼正規化規則，按部門/機種分層（外部審查修法：mf4d/mf4c
+# 兩個部門的代碼格式不同但各自固定——mf4d 是 4 位補零，mf4c 是 5 位純
+# 數字，用同一組全域規則會讓其中一個部門的合法代碼被誤判成格式錯誤）。
+#
+# 查找優先權（見 _get_normalize_rule()）：機種覆寫 > 部門預設 > 全域預設。
+# key 可以是 "部門" 字串（該部門所有機種的預設規則），也可以是
+# ("部門", "機種") tuple（該部門下特定機種的覆寫規則，例如同部門內
+# 某台機種例外用不同前綴/位數）。找不到規則時退回全域 CODE_PAD。
+#
+# 格式：{ "部門": {"pad": 5}, ("部門", "機種"): {"strip_prefix": "E-", "pad": 4} }
+NORMALIZE_RULES: dict = {
+    "mf4c": {"pad": 5},
+}
 
 
 # ── 錯誤碼 ───────────────────────────────────────────────────────────────────
@@ -66,12 +74,17 @@ def _get_bypass_threshold(analyzer_name: Optional[str]) -> int:
     return profile.get("bypass", MODEL_BYPASS_CONF)
 
 
-def apply_post_rules(raw: dict, valid_models: list) -> dict:
+def apply_post_rules(raw: dict, valid_models: list, department: Optional[str] = None) -> dict:
     """
     對 Gemini 原始輸出套用所有 POST 規則，回傳乾淨結果。
 
     raw 格式（來自 ai_analyzer._parse_response）：
       { model, model_conf, alarms: [{code, conf, note}], raw }
+
+    department: 代碼正規化規則按部門分層（見 NORMALIZE_RULES），None
+    時只套用機種規則跟全域預設，不套用部門規則——呼叫端沒有部門資訊
+    時（例如未來若有非部門情境的呼叫）不強制要求，但目前 run_pipeline()
+    一律會傳。
 
     回傳格式：
       {
@@ -92,7 +105,7 @@ def apply_post_rules(raw: dict, valid_models: list) -> dict:
     analyzer_name = (raw.get("analyzer") or {}).get("name")
 
     # [POST-001] 代碼格式正規化
-    normalized, rejected = _normalize_alarms(alarms, model)
+    normalized, rejected = _normalize_alarms(alarms, department, model)
 
     # [POST-002] 信心度過濾（使用 analyzer 校準後的門檻）
     pass_threshold = _get_pass_threshold(analyzer_name)
@@ -125,12 +138,23 @@ def apply_post_rules(raw: dict, valid_models: list) -> dict:
 
 # ── [POST-001] 代碼格式正規化 ────────────────────────────────────────────────
 
-def _normalize_alarms(alarms: list, model: Optional[str]) -> tuple:
+def _get_normalize_rule(department: Optional[str], model: Optional[str]) -> dict:
+    """查找優先權：機種覆寫 > 部門預設 > 全域預設（外部審查修法：明確
+    三段式查找，不用 dict.get() 鏈式嘗試藏優先權，之後看 code 的人不用
+    自己推敲隱含順序）。"""
+    if department is not None and model is not None and (department, model) in NORMALIZE_RULES:
+        return NORMALIZE_RULES[(department, model)]
+    if department is not None and department in NORMALIZE_RULES:
+        return NORMALIZE_RULES[department]
+    return {}
+
+
+def _normalize_alarms(alarms: list, department: Optional[str], model: Optional[str]) -> tuple:
     """
     將每個警報代碼正規化。
     回傳 (通過列表, 失敗列表)，失敗列表帶 error 欄位說明原因。
     """
-    rule = NORMALIZE_RULES.get(model or "", {})
+    rule = _get_normalize_rule(department, model)
     passed, failed = [], []
 
     for alarm in alarms:
@@ -146,21 +170,36 @@ def _normalize_alarms(alarms: list, model: Optional[str]) -> tuple:
 def _normalize_code(alarm: dict, rule: dict) -> tuple:
     """
     單一代碼正規化。回傳 (正規化後alarm, 錯誤碼或None)。
-    規則：先去掉前綴（如 E-），再提取數字，補零到指定位數。
+
+    外部審查修法（QATEST01/0001/ZZC001 誤判成同一筆事故）：原本無差別
+    用 re.sub(r"\\D", "", code) 剝掉所有非數字字元再補零，任何帶字母的
+    代碼只要數字部分相同就會碰撞成同一個 code——這不是「規則太寬鬆」
+    這麼簡單，是正規化函式同時想做兩件互相矛盾的事：「識別代碼」需要
+    單射（不同代碼不能映射同一值），「容忍 OCR 誤差」必然有損（把不同
+    字串視為相同）。改法：只去掉規則明確設定的已知前綴（strip_prefix），
+    不再無差別剝除字母；去除前綴後若剩餘字串不是純數字，判定格式錯誤
+    交給人工 confirm，不再硬轉成看似合法的純數字代碼掩蓋掉真正的辨識
+    問題。OCR 容忍（模糊比對候選）是另一個獨立步驟，不在這支函式裡做
+    （見 ai_pipeline.py 的 DB 比對邏輯：精確比對優先，找不到才報告
+    db_matched=False，交給人工判斷，不在這裡自動用模糊規則吃掉差異）。
     """
     code = str(alarm.get("code", "")).strip()
-    pad = rule.get("pad", CODE_PAD)  # 機種規則優先，否則用全域 CODE_PAD
+    pad = rule.get("pad", CODE_PAD)  # 部門/機種規則優先，否則用全域 CODE_PAD
 
-    # 去掉機種設定的前綴
+    # 去掉規則明確設定的已知前綴——只處理「已知格式」，不對未知格式
+    # 做任何猜測性轉換。
     prefix = rule.get("strip_prefix", "")
     if prefix and code.upper().startswith(prefix.upper()):
         code = code[len(prefix):]
 
-    digits = re.sub(r"\D", "", code)
-    if not digits:
+    if not code.isdigit():
+        # 去除已知前綴後仍不是純數字：格式不符合任何已知規則，交給
+        # 人工 confirm，不再用 re.sub 剝除字母硬轉成純數字——那樣會讓
+        # 不相關的代碼（QATEST01/ZZC001/0001）碰撞成同一個 normalized
+        # 值，破壞「正規化必須是單射」的基本要求。
         return alarm, ERR_CODE_FORMAT
 
-    normalized = digits.zfill(pad)
+    normalized = code.zfill(pad)
     return {**alarm, "code": normalized}, None
 
 

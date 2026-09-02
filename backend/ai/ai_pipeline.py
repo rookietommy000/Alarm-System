@@ -33,6 +33,88 @@ from .ai_validation import check_validation
 from .ai_logger import log_scan, log_confirmation, log_correction
 
 
+_variant_translations_cache: Optional[dict] = None
+
+
+def _load_variant_translations() -> dict:
+    """variant 中文翻譯對照表（拍照辨識故障修復 Q3）：mf4c 的 variant
+    是完整英文語意描述（非短編號），現場人員不一定看得懂，顧問裁決
+    先用 AI 批次翻譯一版、標記「待人工校對」狀態，之後由人工校對。
+    找不到翻譯（新代碼或翻譯檔案缺筆）時回 None，前端只顯示英文原文，
+    不強行拼湊看起來像翻譯但其實沒有的文字——這跟 load_valid_models()
+    的 fail-closed 精神一致：缺翻譯要讓呼叫端知道「沒有」，不能用空
+    字串或猜測值掩蓋。快取整份資料在記憶體，103 筆資料量小，不需要
+    TTL 過期機制，人工校對更新後重啟服務即可生效。
+
+    翻譯資料存放位置本機/測試模式讀 data/variant_translations.json，
+    production 走 Supabase 的 variant_translations 表（variant_translations
+    這批資料會持續增加/校對，改存 DB 才不用每次校對都走 commit+部署
+    流程，見 008_add_variant_translations.sql）——雙軌邏輯已收斂進
+    storage.VariantTranslationStore，這裡不重複判斷 _use_supabase()。"""
+    global _variant_translations_cache
+    if _variant_translations_cache is not None:
+        return _variant_translations_cache
+    from storage import variant_translation_store
+    _variant_translations_cache = variant_translation_store.load_all()
+    return _variant_translations_cache
+
+
+def _resolve_alarm_codes(alarms: list, department: Optional[str], model: Optional[str]) -> list:
+    """拍照辨識故障修復（Q2）：AI 辨識+正規化後的 code 只是猜測值，且
+    完全不知道 variant 概念（圖片辨識看不出閥門位置這類差異）。這裡用
+    正規化過的 code 反查 DB 實際存在的紀錄，把猜測值換成資料庫裡真正
+    存在的 code/variant，前端不用再自己查一次 DB、自己做一次 normalize
+    比對（原本 frontend index.html 的 normalize 是碰撞更嚴重的第二個
+    問題根源，見 QATEST01/0001/ZZC001 誤判事故，這次直接移除）。
+
+    每筆 alarm 補上：
+      db_matched: bool                  是否在 DB 找到至少一筆
+      variant: str | None                唯一命中時的實際 variant，多筆或
+                                          零筆時為 None
+      candidates: list[dict] | None      多筆命中（同 code 不同 variant）
+                                          時的完整候選列表，每筆候選帶
+                                          variant_zh/translation_status
+                                          （見 _load_variant_translations()），
+                                          交給前端 Q3 的分組選擇 UI；
+                                          否則為 None
+
+    找不到（0 筆）時保留 AI 原始猜測值不變，只標記 db_matched=False——
+    不在這裡做模糊比對候選，那是分開的、需要使用者確認的獨立步驟
+    （見 ai_rules._normalize_code 的說明），現在只做精確比對。"""
+    if model is None:
+        return [{**a, "db_matched": False, "variant": None, "candidates": None} for a in alarms]
+
+    from storage import alarms_store
+    translations = _load_variant_translations()
+
+    def _with_translation(row: dict) -> dict:
+        variant_text = row.get("variant") or ""
+        entry = translations.get(variant_text)
+        return {
+            "variant": variant_text,
+            "code": row["code"],
+            "variant_zh": entry["zh"] if entry else None,
+            "translation_status": entry["status"] if entry else None,
+        }
+
+    resolved = []
+    for alarm in alarms:
+        rows = alarms_store.find_by_code(department, model, alarm["code"])
+        if not rows:
+            resolved.append({**alarm, "db_matched": False, "variant": None, "candidates": None})
+        elif len(rows) == 1:
+            resolved.append({
+                **alarm, "code": rows[0]["code"], "db_matched": True,
+                "variant": rows[0].get("variant"), "candidates": None,
+            })
+        else:
+            resolved.append({
+                **alarm, "db_matched": True, "variant": None,
+                "candidates": [_with_translation(r) for r in rows],
+            })
+    return resolved
+
+
 def _codes_only(items: list) -> list:
     """
     統一轉成純字串 code 列表，供 LOG 使用。
@@ -180,11 +262,18 @@ def run_pipeline(image_b64: str, mime_type: str = "image/jpeg", known_model: str
         if known_model:
             raw["model"] = known_model
             raw["model_conf"] = 100
-        result = apply_post_rules(raw, valid_models)
+        result = apply_post_rules(raw, valid_models, department=department)
+
+        # 2.5 DB 比對層（拍照辨識故障修復 Q2）：把 POST 層正規化過的
+        # code 反查 DB 實際存在的紀錄，換成真正的 code/variant，前端
+        # 不用再自己查一次 DB、自己做一次容易碰撞的 normalize 比對。
+        t0 = time.monotonic()
+        model = result.get("model")
+        result["alarms"] = _resolve_alarm_codes(result.get("alarms", []), department, model)
+        _log_timing("resolve", (time.monotonic() - t0) * 1000)
 
         # 3. VAL 層
         t0 = time.monotonic()
-        model = result.get("model")
         corrections = _load_records("corrections", model, department=department) if model else []
         val = check_validation(result, corrections)
         _log_timing("val", (time.monotonic() - t0) * 1000)
