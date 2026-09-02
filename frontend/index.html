@@ -715,6 +715,20 @@
     .placeholder-icon { font-size: 48px; }
     .placeholder-text { font-family: 'Barlow Condensed', sans-serif; font-size: 22px; color: var(--text); }
     .placeholder-sub { font-size: 14px; }
+
+    /* 桌面版內容收窄置中（UI/UX 討論：寬螢幕下 #app 沒有任何 max-width，
+       1440px 實測所有元件靠左、右側與下方大片空白）。只收窄頁面內容本身
+       （.page-camera/.page-search），不動 topbar——topbar 的 sticky 滿版
+       背景是既有設計，維持它跨頁一致的視覺，只讓內容跟一般文件排版習慣
+       一樣置中呈現，不強制整個 header 也跟著窄。.modal 是 position:fixed
+       獨立於文件流，不受這裡影響，不需要另外處理。*/
+    @media (min-width: 1024px) {
+      .page-camera, .page-search {
+        max-width: 720px;
+        margin: 0 auto;
+        width: 100%;
+      }
+    }
   </style>
 </head>
 <body class="has-bottom-nav">
