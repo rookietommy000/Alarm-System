@@ -618,14 +618,37 @@ class DepartmentStore:
             counts[table] = self._count(table, dept_qs)
         return counts
 
-    def purge(self, dept_id: str, confirm_id: str) -> dict:
+    def purge(self, dept_id: str, confirm_id: str, acknowledge_counts: dict) -> dict:
         """硬刪除一個部門與其所有關聯資料。僅限 purgeable=true 的部門，
-        正式部門一律用 set_active()（PLAN 3.4 節）。"""
+        正式部門一律用 set_active()（PLAN 3.4 節）。
+
+        acknowledge_counts：呼叫端（前端）在使用者確認畫面上顯示過、
+        使用者已經看過並按下確認的筆數快照，通常來自稍早呼叫
+        count_impact() 的回應原封不動帶回來。這裡拿到之後**不當真值
+        使用**，而是重新呼叫 self.count_impact(dept_id) 現場算出
+        actual，兩者逐表比對——如果使用者確認畫面顯示的筆數，跟現在
+        真正要刪除之前重新算出來的筆數對不上，代表確認之後、真正動手
+        刪除之前這段時間資料又變動了（例如另一個人在同時匯入資料），
+        這正是最該停下來、不能悶著頭刪的時刻，不能假設「使用者按過確認
+        了就代表可以刪」——按確認當下看到的數字可能早就不是事實。
+        不符時 raise ValueError 附上兩邊的實際筆數，讓呼叫端能顯示
+        清楚的重新確認訊息，不是含糊的「數量不符」。"""
         dept = self.get_by_id(dept_id)
         if dept is None or not dept.get("purgeable"):
             raise PermissionError("此部門不可硬刪除")
         if confirm_id != dept_id:
             raise ValueError("二次確認的部門 id 不相符")
+
+        actual = self.count_impact(dept_id)
+        if actual != acknowledge_counts:
+            mismatched = {
+                table: {"confirmed": acknowledge_counts.get(table), "actual": actual[table]}
+                for table in actual
+                if acknowledge_counts.get(table) != actual[table]
+            }
+            raise ValueError(
+                f"確認的筆數與目前實際資料不符（確認後資料已變動），請重新確認：{mismatched}"
+            )
 
         removed = {}
         dept_qs = f"department=eq.{urllib.parse.quote(dept_id, safe='')}"

@@ -1881,8 +1881,15 @@ def create_app() -> Flask:
     def purge_department(dept_id: str):
         body = request.get_json(silent=True) or {}
         confirm_id = body.get("confirm_id")
+        # acknowledge_counts：使用者在確認畫面上看過的筆數快照，通常是
+        # 前端稍早呼叫 /impact 拿到的回應原封不動帶回來——purge() 內部
+        # 不會信任這份數字本身，只用它跟「動手刪除前重新現算」的實際
+        # 筆數比對，見 department_store.purge() 的說明。
+        acknowledge_counts = body.get("acknowledge_counts")
+        if not isinstance(acknowledge_counts, dict):
+            abort(400, "acknowledge_counts 為必填，且必須是確認畫面顯示過的筆數物件")
         try:
-            removed = department_store.purge(dept_id, confirm_id)
+            removed = department_store.purge(dept_id, confirm_id, acknowledge_counts)
         except PermissionError as e:
             abort(403, str(e))
         except ValueError as e:
