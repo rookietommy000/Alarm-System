@@ -14,10 +14,25 @@
 
   /**
    * 統一 fetch：401 直接導向對應登入頁；429 回傳結構化的剩餘秒數，
-   * 呼叫端自行決定怎麼顯示倒數，不在這裡耦合 UI。
+   * 呼叫端自行決定怎麼顯示倒數，不在這裡耦合 UI。網路層失敗（斷網、
+   * DNS 失敗、逾時等 fetch() 本身 reject 的情況，跟 HTTP 層回應
+   * 4xx/5xx 是不同層級）統一包成 err.isNetworkError = true，呼叫端
+   * 用這個旗標判斷要不要顯示「網路連線異常，請檢查網路後再試」這類
+   * 文案，不用各自猜 fetch() 丟出的原始例外長怎樣（UI/UX 檢查發現
+   * frontend 有 39 處呼叫點裡至少四種不一致的處理方式，多數完全沒
+   * 處理這種例外，讓 loading 狀態卡死或整個函式無聲中斷）。跟既有
+   * 429 的 err.status 是同一個模式，不新發明一套錯誤契約。
    */
   async function apiFetch(url, options) {
-    const r = await fetch(url, options);
+    let r;
+    try {
+      r = await fetch(url, options);
+    } catch (e) {
+      const err = new Error('網路連線異常，請檢查網路後再試');
+      err.isNetworkError = true;
+      err.cause = e;
+      throw err;
+    }
     if (r.status === 401) {
       location.href = loginUrlFor(location.pathname);
       // 導頁是非同步的，讓呼叫端的 await 停在這裡不再往下執行

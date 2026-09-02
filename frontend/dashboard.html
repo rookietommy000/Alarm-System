@@ -206,6 +206,10 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
 <body>
 <div id="app">
   <div v-if="loading" class="loading-overlay"><div class="spinner"></div></div>
+  <div v-if="loadError" style="position:fixed; top:0; left:0; right:0; z-index:1900; background:#5c2020; color:#fff; padding:10px 16px; display:flex; align-items:center; gap:12px; font-size:13px">
+    <span style="flex:1">{{ loadError }}</span>
+    <button @click="load()" style="background:rgba(255,255,255,0.15); color:#fff; border:1px solid rgba(255,255,255,0.3); border-radius:6px; padding:4px 12px; cursor:pointer">重試</button>
+  </div>
 
   <div class="app" style="display:flex; min-height:100vh">
     <aside class="side" style="width:224px; flex:none; border-right:1px solid var(--color-divider); display:flex; flex-direction:column; padding:20px 0; position:sticky; top:0; height:100vh">
@@ -1327,6 +1331,7 @@ createApp({
       semanticReviewFilter: { status: 'pending', model: '' },
       deviceDraft: null, deviceError: '',
       toast: '',
+      loadError: '',
 
       // ── 部門管理 dialog 狀態 ──
       deptDialog: null, deptTargetId: null, deptError: '',
@@ -1556,8 +1561,14 @@ createApp({
       this.whoamiLoaded = true;
     },
     async loadDepartments() {
-      const r = await AlarmApi.get('/api/admin/departments');
-      if (r.ok) this.departments = await r.json();
+      try {
+        const r = await AlarmApi.get('/api/admin/departments');
+        if (r.ok) { this.departments = await r.json(); this.loadError = ''; }
+      } catch (e) {
+        // 網路層失敗原本完全無提示，下拉選單維持空白讓人誤以為沒有
+        // 部門資料——改用頂部 loadError 橫幅，跟其餘 load 系列一致。
+        this.loadError = e.isNetworkError ? e.message : '部門清單載入失敗，請稍後再試';
+      }
     },
     deptName(id) {
       const d = this.departments.find(x => x.id === id);
@@ -1597,7 +1608,15 @@ createApp({
     async loadPrimary() {
       const dq = this.deptQuery();
       const endpoints = ['/api/alarms' + dq, '/api/devices' + dq];
-      const results = await Promise.all(endpoints.map(u => AlarmApi.get(u)));
+      let results;
+      try {
+        results = await Promise.all(endpoints.map(u => AlarmApi.get(u)));
+      } catch (e) {
+        // 原本無 try/catch：網路層失敗讓例外冒到 load() 的 finally，
+        // loading 會關閉但主列表（警報/機種）維持空白且無任何提示。
+        this.loadError = e.isNetworkError ? e.message : '主列表載入失敗，請稍後再試';
+        return false;
+      }
       if (results.some(r => r.status === 403)) { location.href = '/admin/login'; return false; }
       if (results.some(r => r.status === 404)) {
         // 超管帶了不存在的部門（打錯字／被刪除），回退到「全部部門」
@@ -1607,6 +1626,7 @@ createApp({
       const [alarms, devices] = await Promise.all(results.map(r => r.ok ? r.json() : []));
       this.alarms = alarms;
       this.devices = devices;
+      this.loadError = '';
       return true;
     },
     async loadSecondary() {
@@ -1617,7 +1637,18 @@ createApp({
         '/api/admin/scan-stats' + dq, '/api/admin/scan-recent' + dq + amp + 'limit=100',
         '/api/admin/scan-ranking' + dq, '/api/admin/ai-usage-stats' + dq,
       ];
-      const results = await Promise.all(endpoints.map(u => AlarmApi.get(u)));
+      let results;
+      try {
+        results = await Promise.all(endpoints.map(u => AlarmApi.get(u)));
+      } catch (e) {
+        // 6 支端點併發，任一網路層失敗原本會讓整個後台統計區塊卡死
+        // 不顯示、無提示。主列表（loadPrimary）已經顯示，這裡失敗不
+        // 應該把整頁蓋掉，用同一個 loadError 橫幅即可，使用者按重試
+        // 會重跑完整 load()（含 primary），符合現有 loadError 的重試
+        // 語意，不需要另外做一個「只重試 secondary」的分支。
+        this.loadError = e.isNetworkError ? e.message : '統計資料載入失敗，請稍後再試';
+        return;
+      }
       if (results.some(r => r.status === 403)) { location.href = '/admin/login'; return; }
       if (results.some(r => r.status === 404)) {
         this.setViewDept('__all__');
@@ -1647,7 +1678,15 @@ createApp({
       if (f.from) params.push('from=' + encodeURIComponent(f.from));
       if (f.to) params.push('to=' + encodeURIComponent(f.to));
       if (params.length) url += amp + params.join('&');
-      const r = await AlarmApi.get(url);
+      let r;
+      try {
+        r = await AlarmApi.get(url);
+      } catch (e) {
+        // 稽核紀錄區塊原本網路層失敗完全無提示，卡住不顯示。
+        this.auditLog = []; this.auditTruncated = false;
+        this.loadError = e.isNetworkError ? e.message : '稽核紀錄載入失敗，請稍後再試';
+        return;
+      }
       if (!r.ok) { this.auditLog = []; this.auditTruncated = false; return; }
       const data = await r.json();
       this.auditLog = data.items || [];
@@ -2023,11 +2062,15 @@ createApp({
       if (!confirm(`確定刪除 ${this.alarmDraft.code}？`)) return;
       const code = this.alarmDraft.code;
       const dept = this.writeDept();
-      const r = await AlarmApi.delete(`/api/alarms/${encodeURIComponent(dept)}/${encodeURIComponent(this.alarmDraft.device_model)}/${encodeURIComponent(code)}`);
-      if (!r.ok) { this.alarmError = '刪除失敗'; return; }
-      await this.load();
-      this.alarmDraft = null;
-      this.showToast(`已刪除 ${code}`);
+      try {
+        const r = await AlarmApi.delete(`/api/alarms/${encodeURIComponent(dept)}/${encodeURIComponent(this.alarmDraft.device_model)}/${encodeURIComponent(code)}`);
+        if (!r.ok) { this.alarmError = '刪除失敗'; return; }
+        await this.load();
+        this.alarmDraft = null;
+        this.showToast(`已刪除 ${code}`);
+      } catch (e) {
+        this.alarmError = e.isNetworkError ? e.message : '刪除失敗，請稍後再試';
+      }
     },
 
     newDevice() {
@@ -2038,21 +2081,29 @@ createApp({
       this.deviceError = '';
       if (!this.deviceDraft.model.trim()) { this.deviceError = '機種代號為必填'; return; }
       const dept = this.writeDept();
-      const r = await AlarmApi.post(`/api/devices/${encodeURIComponent(dept)}`, this.deviceDraft);
-      if (r.status === 403) { location.href = '/admin/login'; return; }
-      if (!r.ok) { this.deviceError = (await r.json()).error || '建立失敗'; return; }
-      const model = this.deviceDraft.model;
-      await this.load();
-      this.deviceDraft = null;
-      this.showToast(`已建立機種 ${model}`);
+      try {
+        const r = await AlarmApi.post(`/api/devices/${encodeURIComponent(dept)}`, this.deviceDraft);
+        if (r.status === 403) { location.href = '/admin/login'; return; }
+        if (!r.ok) { this.deviceError = (await r.json()).error || '建立失敗'; return; }
+        const model = this.deviceDraft.model;
+        await this.load();
+        this.deviceDraft = null;
+        this.showToast(`已建立機種 ${model}`);
+      } catch (e) {
+        this.deviceError = e.isNetworkError ? e.message : '建立失敗，請稍後再試';
+      }
     },
     async removeDevice(d) {
       if (!confirm(`確定刪除機種 ${d.model}？`)) return;
       const dept = this.isSuper ? (d.department || this.viewDept) : this.whoami.department;
-      const r = await AlarmApi.delete(`/api/devices/${encodeURIComponent(dept)}/${encodeURIComponent(d.model)}`);
-      if (!r.ok) { this.showToast('刪除失敗'); return; }
-      await this.load();
-      this.showToast(`已刪除 ${d.model}`);
+      try {
+        const r = await AlarmApi.delete(`/api/devices/${encodeURIComponent(dept)}/${encodeURIComponent(d.model)}`);
+        if (!r.ok) { this.showToast('刪除失敗'); return; }
+        await this.load();
+        this.showToast(`已刪除 ${d.model}`);
+      } catch (e) {
+        this.showToast(e.isNetworkError ? e.message : '刪除失敗，請稍後再試');
+      }
     },
 
     // ── 部門管理（超管專用）──
@@ -2068,12 +2119,16 @@ createApp({
     },
     async createDept() {
       this.deptError = '';
-      const r = await AlarmApi.post('/api/admin/departments', this.deptCreateDraft);
-      if (!r.ok) { this.deptError = (await r.json()).error || '建立失敗'; return; }
-      const name = this.deptCreateDraft.name;
-      await this.loadDepartments();
-      this.closeDeptDialog();
-      this.showToast(`已建立部門 ${name}`);
+      try {
+        const r = await AlarmApi.post('/api/admin/departments', this.deptCreateDraft);
+        if (!r.ok) { this.deptError = (await r.json()).error || '建立失敗'; return; }
+        const name = this.deptCreateDraft.name;
+        await this.loadDepartments();
+        this.closeDeptDialog();
+        this.showToast(`已建立部門 ${name}`);
+      } catch (e) {
+        this.deptError = e.isNetworkError ? e.message : '建立失敗，請稍後再試';
+      }
     },
     openEditDept(d) {
       this.deptTargetId = d.id;
@@ -2085,11 +2140,15 @@ createApp({
       this.deptError = '';
       const name = this.deptEditDraft.name.trim();
       if (!name) { this.deptError = '顯示名稱不可為空'; return; }
-      const r = await AlarmApi.put(`/api/admin/departments/${encodeURIComponent(this.deptTargetId)}`, { name });
-      if (!r.ok) { this.deptError = (await r.json()).error || '儲存失敗'; return; }
-      await this.loadDepartments();
-      this.closeDeptDialog();
-      this.showToast('部門名稱已更新');
+      try {
+        const r = await AlarmApi.put(`/api/admin/departments/${encodeURIComponent(this.deptTargetId)}`, { name });
+        if (!r.ok) { this.deptError = (await r.json()).error || '儲存失敗'; return; }
+        await this.loadDepartments();
+        this.closeDeptDialog();
+        this.showToast('部門名稱已更新');
+      } catch (e) {
+        this.deptError = e.isNetworkError ? e.message : '儲存失敗，請稍後再試';
+      }
     },
     openResetPw(d) {
       this.deptTargetId = d.id;
@@ -2102,10 +2161,14 @@ createApp({
       const body = {};
       if (this.deptResetDraft.password) body.password = this.deptResetDraft.password;
       if (this.deptResetDraft.admin_password) body.admin_password = this.deptResetDraft.admin_password;
-      const r = await AlarmApi.put(`/api/admin/departments/${encodeURIComponent(this.deptTargetId)}/reset-password`, body);
-      if (!r.ok) { this.deptError = (await r.json()).error || '重設失敗'; return; }
-      this.closeDeptDialog();
-      this.showToast('密碼已重設，該部門所有裝置已登出');
+      try {
+        const r = await AlarmApi.put(`/api/admin/departments/${encodeURIComponent(this.deptTargetId)}/reset-password`, body);
+        if (!r.ok) { this.deptError = (await r.json()).error || '重設失敗'; return; }
+        this.closeDeptDialog();
+        this.showToast('密碼已重設，該部門所有裝置已登出');
+      } catch (e) {
+        this.deptError = e.isNetworkError ? e.message : '重設失敗，請稍後再試';
+      }
     },
     openToggleActive(d) {
       this.deptTargetId = d.id;
@@ -2114,11 +2177,15 @@ createApp({
     },
     async toggleDeptActive() {
       const target = this.deptTarget;
-      const r = await AlarmApi.put(`/api/admin/departments/${encodeURIComponent(target.id)}/active`, { active: !target.active });
-      if (!r.ok) { this.showToast('操作失敗'); return; }
-      await this.loadDepartments();
-      this.closeDeptDialog();
-      this.showToast(`已${target.active ? '停用' : '啟用'} ${target.name}`);
+      try {
+        const r = await AlarmApi.put(`/api/admin/departments/${encodeURIComponent(target.id)}/active`, { active: !target.active });
+        if (!r.ok) { this.showToast('操作失敗'); return; }
+        await this.loadDepartments();
+        this.closeDeptDialog();
+        this.showToast(`已${target.active ? '停用' : '啟用'} ${target.name}`);
+      } catch (e) {
+        this.showToast(e.isNetworkError ? e.message : '操作失敗，請稍後再試');
+      }
     },
     async openDeleteDept(d) {
       this.deptTargetId = d.id;
@@ -2139,13 +2206,17 @@ createApp({
     async doDeleteDept() {
       if (!this.delConfirmMatched) return;
       const target = this.deptTarget;
-      const r = await AlarmApi.delete(`/api/admin/departments/${encodeURIComponent(target.id)}`, { confirm_id: target.id });
-      if (!r.ok) { this.showToast((await r.json()).error || '刪除失敗'); return; }
-      const data = await r.json();
-      this.deptDeletedCounts = data.removed;
-      this.delStep = 3;
-      await this.loadDepartments();
-      if (this.viewDept === target.id) this.setViewDept('__all__');
+      try {
+        const r = await AlarmApi.delete(`/api/admin/departments/${encodeURIComponent(target.id)}`, { confirm_id: target.id });
+        if (!r.ok) { this.showToast((await r.json()).error || '刪除失敗'); return; }
+        const data = await r.json();
+        this.deptDeletedCounts = data.removed;
+        this.delStep = 3;
+        await this.loadDepartments();
+        if (this.viewDept === target.id) this.setViewDept('__all__');
+      } catch (e) {
+        this.showToast(e.isNetworkError ? e.message : '刪除失敗，請稍後再試');
+      }
     },
   },
 }).mount('#app');

@@ -1048,6 +1048,7 @@
 
       <div class="search-results">
         <div v-if="loading" class="loading-overlay"><div class="spinner"></div></div>
+        <div v-else-if="searchError" class="search-empty">{{ searchError }}</div>
         <div v-else-if="!q && !severity && !filterDevice" class="search-empty">選擇機種或輸入代碼開始搜尋</div>
         <div v-else-if="!items.length" class="search-empty">無符合資料</div>
         <template v-else>
@@ -1216,7 +1217,7 @@
           devices: [],
           selectedLine: null,
           selectedDevice: null,
-          items: [], selected: null,
+          items: [], selected: null, searchError: '',
           loading: false, timer: null,
           feedbackSent: false,
           feedbackStats: {},
@@ -1485,13 +1486,28 @@
           }
           // 只選機種沒輸入關鍵字 → 列出該機種全部警報（不限筆數）
           this.loading = true;
+          this.searchError = '';
           const p = new URLSearchParams();
           if (this.q) p.set('q', this.q);
           if (this.filterDevice) p.set('device', this.filterDevice);
           if (this.severity) p.set('severity', this.severity);
-          const r = await AlarmApi.get('/api/alarms?' + p.toString());
-          this.items = await r.json();
-          this.loading = false;
+          try {
+            const r = await AlarmApi.get('/api/alarms?' + p.toString());
+            if (!r.ok) {
+              this.items = [];
+              this.searchError = `查詢失敗（伺服器錯誤 ${r.status}），請稍後再試`;
+              return;
+            }
+            this.items = await r.json();
+          } catch (e) {
+            // loading 卡死的根因：原本這裡沒有 try/catch，例外中斷後
+            // finally 都不會執行，loading 永遠停在 true。改用
+            // try/finally 保證不管成功/失敗/斷網都會關閉 loading。
+            this.items = [];
+            this.searchError = e.isNetworkError ? e.message : '查詢失敗，請稍後再試';
+          } finally {
+            this.loading = false;
+          }
         },
         sevClass(s) { return { '嚴重': 'sev-high', '警告': 'sev-mid', '資訊': 'sev-low' }[s] || ''; },
 
