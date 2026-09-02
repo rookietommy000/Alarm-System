@@ -1197,6 +1197,20 @@ def create_app() -> Flask:
         if not final_zh:
             abort(400, "採用時必須提供修正後的中文文字（final_zh 或 AI 的 suggested_zh）")
 
+        # 防呆（2026-09-02 補）：復原快照機制（import_snapshots 表，
+        # migration 007）尚未在正式環境執行完成前，303 筆語意修正暫緩
+        # 套用是業務層面的共識，但原本程式碼完全沒有技術層面的阻擋——
+        # save_snapshot() 是 fail-open 設計，表不存在時靜默回傳 None，
+        # 這裡若不主動檢查，會在沒有復原保護的情況下直接寫入 alarms
+        # 正式表且無法 undo。改成先探測表是否真的存在，不存在就擋下來，
+        # 不能讓「暫緩」這個決策只靠人記得不去點按鈕來維持。
+        # 只在 Supabase 模式檢查：JsonStore（本機/測試）模式下
+        # import_snapshot_store 本來就不支援復原（見 ImportSnapshotStore
+        # 類別說明），這是既有且有意的行為，不是這次防呆要擋的對象，
+        # 擋下去只會讓既有測試全部誤判成「快照機制未就緒」。
+        if _use_supabase() and not import_snapshot_store.is_available():
+            abort(409, "復原快照機制尚未就緒（migration 007 待執行），暫不開放採用並寫入")
+
         device_model = item["device_model"]
         code = item["code"]
         variant = ""

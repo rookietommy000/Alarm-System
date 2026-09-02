@@ -822,6 +822,41 @@ class ImportSnapshotStore:
     回傳 None、list_snapshots/undo 回空結果，呼叫端據此判斷不可用。
     """
 
+    def is_available(self) -> bool:
+        """探測 import_snapshots 表是否真的存在（migration 007 是否已在
+        正式環境執行）。save_snapshot() 本身是 fail-open 設計——表不存在
+        時 POST 失敗會被吞掉、印一行 stderr、回傳 None，呼叫端若沒有
+        主動檢查這個 None，會在完全沒有復原保護的情況下繼續往下寫入
+        正式表（語意審核「採用並寫入」曾經就是這樣，見 update_semantic_
+        review() 的防呆修復）。這裡用 limit=0 輕量 GET 探測，不寫入
+        任何資料；HTTPError 明確判斷是不是 404（表不存在）而不是網路
+        層問題，兩者不該混為一談——404 代表 migration 007 還沒執行，
+        其他錯誤（逾時、憑證問題）不代表表不存在，但保守起見一律視為
+        不可用，因為呼叫端要用這個結果決定要不要開放寫入正式表的高風險
+        操作，寧可誤判成「不可用」擋下操作，也不要誤判成「可用」放行
+        一個實際上救不回來的寫入。"""
+        if not _use_supabase():
+            return False
+        base = os.environ.get("SUPABASE_URL", "").rstrip("/")
+        key = os.environ.get("SUPABASE_KEY", "")
+        try:
+            req = urllib.request.Request(
+                f"{base}/rest/v1/import_snapshots?select=id&limit=0",
+                headers={"apikey": key, "Authorization": f"Bearer {key}"},
+                method="GET",
+            )
+            urllib.request.urlopen(req)
+            return True
+        except Exception as e:
+            # fail-closed 方向不變（表不存在/查詢失敗一律視為不可用，
+            # 寧可誤擋高風險寫入），但「表真的不存在」跟「網路暫時故障/
+            # 憑證問題」是完全不同的故障，混在一起會讓之後除錯難以
+            # 分辨是哪一種——留一行痕跡（CLAUDE.md 例外處理判準）。
+            import sys as _sys
+            print(f"[ImportSnapshotStore] is_available() 探測失敗（視為不可用，"
+                  f"擋下高風險寫入）：{type(e).__name__}: {e}", file=_sys.stderr)
+            return False
+
     def save_snapshot(self, department: str, device_models: list, rows_before: list,
                        total_rows: int, import_mode: str) -> Optional[int]:
         """rows_before：[{"device_model", "code", "variant", "before_data"}, ...]，

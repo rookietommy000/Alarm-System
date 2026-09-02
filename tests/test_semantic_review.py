@@ -132,3 +132,118 @@ def test_double_processing_returns_409(client, tmp_path):
 def test_accept_rejects_nonexistent_department_via_resolve_target(client):
     r = client.put("/api/admin/semantic-review/does-not-exist-dept/0", json={"action": "reject"})
     assert r.status_code in (403, 404)
+
+
+class TestAcceptRequiresSnapshotAvailability:
+    """303 筆語意修正暫緩套用的前提之一（migration 007 執行完成）原本
+    只是業務共識，沒有程式碼層面的阻擋——save_snapshot() 是 fail-open
+    設計，import_snapshots 表不存在時靜默回傳 None，accept 分支原本
+    不檢查這個 None 就繼續寫入 alarms 正式表。這裡驗證新增的防呆：
+    只在 Supabase 模式生效（JsonStore 本來就不支援復原，不該被這層
+    防呆誤擋，見上面 12 個既有測試維持不變）。"""
+
+    def test_jsonstore_mode_not_blocked_by_snapshot_availability(self, client, tmp_path):
+        """JsonStore（本機/測試）模式下，即使 is_available() 會回 False
+        （本來就沒有這張表），accept 也不該被擋——這是既有且有意的行為，
+        不是這次防呆要處理的對象。"""
+        from storage import alarms_store, import_snapshot_store
+        assert import_snapshot_store.is_available() is False  # 前提：確實是 JsonStore 模式
+        alarms_store.upsert_one(
+            {"code": "0003", "device_model": "CNC-A100", "variant": "", "description": "OPEN UNITS/CHECK DISABLE 打開單位/檢查禁用",
+             "severity": "", "cause": "", "solution": "", "keywords": []},
+            department="local",
+        )
+        _write_review_file(tmp_path, [dict(SAMPLE_FINDING)])
+        r = client.put("/api/admin/semantic-review/local/0", json={"action": "accept"})
+        assert r.status_code == 200
+
+    def test_supabase_mode_blocks_accept_when_snapshot_table_missing(self, client, tmp_path, monkeypatch):
+        """Supabase 模式下 is_available() 回 False（表不存在／migration
+        007 未執行）時，accept 要被擋在 409，不能靜默繼續寫入正式表。
+
+        _use_supabase() 同時也是 assert_session_valid() 拿來判斷要不要
+        走部門有效性查詢的依據（本機/測試模式的 admin session 用
+        department="local"，department_store 裡沒有真的這筆資料，
+        硬切 Supabase 模式會讓部門查詢回 None 而被誤判成登入失效變
+        401）——這裡額外 mock department_store.get_by_id() 讓它對
+        "local" 回傳一筆 active 部門，只隔離測試防呆邏輯本身，不連帶
+        測到跟這個防呆無關的 session 有效性驗證行為。"""
+        from storage import alarms_store, import_snapshot_store, department_store
+        alarms_store.upsert_one(
+            {"code": "0003", "device_model": "CNC-A100", "variant": "", "description": "OPEN UNITS/CHECK DISABLE 打開單位/檢查禁用",
+             "severity": "", "cause": "", "solution": "", "keywords": []},
+            department="local",
+        )
+        _write_review_file(tmp_path, [dict(SAMPLE_FINDING)])
+        monkeypatch.setattr("app._use_supabase", lambda: True)
+        monkeypatch.setattr(department_store, "get_by_id", lambda dept_id: {"id": "local", "active": True})
+        monkeypatch.setattr(import_snapshot_store, "is_available", lambda: False)
+
+        r = client.put("/api/admin/semantic-review/local/0", json={"action": "accept"})
+        assert r.status_code == 409
+
+        # 被擋下時不該真的寫入正式表，也不該把 pending 標記成已處理——
+        # 使用者之後解除前提後應該還能重新嘗試這一筆。
+        written = alarms_store.get_one(department="local", match={"device_model": "CNC-A100", "code": "0003", "variant": ""})
+        assert written["description"] == "OPEN UNITS/CHECK DISABLE 打開單位/檢查禁用"
+        listed = client.get("/api/admin/semantic-review/local").get_json()
+        assert listed["findings"][0]["status"] == "pending"
+
+    def test_supabase_mode_allows_accept_when_snapshot_table_available(self, client, tmp_path, monkeypatch):
+        """migration 007 執行完成、is_available() 回 True 時，accept
+        照常運作，不該被這層防呆誤擋。"""
+        from storage import alarms_store, import_snapshot_store, department_store
+        alarms_store.upsert_one(
+            {"code": "0003", "device_model": "CNC-A100", "variant": "", "description": "OPEN UNITS/CHECK DISABLE 打開單位/檢查禁用",
+             "severity": "", "cause": "", "solution": "", "keywords": []},
+            department="local",
+        )
+        _write_review_file(tmp_path, [dict(SAMPLE_FINDING)])
+        monkeypatch.setattr("app._use_supabase", lambda: True)
+        monkeypatch.setattr(department_store, "get_by_id", lambda dept_id: {"id": "local", "active": True})
+        monkeypatch.setattr(import_snapshot_store, "is_available", lambda: True)
+        # save_snapshot() 本身走真實 HTTP 請求，測試環境沒有真的
+        # Supabase 連線可打，這裡只驗證防呆本身不會誤擋，snapshot 寫入
+        # 失敗與否是 save_snapshot() 既有的 fail-open 責任範圍，不是
+        # 這個防呆要驗證的行為。
+        monkeypatch.setattr(import_snapshot_store, "save_snapshot", lambda **kw: 999)
+
+        r = client.put("/api/admin/semantic-review/local/0", json={"action": "accept"})
+        assert r.status_code == 200
+
+
+class TestImportSnapshotStoreIsAvailable:
+    """is_available() 本身的行為，不透過 Flask 端點。"""
+
+    def test_jsonstore_mode_returns_false(self):
+        from storage import import_snapshot_store
+        assert import_snapshot_store.is_available() is False
+
+    def test_supabase_mode_table_missing_returns_false(self, monkeypatch):
+        import storage as storage_mod
+        import urllib.error
+        monkeypatch.setattr(storage_mod, "_use_supabase", lambda: True)
+        monkeypatch.setenv("SUPABASE_URL", "https://example.invalid")
+        monkeypatch.setenv("SUPABASE_KEY", "test-key")
+
+        def fake_urlopen(req, *a, **kw):
+            raise urllib.error.HTTPError(req.full_url, 404, "Not Found", {}, None)
+
+        monkeypatch.setattr(storage_mod.urllib.request, "urlopen", fake_urlopen)
+        store = storage_mod.ImportSnapshotStore()
+        assert store.is_available() is False
+
+    def test_supabase_mode_table_exists_returns_true(self, monkeypatch):
+        import io
+        import storage as storage_mod
+        monkeypatch.setattr(storage_mod, "_use_supabase", lambda: True)
+        monkeypatch.setenv("SUPABASE_URL", "https://example.invalid")
+        monkeypatch.setenv("SUPABASE_KEY", "test-key")
+
+        class FakeResponse(io.BytesIO):
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+        monkeypatch.setattr(storage_mod.urllib.request, "urlopen", lambda req, *a, **kw: FakeResponse(b"[]"))
+        store = storage_mod.ImportSnapshotStore()
+        assert store.is_available() is True
