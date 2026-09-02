@@ -2239,7 +2239,15 @@ createApp({
       const target = this.deptTarget;
       this.writeBusy.doDeleteDept = true;
       try {
-        const r = await AlarmApi.delete(`/api/admin/departments/${encodeURIComponent(target.id)}`, { confirm_id: target.id });
+        // acknowledge_counts 原封不動帶回 delStep 1 從 /impact 拿到、
+        // 使用者在畫面上實際看過的筆數（deptImpactCounts）——後端會用
+        // 這份數字跟動手刪除前重新現算的實際筆數比對，不一致（例如
+        // 確認期間有人在匯入資料）會擋下來，見 storage.py
+        // DepartmentStore.purge() 的說明。這裡不能自己重新查一次
+        // /impact 再送出，那樣會失去「使用者看到的畫面」跟「真正送出
+        // 的確認值」之間的對照意義。
+        const r = await AlarmApi.delete(`/api/admin/departments/${encodeURIComponent(target.id)}`,
+          { confirm_id: target.id, acknowledge_counts: this.deptImpactCounts });
         if (!r.ok) { this.showToast((await r.json()).error || '刪除失敗'); return; }
         const data = await r.json();
         this.deptDeletedCounts = data.removed;
