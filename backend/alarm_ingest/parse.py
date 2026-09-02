@@ -156,8 +156,15 @@ def _check_required_headers(headers) -> dict:
     return mapping
 
 
-def load_csv(path: Path) -> list:
+def load_csv(path: Path) -> tuple:
+    """回傳 (rows, row_errors)。row_errors 是單一列格式異常的清單
+    （例如 code 缺值），不再讓整份來源因為其中一列有問題就整批失敗——
+    這些列改成收集起來交給呼叫端決定怎麼處理（批次匯入走
+    pending_alarm_imports 待審機制，見 app.py bulk_import_commit()）。
+    表頭本身缺欄位仍是整批 raise（_check_required_headers()），那不是
+    「這一列有問題」而是「整份來源沒辦法解析」，性質不同。"""
     rows = []
+    row_errors = []
     with path.open(encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)
         raw_headers = reader.fieldnames or []
@@ -167,14 +174,17 @@ def load_csv(path: Path) -> list:
             try:
                 rows.append(row_to_alarm(raw))
             except ValueError as e:
-                raise ValueError(f"第 {i} 行錯誤：{e}")
-    return rows
+                row_errors.append({"row": i, "raw": raw, "reason": str(e)})
+    return rows, row_errors
 
 
-def load_excel(path: Path) -> list:
+def load_excel(path: Path) -> tuple:
     """讀固定範本 .xlsx/.xlsm，只認第一個工作表、第一列為表頭（不做
     分頁掃描或表頭關鍵字比對——那是 Variant/parse_alarms.py 的智慧
-    偵測職責，見模組開頭說明）。"""
+    偵測職責，見模組開頭說明）。
+
+    回傳 (rows, row_errors)，同 load_csv() 的說明：單一列格式異常收集
+    起來交給呼叫端處理，不整批失敗；表頭/空檔案仍是整批 raise。"""
     import openpyxl
     wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
     ws = wb.worksheets[0]
@@ -187,6 +197,7 @@ def load_excel(path: Path) -> list:
     mapping = _check_required_headers(headers)
 
     rows = []
+    row_errors = []
     for i, raw_row in enumerate(rows_iter, start=2):  # 第 1 列是表頭
         if all(v is None or str(v).strip() == "" for v in raw_row):
             continue  # 跳過完全空白的列（Excel 常見的尾端空列）
@@ -195,33 +206,37 @@ def load_excel(path: Path) -> list:
         try:
             rows.append(row_to_alarm(raw))
         except ValueError as e:
-            raise ValueError(f"第 {i} 列錯誤：{e}")
-    return rows
+            row_errors.append({"row": i, "raw": raw, "reason": str(e)})
+    return rows, row_errors
 
 
 # _cell_to_str() 本體在 detect.py（inspect 端點取樣本內容也需要同樣的
 # 型別轉換保護），上方 import 已 re-export，這裡不重複定義。
 
 
-def load_json(path: Path) -> list:
+def load_json(path: Path) -> tuple:
     """讀 parse_alarms.py 產出的標準 JSON（見 Variant/parse_alarms.py
     to_output()）。跟 CSV 走同一個 row_to_alarm() 正規化，兩種來源
     最終格式一致，其餘邏輯（去重檢查、機種驗證、完整度攔截）不需要
-    分別處理來源型態。"""
+    分別處理來源型態。
+
+    回傳 (rows, row_errors)，同 load_csv() 的說明。"""
     with path.open(encoding="utf-8") as f:
         raw_rows = json.load(f)
     if not isinstance(raw_rows, list):
         raise ValueError("JSON 檔內容必須是陣列（parse_alarms.py 的標準輸出格式）")
     rows = []
+    row_errors = []
     for i, raw in enumerate(raw_rows, start=1):
         try:
             rows.append(row_to_alarm(raw))
         except ValueError as e:
-            raise ValueError(f"第 {i} 筆錯誤：{e}")
-    return rows
+            row_errors.append({"row": i, "raw": raw, "reason": str(e)})
+    return rows, row_errors
 
 
-def load_file(path: Path) -> list:
+def load_file(path: Path) -> tuple:
+    """回傳 (rows, row_errors)，同三個 load_*() 的介面。"""
     suffix = path.suffix.lower()
     if suffix == ".csv":
         return load_csv(path)

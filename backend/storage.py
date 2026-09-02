@@ -1962,6 +1962,38 @@ class PendingAlarmImportStore(StatusTransitionMixin):
             raw = r.read().decode()
             return json.loads(raw) if raw.strip() else []
 
+    def create(self, department: str, device_model: str, code: str, variant: str,
+               description: str, source: str, flagged_reason: str,
+               severity: Optional[str] = None, cause: Optional[str] = None,
+               solution: Optional[str] = None, keywords: Optional[list] = None,
+               sol_steps: Optional[dict] = None, raw_source_text: Optional[str] = None,
+               confidence: Optional[float] = None, submitted_by: Optional[str] = None) -> dict:
+        """新增一筆待審資料，status 固定為 pending（DB default，這裡不
+        送這個欄位，避免呼叫端誤以為可以指定初始狀態）。department/
+        device_model/code/variant/description/source/flagged_reason
+        是 migration 010 的 not null 欄位，其餘為選填——None 值不送進
+        payload（migration 010 這幾欄允許 NULL，送 None 等同送 JSON
+        null，PostgREST 會存成 NULL，效果一樣，但這裡選擇不送缺席欄位
+        的慣例跟 AlarmSuggestionStore.create() 一致，維持兩者行為對稱）。
+
+        呼叫端（批次匯入/AI 辨識）負責判斷「這筆是不是異常該進待審」，
+        這裡只單純負責寫入，不做業務判斷——同本檔一貫的 store 層分工。
+        """
+        if not _use_supabase():
+            return {}
+        body = {
+            "department": department, "device_model": device_model, "code": code,
+            "variant": variant, "description": description, "source": source,
+            "flagged_reason": flagged_reason, "severity": severity, "cause": cause,
+            "solution": solution, "keywords": keywords, "sol_steps": sol_steps,
+            "raw_source_text": raw_source_text, "confidence": confidence,
+            "submitted_by": submitted_by,
+        }
+        result = self._req("POST", f"{self._TABLE}",
+                           [{k: v for k, v in body.items() if v is not None}],
+                           extra_headers={"Prefer": "return=representation"})
+        return result[0] if result else {}
+
     def list_pending(self, department: Optional[str]) -> list:
         """待審清單，依 scope_department() 過濾（department=None 是總管
         不過濾的明確選擇，同 alarms_store.load() 一致的既有原則）。"""

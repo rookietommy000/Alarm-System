@@ -238,6 +238,65 @@ def test_commit_rejects_when_preview_would_have_errors(client):
     assert not any(a["code"] == "E1" for a in listed)
 
 
+def test_preview_reports_flagged_rows_without_blocking_normal_rows(client):
+    """單一列格式異常（這裡是第 3 行缺 code）不該讓整份來源被 errors
+    擋下——正常列照樣走 will_create/will_update 統計，異常列另外算進
+    flagged_row_count/flagged_rows，這是新的第三種結果，不是 errors。"""
+    r = client.post(
+        "/api/admin/bulk-import/local/preview",
+        data={"file": _csv_file(f"{CSV_HEADER}\nE777,CNC-A100,,正常列,,,\n,CNC-A100,,缺code的異常列,,,\n")},
+        content_type="multipart/form-data",
+    )
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body["row_count"] == 1
+    assert body["will_create"] == 1
+    assert body["errors"] == []
+    assert body["flagged_row_count"] == 1
+    assert body["flagged_rows"][0]["row"] == 3
+    assert "code 為必填" in body["flagged_rows"][0]["reason"]
+
+
+def test_commit_flags_row_errors_for_review_without_blocking_normal_rows(client, monkeypatch):
+    """commit 遇到單一列格式異常時，正常列照樣真的寫入 alarms，異常列
+    改呼叫 pending_alarm_import_store.create() 送進待審——不是整批擋下
+    （PendingAlarmImportStore 只服務 Supabase，這裡的 client fixture 是
+    JsonStore 環境，create() 本身是 no-op，這裡驗證的是端點層有沒有
+    正確呼叫，不是 Supabase 真的寫入成功，見 CLAUDE.md「測試的能力
+    邊界」）。"""
+    import storage as storage_mod
+
+    create_calls = []
+    monkeypatch.setattr(
+        storage_mod.pending_alarm_import_store, "create",
+        lambda **kw: create_calls.append(kw) or {},
+    )
+
+    r = client.post(
+        "/api/admin/bulk-import/local/commit",
+        data={
+            "file": _csv_file(f"{CSV_HEADER}\nE778,CNC-A100,,正常列,,降低轉速,\n,CNC-A100,,缺code的異常列,,,\n"),
+            "import_mode": "upsert",
+        },
+        content_type="multipart/form-data",
+    )
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body["succeeded"] == 1
+    assert body["flagged"] == 1
+
+    listed = client.get("/api/alarms").get_json()
+    assert any(a["code"] == "E778" for a in listed)
+
+    assert len(create_calls) == 1
+    kw = create_calls[0]
+    assert kw["department"] == "local"
+    assert kw["device_model"] == "CNC-A100"
+    assert kw["code"] == ""  # 缺值的欄位仍要能寫進待審表，這正是待審機制存在的意義
+    assert kw["source"] == "bulk_import"
+    assert "code 為必填" in kw["flagged_reason"]
+
+
 def test_commit_invalid_import_mode_rejected(client):
     r = client.post(
         "/api/admin/bulk-import/local/commit",

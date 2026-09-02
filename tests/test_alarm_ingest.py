@@ -158,12 +158,20 @@ def test_row_to_alarm_rejects_invalid_sol_steps_json():
 CSV_HEADER = "code,device_model,variant,description,cause,solution,local_solution"
 
 
-def test_load_csv_reports_line_number_on_error(tmp_path):
+def test_load_csv_collects_row_error_with_line_number_instead_of_raising(tmp_path):
+    """單一列格式異常（這裡是第 3 行缺 code）不再讓整份來源解析失敗——
+    改成收集進 row_errors，第 2 行的正常列仍要能正常解析出來（見
+    parse.py load_csv() 的新行為：只有表頭/檔案層級錯誤才整批 raise）。"""
     from alarm_ingest import load_csv
     csv_path = tmp_path / "bad.csv"
     csv_path.write_text(f"{CSV_HEADER}\nE1,M1,,,,,\n,M2,,,,,\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="第 3 行"):
-        load_csv(csv_path)
+    rows, row_errors = load_csv(csv_path)
+    assert len(rows) == 1
+    assert rows[0]["code"] == "E1"
+    assert len(row_errors) == 1
+    assert row_errors[0]["row"] == 3
+    assert "code 為必填" in row_errors[0]["reason"]
+    assert row_errors[0]["raw"]["device_model"] == "M2"
 
 
 def test_load_csv_missing_required_header_rejected(tmp_path):
@@ -195,11 +203,12 @@ def test_load_csv_header_tolerates_case_and_whitespace(tmp_path):
         "E1,M1,,主軸過載,負荷過大,降低進給,\n",
         encoding="utf-8",
     )
-    rows = load_csv(csv_path)
+    rows, row_errors = load_csv(csv_path)
     assert len(rows) == 1
     assert rows[0]["code"] == "E1"
     assert rows[0]["device_model"] == "M1"
     assert rows[0]["cause"] == "負荷過大"
+    assert row_errors == []
 
 
 def test_load_csv_full_template_parses_correctly(tmp_path):
@@ -208,21 +217,27 @@ def test_load_csv_full_template_parses_correctly(tmp_path):
     csv_path.write_text(
         f"{CSV_HEADER}\nE1,M1,,主軸過載,負荷過大,降低進給,\n", encoding="utf-8"
     )
-    rows = load_csv(csv_path)
+    rows, row_errors = load_csv(csv_path)
     assert len(rows) == 1
     assert rows[0]["code"] == "E1"
     assert rows[0]["description"] == "主軸過載"
+    assert row_errors == []
 
 
-def test_load_json_reports_row_number_on_error(tmp_path):
+def test_load_json_collects_row_error_with_row_number_instead_of_raising(tmp_path):
     from alarm_ingest import load_json
     json_path = tmp_path / "bad.json"
     json_path.write_text(json.dumps([
         {"code": "E1", "device_model": "M1"},
         {"code": "", "device_model": "M2"},
     ]), encoding="utf-8")
-    with pytest.raises(ValueError, match="第 2 筆"):
-        load_json(json_path)
+    rows, row_errors = load_json(json_path)
+    assert len(rows) == 1
+    assert rows[0]["code"] == "E1"
+    assert len(row_errors) == 1
+    assert row_errors[0]["row"] == 2
+    assert "code 為必填" in row_errors[0]["reason"]
+    assert row_errors[0]["raw"] == {"code": "", "device_model": "M2"}
 
 
 def test_load_json_rejects_non_list_content(tmp_path):
@@ -757,8 +772,9 @@ def test_load_excel_parses_first_sheet_with_fixed_headers(tmp_path):
         ["E1", "M1", "", "主軸過載", "負荷過大", "降低進給", ""],
         ["E2", "M1", "V1", "警報二", "", "", "現場處置"],
     ])
-    rows = load_excel(xlsx_path)
+    rows, row_errors = load_excel(xlsx_path)
     assert len(rows) == 2
+    assert row_errors == []
 
 
 def test_load_excel_handles_int_typed_code(tmp_path):
@@ -769,7 +785,7 @@ def test_load_excel_handles_int_typed_code(tmp_path):
     _write_excel(xlsx_path, EXCEL_HEADERS, [
         [31033, "M1", "", "整數型代碼", "", "", ""],
     ])
-    rows = load_excel(xlsx_path)
+    rows, row_errors = load_excel(xlsx_path)
     assert rows[0]["code"] == "31033"
 
 
@@ -807,21 +823,26 @@ def test_load_excel_header_tolerates_case_and_whitespace(tmp_path):
         ["CODE", " Device_Model ", "Variant", "Description", "CAUSE", "Solution", "Local_Solution"],
         [["E1", "M1", "", "d", "負荷過大", "", ""]],
     )
-    rows = load_excel(xlsx_path)
+    rows, row_errors = load_excel(xlsx_path)
     assert len(rows) == 1
     assert rows[0]["code"] == "E1"
     assert rows[0]["cause"] == "負荷過大"
+    assert row_errors == []
 
 
-def test_load_excel_reports_row_number_on_error(tmp_path):
+def test_load_excel_collects_row_error_with_row_number_instead_of_raising(tmp_path):
     from alarm_ingest import load_excel
     xlsx_path = tmp_path / "bad.xlsx"
     _write_excel(xlsx_path, EXCEL_HEADERS, [
         ["E1", "M1", "", "", "", "", ""],
         ["", "M2", "", "", "", "", ""],  # 第 3 列缺 code
     ])
-    with pytest.raises(ValueError, match="第 3 列"):
-        load_excel(xlsx_path)
+    rows, row_errors = load_excel(xlsx_path)
+    assert len(rows) == 1
+    assert rows[0]["code"] == "E1"
+    assert len(row_errors) == 1
+    assert row_errors[0]["row"] == 3
+    assert "code 為必填" in row_errors[0]["reason"]
 
 
 def test_load_excel_skips_blank_trailing_rows(tmp_path):
@@ -834,9 +855,10 @@ def test_load_excel_skips_blank_trailing_rows(tmp_path):
         ["E1", "M1", "", "desc", "", "", ""],
         [None, None, None, None, None, None, None],
     ])
-    rows = load_excel(xlsx_path)
+    rows, row_errors = load_excel(xlsx_path)
     assert len(rows) == 1
     assert rows[0]["code"] == "E1"
+    assert row_errors == []
 
 
 def test_load_excel_empty_file_rejected(tmp_path):
@@ -853,8 +875,9 @@ def test_load_file_dispatches_xlsx_to_load_excel(tmp_path):
     from alarm_ingest import load_file
     xlsx_path = tmp_path / "good.xlsx"
     _write_excel(xlsx_path, EXCEL_HEADERS, [["E1", "M1", "", "d", "", "", ""]])
-    rows = load_file(xlsx_path)
+    rows, row_errors = load_file(xlsx_path)
     assert len(rows) == 1
+    assert row_errors == []
     assert rows[0]["code"] == "E1"
 
 

@@ -786,9 +786,10 @@ def create_app() -> Flask:
     # 的情況不會發生（第 3.2 節）。
 
     def _bulk_import_read_upload(target: str):
-        """兩支端點共用的上傳檔案讀取與初步解析，回傳 rows（解析成功）
-        或直接 abort（讀取/解析/筆數超限失敗）。target 只用於錯誤訊息，
-        不影響解析邏輯本身。"""
+        """兩支端點共用的上傳檔案讀取與初步解析，回傳 (rows, row_errors)
+        （解析成功，row_errors 是單一列格式異常的清單，見 parse.py
+        load_csv() 說明）或直接 abort（讀取/檔案層級解析失敗/筆數超限）。
+        target 只用於錯誤訊息，不影響解析邏輯本身。"""
         if "file" not in request.files:
             abort(400, "缺少上傳檔案（form field 需為 file）")
         upload = request.files["file"]
@@ -813,24 +814,32 @@ def create_app() -> Flask:
             tmp_path = Path(tmp.name)
         try:
             try:
-                rows = ingest_load_file(tmp_path)
+                rows, row_errors = ingest_load_file(tmp_path)
             except ValueError as e:
                 abort(400, str(e))
         finally:
             tmp_path.unlink(missing_ok=True)
 
-        if len(rows) > BULK_IMPORT_MAX_ROWS:
-            abort(400, f"來源筆數 {len(rows)} 超過上限 {BULK_IMPORT_MAX_ROWS} 筆")
-        if not rows:
+        total = len(rows) + len(row_errors)
+        if total > BULK_IMPORT_MAX_ROWS:
+            abort(400, f"來源筆數 {total} 超過上限 {BULK_IMPORT_MAX_ROWS} 筆")
+        if not rows and not row_errors:
             abort(400, "來源沒有任何資料列")
-        return rows
+        return rows, row_errors
 
-    def _bulk_import_validate(rows: list, target: str) -> dict:
+    def _bulk_import_validate(rows: list, target: str, row_errors: list = None) -> dict:
         """preview 與 commit 共用的驗證 pipeline（PLAN 3.2 節：兩者必須
         跑完全相同的檢查，差別只在有沒有寫入）。回傳結構化結果，errors
-        非空時 commit 端點會拒絕寫入。"""
+        非空時 commit 端點會拒絕寫入。
+
+        row_errors（parse.py load_*() 收集到的單一列格式異常，見
+        _bulk_import_read_upload()）不影響 errors/rows 本身的驗證邏輯——
+        這些列已經在解析階段被排除在 rows 之外，這裡只是把它們原樣
+        帶入回傳結構的 flagged_rows，讓 preview/commit 都能呈現「這些
+        列會被標記待審」，不是「整批被擋下」的第三種結果。"""
         errors = []
         warnings = []
+        row_errors = row_errors or []
 
         dupes = ingest_dedupe_check(rows)
         if dupes:
@@ -921,6 +930,8 @@ def create_app() -> Flask:
 
         return {
             "row_count": len(rows),
+            "flagged_row_count": len(row_errors),
+            "flagged_rows": [{"row": e["row"], "reason": e["reason"]} for e in row_errors],
             "device_models": sorted(model_counts.keys()),
             "will_create": will_create,
             "will_update": will_update,
@@ -936,16 +947,41 @@ def create_app() -> Flask:
     @admin_required
     def bulk_import_preview(department: str):
         target = resolve_target_department(department)
-        rows = _bulk_import_read_upload(target)
-        result = _bulk_import_validate(rows, target)
+        rows, row_errors = _bulk_import_read_upload(target)
+        result = _bulk_import_validate(rows, target, row_errors)
         return jsonify(result)
+
+    def _flag_row_errors_for_review(row_errors: list, department: str) -> int:
+        """把解析階段收集到的單一列格式異常寫進 pending_alarm_imports，
+        供人工審核（accept 後才真的進 alarms）。raw 序列化成人類可讀
+        文字而非 jsonb——migration 010 的 raw_source_text 是給人追溯讀
+        的顯示用快照，不是要被程式再次解析的結構化資料（見 schema 註解）。
+        code/device_model 缺值時仍要能寫進這張表（不受 alarms 的 not
+        null 限制——這正是待審表存在的意義），這裡固定填空字串。"""
+        for e in row_errors:
+            raw = e["raw"]
+            raw_text = "\n".join(f"{k}: {v}" for k, v in raw.items())
+            pending_alarm_import_store.create(
+                department=department,
+                device_model=(raw.get("device_model") or "").strip(),
+                code=(raw.get("code") or "").strip(),
+                variant=normalize_variant(raw.get("variant") or ""),
+                description=(raw.get("description") or "").strip(),
+                source="bulk_import",
+                flagged_reason=e["reason"],
+                severity=(raw.get("severity") or "").strip() or None,
+                cause=(raw.get("cause") or "").strip() or None,
+                solution=(raw.get("solution") or "").strip() or None,
+                raw_source_text=raw_text,
+            )
+        return len(row_errors)
 
     @app.post("/api/admin/bulk-import/<department>/commit")
     @admin_required
     def bulk_import_commit(department: str):
         target = resolve_target_department(department)
-        rows = _bulk_import_read_upload(target)
-        validation = _bulk_import_validate(rows, target)
+        rows, row_errors = _bulk_import_read_upload(target)
+        validation = _bulk_import_validate(rows, target, row_errors)
         if validation["errors"]:
             abort(400, "驗證未通過，未寫入任何資料：" +
                   "；".join(e["message"] for e in validation["errors"]))
@@ -961,6 +997,7 @@ def create_app() -> Flask:
             abort(400, f"import_mode 必須為 upsert 或 append，收到：{import_mode!r}")
 
         result = ingest_commit_rows(rows, department=target, import_mode=import_mode)
+        result["flagged"] = _flag_row_errors_for_review(row_errors, target)
 
         if accept_incomplete:
             # 同一支 CLI 用的 operation 名稱，稽核查詢時不用分別記兩種

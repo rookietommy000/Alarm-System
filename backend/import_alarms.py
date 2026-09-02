@@ -96,9 +96,18 @@ def main():
         sys.exit(1)
 
     try:
-        rows = load_file(file_path)
+        rows, row_errors = load_file(file_path)
     except ValueError as e:
         print(f"錯誤：檔案解析失敗 — {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # CLI 是技術端手動操作的離線工具，不進後台 API 專屬的
+    # pending_alarm_imports 待審機制——格式異常的列一律視為整批失敗，
+    # 維持原本嚴格把關的行為，不自動略過或部分寫入。
+    if row_errors:
+        print(f"錯誤：來源有 {len(row_errors)} 筆格式異常，整批中止，未寫入任何一筆：", file=sys.stderr)
+        for e in row_errors:
+            print(f"  - 第 {e['row']} 筆：{e['reason']}", file=sys.stderr)
         sys.exit(1)
 
     if not rows:
