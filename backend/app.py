@@ -594,13 +594,15 @@ def create_app() -> Flask:
     @login_required
     def get_alarm(department: str, device_model: str, code: str):
         # variant 走 query string，精確查詢——找不到就 404，不回傳「隨便
-        # 一筆看起來合理但其實是另一個變體」的資料。這支端點目前沒有
-        # 任何前端呼叫端，但契約維持跟既有一致（回單一物件），不要為了
-        # 猜測中的未來用途（前台多變體選擇 UI）改成回陣列——真的要做時
-        # 需求可能長得完全不一樣（例如另開一支 .../variants 端點，或
-        # 前台直接用 GET /api/alarms 全量查詢+前端篩選，不需要這支）。
-        # 見 update_alarm 同樣的說明：variant 不是租戶邊界，走 query
-        # string 不影響 resolve_target_department() 只讀 path 的規則。
+        # 一筆看起來合理但其實是另一個變體」的資料。前台 index.html 的
+        # openRecentQuery()（2026-09-02 起）是目前唯一的呼叫端，用來把
+        # localStorage 存的簡化查詢紀錄換回完整資料再開 detail——契約
+        # 維持回單一物件不要改成回陣列，這支端點的用途已經明確不是
+        # 「前台多變體選擇 UI」那種列出所有 variant 候選的情境（那個
+        # 需求改天真的要做的話會長得完全不一樣，例如另開一支
+        # .../variants 端點）。見 update_alarm 同樣的說明：variant 不是
+        # 租戶邊界，走 query string 不影響 resolve_target_department()
+        # 只讀 path 的規則。
         target = resolve_target_department(department)
         variant = normalize_variant(request.args.get("variant", ""))
         row = alarms_store.get_one(department=target, match={
