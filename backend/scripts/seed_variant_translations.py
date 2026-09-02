@@ -25,6 +25,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
+
 
 def _load_translations(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
