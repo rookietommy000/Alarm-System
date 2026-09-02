@@ -41,6 +41,8 @@ ROUTE_AUTH_REGISTRY = {
     ("/api/alarms/<department>/<device_model>/<code>/suggestions", "POST"): "login",
     ("/api/admin/suggestions", "GET"): "admin",
     ("/api/admin/suggestions/<int:suggestion_id>", "PUT"): "admin",
+    ("/api/admin/pending-alarm-imports", "GET"): "admin",
+    ("/api/admin/pending-alarm-imports/<int:import_id>", "PUT"): "admin",
     ("/api/alarms/<department>/<device_model>/<code>/history", "GET"): "login",
 
     ("/api/devices", "GET"): "login",

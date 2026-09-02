@@ -1884,6 +1884,82 @@ class SemanticReviewStore:
         urllib.request.urlopen(req)
 
 
+class PendingAlarmImportStore:
+    """異常匯入資料的待審清單（見 migration 010_add_pending_alarm_
+    imports.sql）。比照 AlarmSuggestionStore 的既有模式（storage.py
+    AlarmSuggestionStore 類別）：只服務 Supabase，_use_supabase()=False
+    時讀回空清單、寫入 no-op；review() 只單純更新這張表本身的狀態，
+    不負責把資料寫進 alarms——跨 store 的編排（組裝完整 alarm dict、
+    呼叫 alarms_store.upsert_one()、稽核軌跡）放在 app.py 端點層，
+    理由同 AlarmSuggestionStore 的既有分工：跨 store 協調本來就該在
+    應用層，不是 store 層，避免 store 之間互相耦合。
+
+    跟 alarm_suggestions 的關鍵差異：這張表**不對 alarms 設外鍵**——
+    待審資料指向的 (department, device_model, code, variant) 在 alarms
+    表裡本來就還不存在，這正是「異常/新資料要先審核」的本質，若照抄
+    alarm_suggestions 的外鍵約束會直接擋住所有正常的待審資料寫入
+    （見 migration 010 開頭的完整說明）。
+    """
+
+    _TABLE = "pending_alarm_imports"
+
+    def _base_key(self):
+        base = os.environ.get("SUPABASE_URL", "").rstrip("/")
+        key = os.environ.get("SUPABASE_KEY", "")
+        return base, key
+
+    def _req(self, method: str, path: str, body=None, extra_headers: Optional[dict] = None):
+        base, key = self._base_key()
+        headers = {
+            "apikey": key,
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+        }
+        if extra_headers:
+            headers.update(extra_headers)
+        data = json.dumps(body).encode() if body is not None else None
+        req = urllib.request.Request(f"{base}/rest/v1/{path}", data=data,
+                                     headers=headers, method=method)
+        with urllib.request.urlopen(req) as r:
+            raw = r.read().decode()
+            return json.loads(raw) if raw.strip() else []
+
+    def list_pending(self, department: Optional[str]) -> list:
+        """待審清單，依 scope_department() 過濾（department=None 是總管
+        不過濾的明確選擇，同 alarms_store.load() 一致的既有原則）。"""
+        if not _use_supabase():
+            return []
+        qs = "select=*&status=eq.pending&order=submitted_at.desc"
+        if department is not None:
+            qs += f"&department=eq.{urllib.parse.quote(department, safe='')}"
+        return self._req("GET", f"{self._TABLE}?{qs}")
+
+    def get_by_id(self, import_id: int) -> Optional[dict]:
+        if not _use_supabase():
+            return None
+        result = self._req("GET", f"{self._TABLE}?id=eq.{import_id}&select=*")
+        return result[0] if result else None
+
+    def review(self, import_id: int, status: str, reviewed_by: str,
+               review_note: Optional[str]) -> Optional[dict]:
+        """更新這張表本身的審核狀態，status 只接受 approved/rejected
+        （由呼叫端 app.py 驗證，這裡不重複檢查，維持 store 層單純負責
+        存取——同 AlarmSuggestionStore.review() 的既有分工）。不負責
+        把資料寫進 alarms，那是呼叫端在確認這裡更新成功後另外呼叫
+        alarms_store.upsert_one() 的責任。"""
+        if not _use_supabase():
+            return None
+        patch = {
+            "status": status, "reviewed_by": reviewed_by,
+            "reviewed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if review_note is not None:
+            patch["review_note"] = review_note
+        result = self._req("PATCH", f"{self._TABLE}?id=eq.{import_id}", patch,
+                           extra_headers={"Prefer": "return=representation"})
+        return result[0] if result else None
+
+
 _ALARMS_CACHE_TTL_SECONDS = 60  # PLAN 效能優化第 4 項：mf4d 部門 1759 筆分頁查詢實測約 1.6 秒
 
 if _use_supabase():
@@ -1904,3 +1980,4 @@ ai_scan_store = AiScanStore()
 import_snapshot_store = ImportSnapshotStore()
 variant_translation_store = VariantTranslationStore()
 semantic_review_store = SemanticReviewStore()
+pending_alarm_import_store = PendingAlarmImportStore()

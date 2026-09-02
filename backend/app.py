@@ -22,7 +22,8 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 from storage import (
     ai_scan_store, alarm_suggestion_store, alarms_store, audit_logger, department_store,
-    devices_store, feedback_store, login_attempt_store, view_store, _use_supabase,
+    devices_store, feedback_store, login_attempt_store, pending_alarm_import_store, view_store,
+    _use_supabase,
 )
 from alarm_ingest import (
     load_file as ingest_load_file,
@@ -1473,6 +1474,72 @@ def create_app() -> Flask:
             updated = alarm_suggestion_store.review(suggestion_id, "accepted", reviewer, note)
         else:
             updated = alarm_suggestion_store.review(suggestion_id, "rejected", reviewer, note)
+        return jsonify(updated)
+
+    # ── 異常匯入資料待審核（PendingAlarmImportStore，見 migration
+    #    010_add_pending_alarm_imports.sql）─────────────────────────────
+    #
+    # 跟 suggestion 的 accept 分支關鍵差異：這次是寫入 alarms 全新一列
+    # （upsert_one()），不是改既有列（patch_one()）——待審資料指向的
+    # (department, device_model, code, variant) 在 alarms 表裡本來就
+    # 還不存在，這正是「異常/新資料要先審核」的本質。稽核動作記
+    # "CREATE"（同 create_alarm() 端點的既有慣例），old_data 一律
+    # None——新增本來就沒有舊值可對照。
+
+    @app.get("/api/admin/pending-alarm-imports")
+    @admin_required
+    def list_pending_alarm_imports():
+        scope, dept = scope_department()
+        rows = pending_alarm_import_store.list_pending(department=(dept if scope == DeptScope.DEPT else None))
+        return jsonify(rows)
+
+    @app.put("/api/admin/pending-alarm-imports/<int:import_id>")
+    @admin_required
+    def review_pending_alarm_import(import_id: int):
+        row = pending_alarm_import_store.get_by_id(import_id)
+        if row is None:
+            abort(404, "找不到此待審資料")
+        scope, dept = scope_department()
+        if scope == DeptScope.DEPT and row["department"] != dept:
+            abort(404, NOT_FOUND_MSG)  # 不透露其他部門的待審資料存在（同三段式路由 404 的一貫做法）
+        if row["status"] != "pending":
+            abort(409, "這筆待審資料已經審核過了")
+        body = request.get_json(silent=True) or {}
+        action = body.get("action")
+        if action not in ("accept", "reject"):
+            abort(400, "action 必須是 accept 或 reject")
+        role = "superadmin" if is_superadmin() else "admin"
+        # 一律用待審資料所屬的部門（row["department"]），不是審核者的
+        # 檢視範圍——同 review_suggestion() 的既有原則，超管在 ?dept=
+        # 模式下審核時兩者可能不同。
+        reviewer = f"{row['department']}/{role}"
+        note = (body.get("review_note") or "").strip() or None
+        if action == "accept":
+            # 明確逐一列出四欄主鍵，不用 row.get("variant") 這種可能漏帶
+            # 導致 None 的寫法——upsert_one() 不像 get_one()/patch_one()/
+            # delete_one() 有 _require_full_pk_match() 這層結構性保護，
+            # variant 若真的傳 None 會被 PostgREST 當成 NULL 寫入，撞上
+            # migration 006 記載過的「複合主鍵含 NULL 是已知的坑」，這裡
+            # 一律用 row.get("variant") or "" 確保 variant 至少是空字串，
+            # 不會是 None（跟 migration 010 的 not null default '' 一致）。
+            department = row["department"]
+            device_model = row["device_model"]
+            code = row["code"]
+            variant = row.get("variant") or ""
+            new_alarm = {
+                "department": department, "device_model": device_model,
+                "code": code, "variant": variant, "description": row["description"],
+            }
+            for optional_field in ("severity", "cause", "solution", "keywords", "sol_steps"):
+                if row.get(optional_field) is not None:
+                    new_alarm[optional_field] = row[optional_field]
+            new_row = alarms_store.upsert_one(
+                new_alarm, department=department,
+                on_conflict="department,device_model,code,variant")
+            audit_logger.log("CREATE", department=department, new_data=new_row)
+            updated = pending_alarm_import_store.review(import_id, "approved", reviewer, note)
+        else:
+            updated = pending_alarm_import_store.review(import_id, "rejected", reviewer, note)
         return jsonify(updated)
 
     @app.post("/api/feedback")
