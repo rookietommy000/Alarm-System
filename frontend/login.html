@@ -349,8 +349,18 @@
     // 送出前記住這次選的部門——原生表單送出會整頁跳轉，必須在跳轉前寫入。
     // 登入密碼是否正確跟這個記錄無關：就算密碼錯誤重新導回登入頁，記住的
     // 仍是使用者「想登入」的部門，下次還是幫他置頂，這是預期行為。
+    //
+    // 送出中的按鈕狀態（UI/UX 檢查發現：正常送出路徑完全沒有 loading
+    // 回饋，只有 429 節流分支才有 UI 狀態，使用者反映過乾等、感覺卡卡
+    // 的）。不 preventDefault()——原生表單照常送出整頁導航，這裡只是
+    // 在導航發生前的短暫時間窗把按鈕 disable+換文字，讓使用者不會誤以
+    // 為沒反應而重複點擊；頁面卸載後這個狀態自然隨舊頁面一起消失，不
+    // 需要額外收尾。
     document.getElementById('loginForm').addEventListener('submit', () => {
       if (selectedDept) localStorage.setItem(LAST_DEPT_KEY, selectedDept);
+      const btn = document.getElementById('submitBtn');
+      btn.disabled = true;
+      btn.textContent = '登入中…';
     });
 
     // 「重新選擇部門」：舊版單部門系統遺留的「返回入口」按鈕原本連到 /，

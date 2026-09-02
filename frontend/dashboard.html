@@ -739,7 +739,7 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
                   <td style="font-variant-numeric:tabular-nums">{{ d.scans }}</td>
                   <td style="font-variant-numeric:tabular-nums" :style="{color: d.fail_rate >= 20 ? '#a23b3b' : 'inherit'}">{{ d.fail_rate }}%</td>
                   <td style="text-align:right; white-space:nowrap">
-                    <button class="btn btn-ghost btn-danger" @click="removeDevice(d)">刪除</button>
+                    <button class="btn btn-ghost btn-danger" @click="removeDevice(d)" :disabled="writeBusy.removeDevice">{{ writeBusy.removeDevice ? '刪除中…' : '刪除' }}</button>
                   </td>
                 </tr>
               </tbody>
@@ -818,11 +818,11 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
       <div class="field"><label>關鍵字（以逗號分隔）</label><input class="input" v-model="alarmKeywordsText" /></div>
       <p v-if="alarmError" style="color:#a23b3b; font-size:13px; margin:0">{{ alarmError }}</p>
       <div class="dialog-actions">
-        <button v-if="!isNewAlarm" class="btn btn-ghost btn-danger" @click="removeAlarm">刪除</button>
+        <button v-if="!isNewAlarm" class="btn btn-ghost btn-danger" @click="removeAlarm" :disabled="writeBusy.removeAlarm || writeBusy.saveAlarm">{{ writeBusy.removeAlarm ? '刪除中…' : '刪除' }}</button>
         <div v-else></div>
         <div style="display:flex; gap:8px">
           <button class="btn btn-secondary" @click="alarmDraft = null">取消</button>
-          <button class="btn btn-primary" @click="saveAlarm">儲存</button>
+          <button class="btn btn-primary" @click="saveAlarm" :disabled="writeBusy.saveAlarm || writeBusy.removeAlarm">{{ writeBusy.saveAlarm ? '儲存中…' : '儲存' }}</button>
         </div>
       </div>
     </div>
@@ -1093,7 +1093,7 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
         <div></div>
         <div style="display:flex; gap:8px">
           <button class="btn btn-secondary" @click="deviceDraft = null">取消</button>
-          <button class="btn btn-primary" @click="saveDevice">建立機種</button>
+          <button class="btn btn-primary" @click="saveDevice" :disabled="writeBusy.saveDevice">{{ writeBusy.saveDevice ? '建立中…' : '建立機種' }}</button>
         </div>
       </div>
     </div>
@@ -1123,7 +1123,7 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
         <div></div>
         <div style="display:flex; gap:8px">
           <button class="btn btn-secondary" @click="closeDeptDialog">取消</button>
-          <button class="btn btn-primary" @click="createDept">建立部門</button>
+          <button class="btn btn-primary" @click="createDept" :disabled="writeBusy.createDept">{{ writeBusy.createDept ? '建立中…' : '建立部門' }}</button>
         </div>
       </div>
     </div>
@@ -1149,7 +1149,7 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
         <div></div>
         <div style="display:flex; gap:8px">
           <button class="btn btn-secondary" @click="closeDeptDialog">取消</button>
-          <button class="btn btn-primary" @click="saveDeptEdit">儲存</button>
+          <button class="btn btn-primary" @click="saveDeptEdit" :disabled="writeBusy.saveDeptEdit">{{ writeBusy.saveDeptEdit ? '儲存中…' : '儲存' }}</button>
         </div>
       </div>
     </div>
@@ -1173,7 +1173,7 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
         <div></div>
         <div style="display:flex; gap:8px">
           <button class="btn btn-secondary" @click="closeDeptDialog">取消</button>
-          <button class="btn btn-primary" @click="resetDeptPassword">重設並登出所有人</button>
+          <button class="btn btn-primary" @click="resetDeptPassword" :disabled="writeBusy.resetDeptPassword">{{ writeBusy.resetDeptPassword ? '重設中…' : '重設並登出所有人' }}</button>
         </div>
       </div>
     </div>
@@ -1194,7 +1194,7 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
         <div></div>
         <div style="display:flex; gap:8px">
           <button class="btn btn-secondary" @click="closeDeptDialog">取消</button>
-          <button class="btn btn-primary" @click="toggleDeptActive">確定{{ deptTarget.active ? '停用' : '啟用' }}</button>
+          <button class="btn btn-primary" @click="toggleDeptActive" :disabled="writeBusy.toggleDeptActive">{{ writeBusy.toggleDeptActive ? '處理中…' : `確定${deptTarget.active ? '停用' : '啟用'}` }}</button>
         </div>
       </div>
     </div>
@@ -1239,9 +1239,9 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
           :class="{matched: delConfirmMatched, mismatched: delConfirmText && !delConfirmMatched}" />
         <div class="dialog-actions">
           <button class="btn btn-secondary" @click="closeDeptDialog">取消</button>
-          <button class="btn" :disabled="!delConfirmMatched"
+          <button class="btn" :disabled="!delConfirmMatched || writeBusy.doDeleteDept"
             :style="delConfirmMatched ? 'background:#a23b3b; border-color:#a23b3b; color:#f7f2ef' : ''"
-            @click="doDeleteDept">永久刪除 {{ deptTarget.name }}</button>
+            @click="doDeleteDept">{{ writeBusy.doDeleteDept ? '刪除中…' : `永久刪除 ${deptTarget.name}` }}</button>
         </div>
       </template>
 
@@ -1296,6 +1296,15 @@ createApp({
       },
       nowLabel: '',
       cleaningUp: false,
+      // 後台寫入類按鈕的「送出中」狀態（UI/UX 檢查發現：這幾個端點
+      // 原本送出後沒有 :disabled+loading，Render 單 worker 下重複
+      // 提交會排隊，刪除/重設密碼這類操作重複觸發有實際資料風險）。
+      // 每個操作各自一個 key，不共用同一個 boolean——同一個對話框裡
+      // 「儲存」跟「刪除」是兩個不同按鈕，要能分別顯示各自的忙碌文字，
+      // 不能一個在忙另一個看起來也被鎖住卻沒有對應文字說明原因。
+      writeBusy: { saveAlarm: false, removeAlarm: false, saveDevice: false, removeDevice: false,
+                   createDept: false, saveDeptEdit: false, resetDeptPassword: false,
+                   toggleDeptActive: false, doDeleteDept: false },
 
       // ── 多部門狀態（PLAN 5.2/5.2.1 節）──
       whoami: { auth: false, admin: false, superadmin: false, department: null, department_name: null },
@@ -2043,6 +2052,7 @@ createApp({
 
     async saveAlarm() {
       this.alarmError = '';
+      this.writeBusy.saveAlarm = true;
       try {
         const payload = { ...this.alarmDraft, keywords: this.alarmKeywordsText.split(',').map(s=>s.trim()).filter(Boolean) };
         const dept = this.writeDept();
@@ -2056,12 +2066,13 @@ createApp({
         await this.load();
         this.alarmDraft = null;
         this.showToast(msg);
-      } catch(e) { this.alarmError = '儲存失敗'; }
+      } catch(e) { this.alarmError = '儲存失敗'; } finally { this.writeBusy.saveAlarm = false; }
     },
     async removeAlarm() {
       if (!confirm(`確定刪除 ${this.alarmDraft.code}？`)) return;
       const code = this.alarmDraft.code;
       const dept = this.writeDept();
+      this.writeBusy.removeAlarm = true;
       try {
         const r = await AlarmApi.delete(`/api/alarms/${encodeURIComponent(dept)}/${encodeURIComponent(this.alarmDraft.device_model)}/${encodeURIComponent(code)}`);
         if (!r.ok) { this.alarmError = '刪除失敗'; return; }
@@ -2070,6 +2081,8 @@ createApp({
         this.showToast(`已刪除 ${code}`);
       } catch (e) {
         this.alarmError = e.isNetworkError ? e.message : '刪除失敗，請稍後再試';
+      } finally {
+        this.writeBusy.removeAlarm = false;
       }
     },
 
@@ -2081,6 +2094,7 @@ createApp({
       this.deviceError = '';
       if (!this.deviceDraft.model.trim()) { this.deviceError = '機種代號為必填'; return; }
       const dept = this.writeDept();
+      this.writeBusy.saveDevice = true;
       try {
         const r = await AlarmApi.post(`/api/devices/${encodeURIComponent(dept)}`, this.deviceDraft);
         if (r.status === 403) { location.href = '/admin/login'; return; }
@@ -2091,11 +2105,14 @@ createApp({
         this.showToast(`已建立機種 ${model}`);
       } catch (e) {
         this.deviceError = e.isNetworkError ? e.message : '建立失敗，請稍後再試';
+      } finally {
+        this.writeBusy.saveDevice = false;
       }
     },
     async removeDevice(d) {
       if (!confirm(`確定刪除機種 ${d.model}？`)) return;
       const dept = this.isSuper ? (d.department || this.viewDept) : this.whoami.department;
+      this.writeBusy.removeDevice = true;
       try {
         const r = await AlarmApi.delete(`/api/devices/${encodeURIComponent(dept)}/${encodeURIComponent(d.model)}`);
         if (!r.ok) { this.showToast('刪除失敗'); return; }
@@ -2103,6 +2120,8 @@ createApp({
         this.showToast(`已刪除 ${d.model}`);
       } catch (e) {
         this.showToast(e.isNetworkError ? e.message : '刪除失敗，請稍後再試');
+      } finally {
+        this.writeBusy.removeDevice = false;
       }
     },
 
@@ -2119,6 +2138,7 @@ createApp({
     },
     async createDept() {
       this.deptError = '';
+      this.writeBusy.createDept = true;
       try {
         const r = await AlarmApi.post('/api/admin/departments', this.deptCreateDraft);
         if (!r.ok) { this.deptError = (await r.json()).error || '建立失敗'; return; }
@@ -2128,6 +2148,8 @@ createApp({
         this.showToast(`已建立部門 ${name}`);
       } catch (e) {
         this.deptError = e.isNetworkError ? e.message : '建立失敗，請稍後再試';
+      } finally {
+        this.writeBusy.createDept = false;
       }
     },
     openEditDept(d) {
@@ -2140,6 +2162,7 @@ createApp({
       this.deptError = '';
       const name = this.deptEditDraft.name.trim();
       if (!name) { this.deptError = '顯示名稱不可為空'; return; }
+      this.writeBusy.saveDeptEdit = true;
       try {
         const r = await AlarmApi.put(`/api/admin/departments/${encodeURIComponent(this.deptTargetId)}`, { name });
         if (!r.ok) { this.deptError = (await r.json()).error || '儲存失敗'; return; }
@@ -2148,6 +2171,8 @@ createApp({
         this.showToast('部門名稱已更新');
       } catch (e) {
         this.deptError = e.isNetworkError ? e.message : '儲存失敗，請稍後再試';
+      } finally {
+        this.writeBusy.saveDeptEdit = false;
       }
     },
     openResetPw(d) {
@@ -2161,6 +2186,7 @@ createApp({
       const body = {};
       if (this.deptResetDraft.password) body.password = this.deptResetDraft.password;
       if (this.deptResetDraft.admin_password) body.admin_password = this.deptResetDraft.admin_password;
+      this.writeBusy.resetDeptPassword = true;
       try {
         const r = await AlarmApi.put(`/api/admin/departments/${encodeURIComponent(this.deptTargetId)}/reset-password`, body);
         if (!r.ok) { this.deptError = (await r.json()).error || '重設失敗'; return; }
@@ -2168,6 +2194,8 @@ createApp({
         this.showToast('密碼已重設，該部門所有裝置已登出');
       } catch (e) {
         this.deptError = e.isNetworkError ? e.message : '重設失敗，請稍後再試';
+      } finally {
+        this.writeBusy.resetDeptPassword = false;
       }
     },
     openToggleActive(d) {
@@ -2177,6 +2205,7 @@ createApp({
     },
     async toggleDeptActive() {
       const target = this.deptTarget;
+      this.writeBusy.toggleDeptActive = true;
       try {
         const r = await AlarmApi.put(`/api/admin/departments/${encodeURIComponent(target.id)}/active`, { active: !target.active });
         if (!r.ok) { this.showToast('操作失敗'); return; }
@@ -2185,6 +2214,8 @@ createApp({
         this.showToast(`已${target.active ? '停用' : '啟用'} ${target.name}`);
       } catch (e) {
         this.showToast(e.isNetworkError ? e.message : '操作失敗，請稍後再試');
+      } finally {
+        this.writeBusy.toggleDeptActive = false;
       }
     },
     async openDeleteDept(d) {
@@ -2206,6 +2237,7 @@ createApp({
     async doDeleteDept() {
       if (!this.delConfirmMatched) return;
       const target = this.deptTarget;
+      this.writeBusy.doDeleteDept = true;
       try {
         const r = await AlarmApi.delete(`/api/admin/departments/${encodeURIComponent(target.id)}`, { confirm_id: target.id });
         if (!r.ok) { this.showToast((await r.json()).error || '刪除失敗'); return; }
@@ -2216,6 +2248,8 @@ createApp({
         if (this.viewDept === target.id) this.setViewDept('__all__');
       } catch (e) {
         this.showToast(e.isNetworkError ? e.message : '刪除失敗，請稍後再試');
+      } finally {
+        this.writeBusy.doDeleteDept = false;
       }
     },
   },

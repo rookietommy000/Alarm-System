@@ -306,9 +306,16 @@
 
     // 送出前記住這次選的部門（僅真實部門，__super__ 不記錄——它本來就
     // 固定顯示在清單最後，不需要也不該被排到前面）。
+    //
+    // 送出中的按鈕狀態（同 login.html：UI/UX 檢查發現正常送出路徑
+    // 完全沒有 loading 回饋）。不 preventDefault()，只是在導航發生前
+    // 把按鈕 disable+換文字。
     document.getElementById('adminLoginForm').addEventListener('submit', () => {
       const code = deptField.value;
       if (code && code !== '__super__') localStorage.setItem(LAST_DEPT_KEY, code);
+      const btn = document.getElementById('submitBtn');
+      btn.disabled = true;
+      btn.textContent = '登入中…';
     });
 
     // ── 429 節流倒數（同 login.html 的漸進增強邏輯）──────────────────
