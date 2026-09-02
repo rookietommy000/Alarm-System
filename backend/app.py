@@ -187,6 +187,12 @@ def create_app() -> Flask:
 
     _DEPT_CACHE: dict = {}
     _DEPT_CACHE_TTL = 60  # 秒
+    # 掛到 app.config 只是暴露引用給測試觀察/操作（同一份 dict，不是複製），
+    # 不改變任何生產行為——比照 SESSION_COOKIE_SECURE 等既有的
+    # create_app() 內部值掛 app.config 的寫法，純資料結構，不是為了
+    # 測試方便而拆分或重構任何邏輯。見 test_department_cache_
+    # invalidation.py 說明為何需要這個管道才能真正測到快取失效。
+    app.config["_DEPT_CACHE"] = _DEPT_CACHE
 
     def _dept_cached(dept_id: str) -> Optional[dict]:
         """回傳部門資料列；None 代表部門不存在（含已被 purge）。"""
@@ -1814,6 +1820,7 @@ def create_app() -> Flask:
         )
         dept.pop("pw_hash", None)
         dept.pop("admin_pw_hash", None)
+        _invalidate_dept_cache(dept_id)
         return jsonify(dept), 201
 
     @app.put("/api/admin/departments/<dept_id>")
@@ -1825,6 +1832,7 @@ def create_app() -> Flask:
             abort(400, "name 為必填")
         _validate_dept_name(name)
         department_store.update_name(dept_id, name)
+        _invalidate_dept_cache(dept_id)
         return jsonify({"ok": True})
 
     @app.put("/api/admin/departments/<dept_id>/reset-password")
