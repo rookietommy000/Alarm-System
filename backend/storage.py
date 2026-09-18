@@ -2183,6 +2183,84 @@ class PendingAlarmImportStore(StatusTransitionMixin):
         return result[0] if result else None
 
 
+class DepartmentAuditLogStore:
+    """部門管理端點（改名/密碼重設/啟用停用）的稽核軌跡（見 migration
+    011_add_department_audit_log.sql）。這三個端點原本完全沒有 audit
+    log（外部審查 2026-09-02 路由重導向調查時發現的獨立缺口）。
+
+    只服務 Supabase，_use_supabase()=False 時寫入 no-op——比照
+    PendingAlarmImportStore/DepartmentStore 的既有一致判斷，這個功能
+    只服務部門管理端點，維持系統內一致的設計語言。這輪只做寫入，不做
+    讀取端點（使用者裁決，先把記錄累積起來，之後有需要再做讀取）。
+
+    ⚠️ reset_password 動作只記「發生過」這個粗粒度事實跟時間，
+    before_value/after_value 兩欄皆傳 None——不記是 password 還是
+    admin_password 哪個欄位被改，絕對不記明文或雜湊值（雜湊值本身也
+    不能記，等於多開一個攻擊面）。呼叫端不要試圖傳密碼相關的任何
+    實際內容進來，這裡的參數設計也沒有提供這樣的欄位。
+
+    ⚠️ 重要（醫生查證，2026-09-18）：將來如果要做這張表的讀取端點，
+    權限層級必須用 superadmin_required，不能比照既有 /api/audit
+    （app.py，只要求 admin_required）——department_action()/
+    rename_department() 本身要求的是 superadmin_required，讀取這些
+    操作的稽核記錄如果只要 admin_required 就能看，會變成「執行門檻
+    superadmin、查看門檻只要 admin」的不對稱，一般部門管理員可能看到
+    別部門的密碼重設歷史中繼資料（即使不含密碼內容本身）。這條限制
+    現在先寫清楚，之後真的實作讀取端點時不要直接抄 /api/audit 的
+    裝飾器。
+    """
+
+    _TABLE = "department_audit_log"
+
+    def _base_key(self):
+        base = os.environ.get("SUPABASE_URL", "").rstrip("/")
+        key = os.environ.get("SUPABASE_KEY", "")
+        return base, key
+
+    def _req(self, method: str, path: str, body=None, extra_headers: Optional[dict] = None):
+        base, key = self._base_key()
+        headers = {
+            "apikey": key,
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+        }
+        if extra_headers:
+            headers.update(extra_headers)
+        data = json.dumps(body).encode() if body is not None else None
+        req = urllib.request.Request(f"{base}/rest/v1/{path}", data=data,
+                                     headers=headers, method=method)
+        with _urlopen(req) as r:
+            raw = r.read().decode()
+            return json.loads(raw) if raw.strip() else []
+
+    def log(self, department: str, action: str,
+            before_value: Optional[str] = None, after_value: Optional[str] = None) -> None:
+        """新增一筆稽核記錄。action 只接受 'rename'/'reset_password'/
+        'active'（由呼叫端 app.py 決定，這裡不重複檢查邏輯，DB 層的
+        check 約束是最後一道防線——維持 store 層單純負責存取的既有
+        分工）。actor 固定用 'superadmin'（這三個端點都要求
+        superadmin_required，本專案沒有個人帳號機制，記更細的身份
+        欄位也無法追溯到實際操作的是哪個人）。
+
+        刻意不回傳寫入結果、不拋出例外往外傳——稽核記錄是「錦上添花」
+        而非操作本身成敗的一部分，記錄失敗不該讓 rename_department()/
+        department_action() 的主流程跟著失敗（那樣會本末倒置：使用者
+        本來想改密碼，卻因為稽核記錄寫不進去而看到整個操作失敗）。
+        失敗要留痕（CLAUDE.md 例外處理判準），印到 stderr。"""
+        if not _use_supabase():
+            return
+        body = {
+            "department": department, "action": action, "actor": "superadmin",
+            "before_value": before_value, "after_value": after_value,
+        }
+        try:
+            self._req("POST", self._TABLE, [body], extra_headers={"Prefer": "return=minimal"})
+        except Exception as e:
+            import sys as _sys
+            print(f"[DepartmentAuditLogStore] log() 寫入失敗（不影響主流程）："
+                  f"{type(e).__name__}: {e}", file=_sys.stderr)
+
+
 _ALARMS_CACHE_TTL_SECONDS = 60  # PLAN 效能優化第 4 項：mf4d 部門 1759 筆分頁查詢實測約 1.6 秒
 
 if _use_supabase():
@@ -2204,3 +2282,4 @@ import_snapshot_store = ImportSnapshotStore()
 variant_translation_store = VariantTranslationStore()
 semantic_review_store = SemanticReviewStore()
 pending_alarm_import_store = PendingAlarmImportStore()
+department_audit_log_store = DepartmentAuditLogStore()

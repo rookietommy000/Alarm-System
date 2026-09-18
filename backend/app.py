@@ -21,9 +21,9 @@ from werkzeug.exceptions import HTTPException
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from storage import (
-    ai_scan_store, alarm_suggestion_store, alarms_store, audit_logger, department_store,
-    devices_store, feedback_store, login_attempt_store, pending_alarm_import_store, view_store,
-    _use_supabase,
+    ai_scan_store, alarm_suggestion_store, alarms_store, audit_logger, department_audit_log_store,
+    department_store, devices_store, feedback_store, login_attempt_store, pending_alarm_import_store,
+    view_store, _use_supabase,
 )
 from alarm_ingest import (
     load_file as ingest_load_file,
@@ -2054,7 +2054,14 @@ def create_app() -> Flask:
         if not name:
             abort(400, "name 為必填")
         _validate_dept_name(name)
+        # 改名前先讀 before 值——department_store.update_name() 本身
+        # 不回傳更新後的列，稽核記錄需要「改之前的名稱」，只能在動手前
+        # 先查一次（DepartmentAuditLogStore「這輪只做寫入」的既有分工，
+        # before/after 值由呼叫端負責準備，store 層不做業務判斷）。
+        before = department_store.get_by_id(dept_id)
+        before_name = before.get("name") if before else None
         department_store.update_name(dept_id, name)
+        department_audit_log_store.log(dept_id, "rename", before_value=before_name, after_value=name)
         _invalidate_dept_cache(dept_id)
         return jsonify({"ok": True})
 
@@ -2107,11 +2114,23 @@ def create_app() -> Flask:
                 pw_hash=generate_password_hash(password, method="pbkdf2:sha256") if password else None,
                 admin_pw_hash=generate_password_hash(admin_password, method="pbkdf2:sha256") if admin_password else None,
             )
+            # 只記「reset_password 動作發生過」這個粗粒度事實，
+            # before_value/after_value 皆不傳——不記是 password 還是
+            # admin_password 哪個欄位被改，絕對不碰密碼相關的任何實際
+            # 內容（DepartmentAuditLogStore.log() docstring 的紅線）。
+            department_audit_log_store.log(dept_id, "reset_password")
         elif action == "active":
             active = body.get("active")
             if active is None:
                 abort(400, "active 為必填")
+            before = department_store.get_by_id(dept_id)
+            before_active = before.get("active") if before else None
             department_store.set_active(dept_id, bool(active))
+            department_audit_log_store.log(
+                dept_id, "active",
+                before_value=str(before_active) if before_active is not None else None,
+                after_value=str(bool(active)),
+            )
         else:
             abort(400, "action 必須是 reset_password 或 active")
         _invalidate_dept_cache(dept_id)
