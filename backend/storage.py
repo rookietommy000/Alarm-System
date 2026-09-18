@@ -638,7 +638,15 @@ class DepartmentStore:
     _PUBLIC_FIELDS = "id,name,active,hidden,purgeable,session_version,created_at"
 
     def list(self, active_only: bool = False) -> list:
-        """絕不回傳密碼雜湊（pw_hash/admin_pw_hash）。"""
+        """絕不回傳密碼雜湊（pw_hash/admin_pw_hash）。
+
+        _use_supabase()=False 時回空清單——本機/測試模式本來就不提供
+        真正的多部門功能（見本類別 docstring），這裡是讀取方法，no-op
+        回傳「沒有部門」而非拋錯，比照其餘唯讀方法在 JsonStore 環境的
+        既有慣例（例如 alarms_store.load() 在 JsonStore 模式讀本機檔案，
+        這裡沒有對應的本機檔案概念，回空清單是最接近的等價行為）。"""
+        if not _use_supabase():
+            return []
         qs = f"select={self._PUBLIC_FIELDS}&order=id"
         if active_only:
             qs += "&active=eq.true"
@@ -646,19 +654,43 @@ class DepartmentStore:
 
     def list_public(self) -> list:
         """給 /api/departments/public 用：只回傳 active=true 且 hidden=false 的
-        id/name（PLAN 4.7 節）。"""
+        id/name（PLAN 4.7 節）。_use_supabase()=False 時回空清單，理由同
+        list()——這個既有行為在 app.py departments_public() 端點本來就有
+        對應的 _use_supabase() 判斷分支，這裡補上是讓 store 層本身也
+        一致，不是新增行為。"""
+        if not _use_supabase():
+            return []
         qs = "select=id,name&active=eq.true&hidden=eq.false&order=name"
         return self._req("GET", f"{self._TABLE}?{qs}")
 
     def get_by_id(self, dept_id: str) -> Optional[dict]:
         """回傳需含 session_version、active（assert_session_valid() 依賴這兩個
-        欄位），以及 pw_hash/admin_pw_hash（登入比對用，內部呼叫端才會拿到）。"""
+        欄位），以及 pw_hash/admin_pw_hash（登入比對用，內部呼叫端才會拿到）。
+
+        _use_supabase()=False 時回 None——呼叫端（_dept_cached()、
+        rename_department() 的 before-name 查詢等）本來就要處理
+        「部門不存在」的情況（None 的既有型別約定就是這個意思），本機
+        模式下「沒有真正的部門資料」跟「這個部門不存在」對呼叫端來說
+        是同一種語意，回 None 不需要呼叫端另外分岔處理。"""
+        if not _use_supabase():
+            return None
         qs = f"select=*&id=eq.{urllib.parse.quote(dept_id, safe='')}"
         rows = self._req("GET", f"{self._TABLE}?{qs}")
         return rows[0] if rows else None
 
     def create(self, dept_id: str, name: str, pw_hash: str, admin_pw_hash: str,
                hidden: bool = False, purgeable: bool = False) -> dict:
+        """_use_supabase()=False 時明確拒絕（RuntimeError），不是靜默
+        假裝成功——本機/測試模式本來就不提供真正的多部門功能，寫入類
+        操作若靜默 no-op 並回傳看似正常的 dict，呼叫端（create_department()
+        端點）會回 201 給前端「部門已建立」，但實際上什麼都沒發生，
+        這是比拋錯更糟的靜默失敗（CLAUDE.md 例外處理判準：沒有次一級
+        備援的操作要 fail-closed，不能用看似合理的預設值蒙混）。"""
+        if not _use_supabase():
+            raise RuntimeError(
+                "本機/測試模式不支援建立部門——DepartmentStore 沒有 "
+                "JsonStore fallback，這個操作只在正式 Supabase 環境有意義"
+            )
         body = {
             "id": dept_id, "name": name,
             "pw_hash": pw_hash, "admin_pw_hash": admin_pw_hash,
@@ -669,13 +701,26 @@ class DepartmentStore:
         return result[0] if result else body
 
     def update_name(self, dept_id: str, name: str) -> None:
+        """_use_supabase()=False 時明確拒絕，理由同 create()。"""
+        if not _use_supabase():
+            raise RuntimeError(
+                "本機/測試模式不支援改部門名稱——DepartmentStore 沒有 "
+                "JsonStore fallback，這個操作只在正式 Supabase 環境有意義"
+            )
         qs = f"id=eq.{urllib.parse.quote(dept_id, safe='')}"
         self._req("PATCH", f"{self._TABLE}?{qs}", {"name": name},
                   extra_headers={"Prefer": "return=minimal"})
 
     def update_password(self, dept_id: str, pw_hash: str = None,
                          admin_pw_hash: str = None) -> None:
-        """連帶 session_version += 1，讓既有 session 失效（PLAN 2.1 節）。"""
+        """連帶 session_version += 1，讓既有 session 失效（PLAN 2.1 節）。
+
+        _use_supabase()=False 時明確拒絕，理由同 create()。"""
+        if not _use_supabase():
+            raise RuntimeError(
+                "本機/測試模式不支援重設部門密碼——DepartmentStore 沒有 "
+                "JsonStore fallback，這個操作只在正式 Supabase 環境有意義"
+            )
         current = self.get_by_id(dept_id)
         if current is None:
             raise ValueError(f"部門不存在：{dept_id}")
@@ -689,6 +734,12 @@ class DepartmentStore:
                   extra_headers={"Prefer": "return=minimal"})
 
     def set_active(self, dept_id: str, active: bool) -> None:
+        """_use_supabase()=False 時明確拒絕，理由同 create()。"""
+        if not _use_supabase():
+            raise RuntimeError(
+                "本機/測試模式不支援啟用/停用部門——DepartmentStore 沒有 "
+                "JsonStore fallback，這個操作只在正式 Supabase 環境有意義"
+            )
         qs = f"id=eq.{urllib.parse.quote(dept_id, safe='')}"
         self._req("PATCH", f"{self._TABLE}?{qs}", {"active": active},
                   extra_headers={"Prefer": "return=minimal"})
@@ -698,7 +749,16 @@ class DepartmentStore:
         外部審查發現：設計稿的刪除流程依賴這個端點顯示「將刪除 N 台機種、
         M 筆警報」，先前不存在）。表清單與 purge() 保持一致，避免兩處各自
         維護一份、日後漏改其中一邊。用 count=exact + limit=0 取得筆數，
-        不搬移實際資料列（部分表可能有上千筆）。"""
+        不搬移實際資料列（部分表可能有上千筆）。
+
+        _use_supabase()=False 時每個表都回 0——這是唯讀統計方法，跟
+        list()/get_by_id() 一樣回「沒有資料」而非拋錯，供 department_impact()
+        端點在本機模式下也能正常回應（顯示「將刪除 0 筆」，不是誤導
+        使用者，因為本機模式下這些表本來就沒有跟這個部門相關聯的概念）。"""
+        if not _use_supabase():
+            return {table: 0 for table in
+                     ("alarms", "ai_scans", "ai_corrections", "ai_logs",
+                      "feedback", "alarm_views", "alarm_history", "devices")}
         counts = {}
         dept_qs = f"department=eq.{urllib.parse.quote(dept_id, safe='')}"
         for table in ("alarms", "ai_scans", "ai_corrections", "ai_logs",
@@ -720,7 +780,12 @@ class DepartmentStore:
         這正是最該停下來、不能悶著頭刪的時刻，不能假設「使用者按過確認
         了就代表可以刪」——按確認當下看到的數字可能早就不是事實。
         不符時 raise ValueError 附上兩邊的實際筆數，讓呼叫端能顯示
-        清楚的重新確認訊息，不是含糊的「數量不符」。"""
+        清楚的重新確認訊息，不是含糊的「數量不符」。
+
+        _use_supabase()=False 時不需要額外判斷——get_by_id() 已經回
+        None，直接落入下面「部門不存在」的既有分支明確拋出
+        PermissionError，跟其他寫入方法一樣是明確拒絕，不是新增的
+        特殊路徑。"""
         dept = self.get_by_id(dept_id)
         if dept is None or not dept.get("purgeable"):
             raise PermissionError("此部門不可硬刪除")
