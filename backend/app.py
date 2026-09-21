@@ -481,7 +481,16 @@ def create_app() -> Flask:
             "dept": dept,
         }
 
-    def _check_login_throttle(precheck: dict, *, login_page_endpoint: str):
+    def _throttle_dept_id(form_department: str) -> Optional[str]:
+        """後台登入頁隔離（login isolation v3）：`__super__` 或格式合法的
+        部門值才能安全當成 `admin_login_page` 的 `dept_id` 路徑參數重導
+        回去，否則落到不帶部門的 fallback（`/admin/login`），不會 404。
+        `_check_login_throttle()`（節流重導）與 `admin_login_submit()`
+        （密碼錯誤重導）共用同一段判斷式，不重複寫。
+        """
+        return form_department if (form_department == SUPER_DEPT_SENTINEL or DEPT_ID_RE.match(form_department)) else None
+
+    def _check_login_throttle(precheck: dict, *, login_page_endpoint: str, dept_id: str = None):
         """PLAN 2.2/2.2.3 節：伺服器不等待，還在延遲窗口內直接回應。細網
         （ip, department）與粗網（ip）取延遲最大值。回傳 None 代表不節流，
         可以繼續走 _do_login()；否則回傳要直接 return 的 Flask response。
@@ -495,12 +504,20 @@ def create_app() -> Flask:
         是漸進增強而非依賴。login_page_endpoint 由呼叫端指定要重導回
         /login 還是 /admin/login。precheck 由 _fetch_login_precheck() 提供，
         呼叫端只需要在一次登入請求裡取一次三支查詢的結果，不重複打。
+
+        dept_id 由後台呼叫端傳入（login isolation v3），節流重導要留在
+        原本的 `/admin/login/<dept_id>` 頁面，不能把使用者導去不帶部門
+        的 fallback 頁——前台 login_submit() 不傳這個參數，維持不帶
+        dept_id 的既有行為。
         """
         delay_fine = _remaining_delay(precheck["n_fine"], precheck["last_fine"], n_threshold=1, n_offset=0)
         delay_coarse = _remaining_delay(precheck["n_coarse"], precheck["last_coarse"], n_threshold=20, n_offset=19)
         delay = max(delay_fine, delay_coarse)
         if delay > 0:
-            return redirect(url_for(login_page_endpoint, throttled=delay))
+            kwargs = {"throttled": delay}
+            if dept_id is not None:
+                kwargs["dept_id"] = dept_id
+            return redirect(url_for(login_page_endpoint, **kwargs))
         return None
 
     def _do_login(form_department: str, password: str, admin: bool, precheck: dict) -> Optional[str]:
@@ -551,10 +568,20 @@ def create_app() -> Flask:
         return "admin" if admin else "user"
 
     @app.get("/admin/login")
+    @app.get("/admin/login/<dept_id>")
     @public_endpoint
-    def admin_login_page():
+    def admin_login_page(dept_id: str = None):
+        """login isolation v3：後台登入頁改成部門專屬 URL，不再列出其他
+        部門或超管選項（`/login` 前台維持現狀不變，見下方 login_page()）。
+        dept_id 為 None 時是「未知部門/session 過期」的 fallback（見
+        admin-login.html 的 localStorage 自動重導邏輯）。格式不合法直接
+        404，不落入 fallback 語意，避免枚舉探測。後端不組裝任何跟
+        dept_id 相關的內容，回傳同一份靜態 HTML，交給前端解析路徑。
+        """
         if is_admin():
             return redirect("/admin")
+        if dept_id is not None and dept_id != SUPER_DEPT_SENTINEL and not DEPT_ID_RE.match(dept_id):
+            abort(404, NOT_FOUND_MSG)
         return send_from_directory(FRONTEND, "admin-login.html")
 
     @app.post("/admin/login")
@@ -571,12 +598,19 @@ def create_app() -> Flask:
             # 的部門才需要 get_by_id（同 _do_login 情況 1 的既有規則）。
             need_dept_lookup = form_department != SUPER_DEPT_SENTINEL and bool(DEPT_ID_RE.match(form_department))
             precheck = _fetch_login_precheck(form_department, need_dept_lookup=need_dept_lookup)
-            throttled = _check_login_throttle(precheck, login_page_endpoint="admin_login_page")
+            throttled = _check_login_throttle(
+                precheck, login_page_endpoint="admin_login_page",
+                dept_id=_throttle_dept_id(form_department),
+            )
             if throttled is not None:
                 return throttled
             role = _do_login(form_department, pw, admin=True, precheck=precheck)
             if role is None:
-                return redirect(url_for("admin_login_page", error=1))
+                # 密碼錯誤要留在原部門頁面重新輸入，不能把使用者導去不帶
+                # 部門的 fallback（login isolation v3 規格遺漏的體驗回歸，
+                # 老師複查時補上）。dept_id=None 時 url_for 自動產生不帶
+                # 路徑段的 URL，是 Flask 既有行為。
+                return redirect(url_for("admin_login_page", error=1, dept_id=_throttle_dept_id(form_department)))
             return redirect("/admin")
 
         # 本機/測試模式 fallback：.env 明文比對（只有 _use_supabase()=False 才會到這裡）

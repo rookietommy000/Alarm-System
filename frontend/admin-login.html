@@ -93,57 +93,20 @@
       display: flex;
       flex-direction: column;
       gap: 6px;
-      max-height: 280px; /* 約 4 張卡片＋分隔線＋系統管理員選項，超過才捲動 */
-      overflow-y: auto;
     }
-    .dept-option {
+    /* login isolation v3：靜態顯示目前登入對象／fallback 提示，不可點選
+       （原本可點選的 .dept-option 部門清單樣式已隨清單移除，不再需要）*/
+    .dept-fixed {
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      width: 100%;
       min-height: 46px;
       padding: 8px 14px;
-      cursor: pointer;
-      text-align: left;
+      cursor: default;
       border: 1.5px solid rgba(255,255,255,0.14);
       border-radius: 8px;
       background: #0f1923;
       color: #e2e8f0;
-      font-family: inherit;
       font-size: 14px;
-      transition: border-color 0.15s, background 0.15s;
-    }
-    .dept-option:hover { border-color: rgba(77,219,196,0.4); }
-    .dept-option.selected { border-color: #4ddbc4; background: rgba(77,219,196,0.08); }
-    .dept-option .code {
-      font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-      font-size: 11px;
-      color: #64748b;
-    }
-    .dept-option.system-option {
-      border-style: dashed;
-    }
-    .dept-option.system-option .name-group { display: flex; flex-direction: column; }
-    .dept-option.system-option .hint { font-size: 11px; color: #94a3b8; }
-    .dept-divider {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      margin: 4px 0 2px;
-    }
-    .dept-divider::before, .dept-divider::after {
-      content: '';
-      flex: 1;
-      height: 1px;
-      background: rgba(255,255,255,0.08);
-    }
-    .dept-divider span {
-      font-size: 10px;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      color: #64748b;
-      white-space: nowrap;
     }
     .notice-msg {
       background: rgba(251,191,36,0.1);
@@ -197,9 +160,7 @@
 
             <div class="mb-3">
               <label class="form-label fw-semibold">部門</label>
-              <div class="dept-select-wrap" id="deptList">
-                <div class="text-muted small">載入部門清單中…</div>
-              </div>
+              <div class="dept-select-wrap" id="deptList"></div>
             </div>
 
             <div class="mb-3">
@@ -241,83 +202,47 @@
     });
     modal.show();
 
-    // ── 部門清單載入：真實部門 + 系統管理員（__super__）分岔選項 ──────
+    // ── 後台登入入口隔離（login isolation v3）：不再列出部門清單或
+    // 系統管理員選項，dept_id 從 URL 路徑帶入，使用者沒有「切換部門」
+    // 的互動——這正是這次改動要達成的效果。─────────────────────────
     const deptField = document.getElementById('deptField');
     const deptList = document.getElementById('deptList');
 
-    function selectDept(code, el) {
-      deptField.value = code;
-      deptList.querySelectorAll('.dept-option').forEach(n => n.classList.remove('selected'));
-      el.classList.add('selected');
+    const pathParts = window.location.pathname.split('/').filter(Boolean);
+    // /admin/login/mf4c -> ["admin", "login", "mf4c"]，取第三段
+    const urlDeptId = pathParts.length >= 3 ? pathParts[2] : null;
+
+    const LAST_ADMIN_DEPT_KEY = 'alarmSystem.lastAdminDept';
+
+    if (urlDeptId === '__super__') {
+      deptField.value = '__super__';
+      deptList.innerHTML = `<div class="dept-fixed">系統管理員登入</div>`;
+    } else if (urlDeptId) {
+      deptField.value = urlDeptId;
+      deptList.innerHTML = `<div class="dept-fixed">${urlDeptId} 部門登入</div>`;
+    } else {
+      // 不帶部門：裝置先前登入過就自動導去該部門頁，否則顯示靜態提示，
+      // 不再 fetch/顯示部門清單（/api/departments/public 保留給前台
+      // login.html 用，後台這邊刻意不再依賴它）。
+      const lastDept = localStorage.getItem(LAST_ADMIN_DEPT_KEY);
+      if (lastDept) {
+        window.location.replace(`/admin/login/${encodeURIComponent(lastDept)}`);
+      } else {
+        deptList.innerHTML = `<div class="dept-fixed">請使用你部門的後台登入連結，或聯絡管理員取得連結。</div>`;
+      }
     }
 
-    // 事件委派：綁在容器上、不逐一綁在動態按鈕上（PLAN 第三十七輪修正：
-    // 早期以為是動畫時序問題，實際原因不明——委派本身能繞開「listener
-    // 綁在會被重繪／延後插入的節點上」這整類問題，不論真正成因是哪一種）。
-    deptList.addEventListener('click', (e) => {
-      const btn = e.target.closest('.dept-option');
-      if (!btn) return;
-      selectDept(btn.dataset.deptCode, btn);
-    });
-
-    // 記住上次選擇的部門並置頂，同 login.html（見該檔案說明）。
-    // __super__ 是固定的特例選項（跨部門、獨立樣式與分隔線），不參與排序。
-    const LAST_DEPT_KEY = 'alarmSystem.lastDept';
-
-    fetch('/api/departments/public').then(r => r.ok ? r.json() : []).then(depts => {
-      deptList.innerHTML = '';
-      const lastId = localStorage.getItem(LAST_DEPT_KEY);
-      if (lastId) {
-        const idx = depts.findIndex(d => d.id === lastId);
-        if (idx > 0) depts.unshift(depts.splice(idx, 1)[0]);
-      }
-      depts.forEach((d, i) => {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'dept-option';
-        btn.dataset.deptCode = d.id;
-        const nameSpan = document.createElement('span');
-        nameSpan.textContent = d.name;
-        const codeSpan = document.createElement('span');
-        codeSpan.className = 'code';
-        codeSpan.textContent = d.id;
-        btn.appendChild(nameSpan);
-        btn.appendChild(codeSpan);
-        deptList.appendChild(btn);
-        if (i === 0) selectDept(d.id, btn);
-      });
-
-      const divider = document.createElement('div');
-      divider.className = 'dept-divider';
-      divider.innerHTML = '<span>不同的驗證路徑</span>';
-      deptList.appendChild(divider);
-
-      const sysBtn = document.createElement('button');
-      sysBtn.type = 'button';
-      sysBtn.className = 'dept-option system-option';
-      sysBtn.dataset.deptCode = '__super__';
-      sysBtn.innerHTML = `
-        <span class="name-group">
-          <span>系統管理員</span>
-          <span class="hint">跨部門，不屬於任何部門</span>
-        </span>
-        <span class="code">SYSTEM</span>`;
-      deptList.appendChild(sysBtn);
-
-      if (!depts.length) selectDept('__super__', sysBtn);
-    }).catch(() => {
-      deptList.innerHTML = '<div class="text-muted small">部門清單載入失敗，請重新整理頁面</div>';
-    });
-
-    // 送出前記住這次選的部門（僅真實部門，__super__ 不記錄——它本來就
-    // 固定顯示在清單最後，不需要也不該被排到前面）。
+    // 送出前記住這次登入的部門，供下次不帶部門造訪時自動重導
+    // （__super__ 不記錄——它不是一個部門，記了會讓忘記帶 dept_id 的
+    // 操作者被自動導去超管登入頁，違背這次改動要降低超管入口可及性
+    // 的目的）。
     //
     // 送出中的按鈕狀態（同 login.html：UI/UX 檢查發現正常送出路徑
     // 完全沒有 loading 回饋）。不 preventDefault()，只是在導航發生前
     // 把按鈕 disable+換文字。
     document.getElementById('adminLoginForm').addEventListener('submit', () => {
       const code = deptField.value;
-      if (code && code !== '__super__') localStorage.setItem(LAST_DEPT_KEY, code);
+      if (code && code !== '__super__') localStorage.setItem(LAST_ADMIN_DEPT_KEY, code);
       const btn = document.getElementById('submitBtn');
       btn.disabled = true;
       btn.textContent = '登入中…';
