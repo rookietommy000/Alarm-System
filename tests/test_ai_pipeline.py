@@ -16,8 +16,13 @@ from pathlib import Path
 
 import pytest
 
-# ── 讓 import backend.ai.* 找得到 ─────────────────────────────────────────────
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# ── 讓 import ai.* 找得到（跟 app.py 實際使用的模組路徑一致，不帶
+# backend. 前綴——先前這裡插入的是專案根目錄、import 帶 backend. 前綴，
+# 跟業務程式碼用的是完全不同的 sys.modules 快取實例，mem fixture 的
+# importlib.reload() 永遠打不到真正在用的那份，測試隔離形同虛設，
+# 外部審查 2026-09-21 發現）──────────────────────────────────────────
+BACKEND = Path(__file__).resolve().parent.parent / "backend"
+sys.path.insert(0, str(BACKEND))
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -26,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 class TestFilterByConf:
     def setup_method(self):
-        from backend.ai.ai_rules import _filter_by_conf
+        from ai.ai_rules import _filter_by_conf
         self._fn = _filter_by_conf
 
     def test_conf_none_passes_through(self):
@@ -55,7 +60,7 @@ class TestNormalizeCode:
     復現當初的碰撞案例，確保回歸不會再發生。"""
 
     def setup_method(self):
-        from backend.ai.ai_rules import _normalize_code
+        from ai.ai_rules import _normalize_code
         self._fn = _normalize_code
 
     def test_previously_colliding_codes_no_longer_collide(self):
@@ -93,7 +98,7 @@ class TestGetNormalizeRule:
     函式，不用 dict.get() 鏈式嘗試藏優先權。"""
 
     def setup_method(self):
-        from backend.ai import ai_rules
+        from ai import ai_rules
         self._ai_rules = ai_rules
         self._original_rules = dict(ai_rules.NORMALIZE_RULES)
 
@@ -124,7 +129,7 @@ class TestGetNormalizeRule:
 
 class TestValidateModel:
     def setup_method(self):
-        from backend.ai.ai_rules import _validate_model
+        from ai.ai_rules import _validate_model
         self._fn = _validate_model
 
     def test_bypass_uses_bypass_key_not_high(self):
@@ -132,7 +137,7 @@ class TestValidateModel:
         CONF_PROFILE 的 bypass=95，high=90。
         conf=91 在 high 之上但在 bypass 之下，不應放行。
         """
-        from backend.ai.ai_config import CONF_PROFILE
+        from ai.ai_config import CONF_PROFILE
         bypass = CONF_PROFILE["gemini"]["bypass"]   # 95
         high   = CONF_PROFILE["gemini"]["high"]     # 90
         assert bypass > high, "前提：bypass 必須比 high 嚴"
@@ -142,7 +147,7 @@ class TestValidateModel:
         assert warning == "ERR_MODEL_UNKNOWN"
 
     def test_bypass_above_threshold_warns(self):
-        from backend.ai.ai_config import CONF_PROFILE
+        from ai.ai_config import CONF_PROFILE
         bypass = CONF_PROFILE["gemini"]["bypass"]
         _, valid, warning = self._fn("UNKNOWN", model_conf=bypass, valid_models=[], bypass_threshold=bypass)
         assert valid
@@ -150,7 +155,7 @@ class TestValidateModel:
 
     def test_bypass_sets_needs_model_selection(self):
         """bypass 放行後 apply_post_rules 必須把 needs_model_selection 設 True。"""
-        from backend.ai.ai_rules import apply_post_rules
+        from ai.ai_rules import apply_post_rules
         raw = {
             "model": "FAKE_MODEL",
             "model_conf": 97,
@@ -162,7 +167,7 @@ class TestValidateModel:
 
     def test_analyzer_forwarded_in_result(self):
         """apply_post_rules 回傳值必須帶 analyzer，VAL 層才能取 profile。"""
-        from backend.ai.ai_rules import apply_post_rules
+        from ai.ai_rules import apply_post_rules
         analyzer = {"name": "gemini", "model": "gemini-2.0-flash", "prompt_version": "v1"}
         raw = {"model": "PILM004", "model_conf": 92, "alarms": [], "analyzer": analyzer}
         r = apply_post_rules(raw, valid_models=["PILM004"])
@@ -178,9 +183,46 @@ def mem(tmp_path, monkeypatch):
     """每個測試用獨立的 tmp MEM_DIR，不污染 data/。"""
     monkeypatch.setenv("AI_MEM_DIR", str(tmp_path))
     import importlib
-    import backend.ai.ai_memory as m
+    import ai.ai_memory as m
     importlib.reload(m)
     return tmp_path, m
+
+
+class TestUseSupabaseFlagRespectsLocalDirEnvVar:
+    """外部審查 2026-09-21：ai_memory.py/ai_logger.py 的 _use_supabase()
+    先前是獨立實作、沒有測試隔離豁免——只要 .env 載入了真實
+    SUPABASE_URL/KEY（這是本機開發的常態，不是異常情境），測試流程
+    就會無視 AI_MEM_DIR/AI_LOG_DIR 隔離設定，直接對正式 Supabase 的
+    ai_scans/ai_corrections/ai_logs 表做真實的讀寫。已確認造成正式
+    環境 209 筆 ai_scans + 18 筆 ai_corrections（department='test_dept'）
+    假資料污染，持續超過一個月才被發現，含排查過程中一版用錯環境變數
+    期間新增的部分。這裡的測試情境刻意同時設定 SUPABASE_URL/KEY 與
+    各模組實際使用的隔離變數（模擬 .env 已載入真實憑證、同時又在跑
+    測試的真實情境），不能只測「沒設 SUPABASE 環境變數」這種容易通過
+    的假陽性——那測不到污染實際發生時的條件。
+
+    判斷各模組專屬的隔離變數（AI_MEM_DIR/AI_LOG_DIR）而非
+    storage.py 的 ALARM_DATA_DIR——alarms 業務資料跟 AI 記憶/日誌是
+    不同性質的本機資料，各自用專屬環境變數命名（既有的合理模組化
+    設計），不是需要統一成同一個變數名稱的架構缺陷。"""
+
+    def test_ai_memory_use_supabase_respects_ai_mem_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("SUPABASE_URL", "https://example.invalid")
+        monkeypatch.setenv("SUPABASE_KEY", "fake-key")
+        monkeypatch.setenv("AI_MEM_DIR", str(tmp_path))
+        import importlib
+        import ai.ai_memory as m
+        importlib.reload(m)
+        assert m._use_supabase() is False
+
+    def test_ai_logger_use_supabase_respects_ai_log_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("SUPABASE_URL", "https://example.invalid")
+        monkeypatch.setenv("SUPABASE_KEY", "fake-key")
+        monkeypatch.setenv("AI_LOG_DIR", str(tmp_path))
+        import importlib
+        import ai.ai_logger as m
+        importlib.reload(m)
+        assert m._use_supabase() is False
 
 
 class TestRecordScanFormat:
@@ -237,7 +279,7 @@ class TestHistoryMismatchCompatibility:
 
     def test_new_format_dict_codes_no_type_error(self):
         """original_codes 為 dict 格式時不應 TypeError（主路徑 500 的修復）。"""
-        from backend.ai.ai_validation import check_validation
+        from ai.ai_validation import check_validation
         corrections = [{
             "corrected_model": "PILM004",
             "original_codes": [{"code": "0001", "conf": 80}],
@@ -248,13 +290,13 @@ class TestHistoryMismatchCompatibility:
 
     def test_old_format_str_codes_still_works(self):
         """original_codes 為舊字串格式仍正確匹配。"""
-        from backend.ai.ai_validation import check_validation
+        from ai.ai_validation import check_validation
         corrections = [{"corrected_model": "PILM004", "original_codes": ["0001"]}]
         val = check_validation(self._post(["0001"]), corrections)
         assert val["needs_reconfirm"] is True
 
     def test_no_overlap_no_trigger(self):
-        from backend.ai.ai_validation import check_validation
+        from ai.ai_validation import check_validation
         corrections = [{"corrected_model": "PILM004", "original_codes": [{"code": "9999", "conf": 80}]}]
         val = check_validation(self._post(["0001"]), corrections)
         assert val["needs_reconfirm"] is False
@@ -283,7 +325,7 @@ class TestRecordScanTier:
         assert rec["tier"] == "success"
 
     def test_high_conf_gives_success_high(self, mem):
-        from backend.ai.ai_config import CONF_PROFILE
+        from ai.ai_config import CONF_PROFILE
         high = CONF_PROFILE["gemini"]["high"]
         _, m = mem
         rec = m.record_scan(
@@ -424,13 +466,13 @@ class TestGreyZone:
 
     def test_gemini_grey_zone_triggers(self):
         """conf=75，gemini pass=70 ~ grey_zone_high=85 → 觸發。"""
-        from backend.ai.ai_validation import check_validation
+        from ai.ai_validation import check_validation
         val = check_validation(self._post(75), [])
         assert val["needs_reconfirm"] is True
 
     def test_gemini_below_pass_no_grey_zone(self):
         """needs_model_selection=True 時灰色地帶不重複觸發。"""
-        from backend.ai.ai_validation import check_validation
+        from ai.ai_validation import check_validation
         post = self._post(65)
         post["needs_model_selection"] = True
         val = check_validation(post, [])
@@ -438,13 +480,13 @@ class TestGreyZone:
 
     def test_local_grey_zone_triggers(self):
         """local profile pass=65，conf=67 應觸發（這條是修過的洞）。"""
-        from backend.ai.ai_validation import check_validation
+        from ai.ai_validation import check_validation
         val = check_validation(self._post(67, analyzer_name="local"), [])
         assert val["needs_reconfirm"] is True
 
     def test_conf_none_skips_grey_zone(self):
         """conf=None 語意不明，不觸發灰色地帶。"""
-        from backend.ai.ai_validation import check_validation
+        from ai.ai_validation import check_validation
         val = check_validation(self._post(None), [])
         assert val["needs_reconfirm"] is False
 
@@ -455,7 +497,7 @@ class TestGreyZone:
 
 @pytest.fixture(autouse=False)
 def clear_cooldown():
-    from backend.ai import ai_alert
+    from ai import ai_alert
     ai_alert._cooldown_cache.clear()
     yield
     ai_alert._cooldown_cache.clear()
@@ -473,7 +515,7 @@ def _make_history(tiers: list) -> list:
 class TestConsecutiveFailureAlert:
     def test_three_failures_triggers_alert(self, clear_cooldown):
         """連續 3 筆 failure → ALERT_LOW_CONF，block=True。"""
-        from backend.ai.ai_alert import check_alerts
+        from ai.ai_alert import check_alerts
         history = _make_history(["failure", "failure", "failure"])
         post_result = {"model": None, "model_conf": None, "alarms": [], "rejected_alarms": []}
         alerts = check_alerts(post_result, history)
@@ -483,7 +525,7 @@ class TestConsecutiveFailureAlert:
         assert block_alert["block"] is True
 
     def test_two_failures_no_alert(self, clear_cooldown):
-        from backend.ai.ai_alert import check_alerts
+        from ai.ai_alert import check_alerts
         history = _make_history(["failure", "failure"])
         post_result = {"model": None, "model_conf": None, "alarms": [], "rejected_alarms": []}
         alerts = check_alerts(post_result, history)
@@ -491,7 +533,7 @@ class TestConsecutiveFailureAlert:
 
     def test_no_alarm_tier_not_counted_as_failure(self, clear_cooldown):
         """no_alarm（正常機台）不算連續失敗。"""
-        from backend.ai.ai_alert import check_alerts
+        from ai.ai_alert import check_alerts
         history = _make_history(["no_alarm", "no_alarm", "no_alarm"])
         post_result = {"model": "PILM004", "model_conf": 90, "alarms": [], "rejected_alarms": []}
         alerts = check_alerts(post_result, history)
@@ -501,7 +543,7 @@ class TestConsecutiveFailureAlert:
 class TestCooldown:
     def test_cooldown_does_not_suppress_block_alerts(self, clear_cooldown):
         """冷卻期內再次呼叫，block=True 的警報仍必須出現在回傳值中。"""
-        from backend.ai.ai_alert import check_alerts
+        from ai.ai_alert import check_alerts
         history = _make_history(["failure", "failure", "failure"])
         post_result = {"model": None, "model_conf": None, "alarms": [], "rejected_alarms": []}
         first  = check_alerts(post_result, history)
@@ -511,8 +553,8 @@ class TestCooldown:
 
     def test_cooldown_timestamp_not_refreshed_during_cooldown(self, clear_cooldown):
         """冷卻期間多次呼叫，不應一直刷新時間戳（否則永遠在冷卻中）。"""
-        from backend.ai import ai_alert
-        from backend.ai.ai_alert import check_alerts
+        from ai import ai_alert
+        from ai.ai_alert import check_alerts
         history = _make_history(["failure", "failure", "failure"])
         post_result = {"model": None, "model_conf": None, "alarms": [], "rejected_alarms": []}
         check_alerts(post_result, history)
@@ -560,7 +602,7 @@ class TestRunPipelineFailureRecording:
 
     @pytest.fixture(autouse=True)
     def _reset_valid_models_cache(self):
-        from backend.ai import ai_rules
+        from ai import ai_rules
         ai_rules._valid_models_cache["models"] = None
         ai_rules._valid_models_cache["expires_at"] = 0.0
         yield
@@ -570,7 +612,7 @@ class TestRunPipelineFailureRecording:
     @pytest.fixture
     def pipeline_mem(self, tmp_path, monkeypatch):
         """跟現有的 mem fixture 邏輯相同，但額外讓
-        backend.ai.ai_pipeline 內已經 import 進來的 record_scan/log_scan
+        ai.ai_pipeline 內已經 import 進來的 record_scan/log_scan
         指向重新載入後的新模組——ai_pipeline.py 是用
         `from .ai_memory import record_scan` 這種具名匯入，模組級變數
         重新賦值不會自動同步到已經 import 過的呼叫端，需要手動 patch
@@ -579,9 +621,9 @@ class TestRunPipelineFailureRecording:
         monkeypatch.setenv("AI_MEM_DIR", str(tmp_path / "mem"))
         monkeypatch.setenv("AI_LOG_DIR", str(tmp_path / "log"))
         import importlib
-        import backend.ai.ai_memory as mem_mod
-        import backend.ai.ai_logger as log_mod
-        import backend.ai.ai_pipeline as pipeline_mod
+        import ai.ai_memory as mem_mod
+        import ai.ai_logger as log_mod
+        import ai.ai_pipeline as pipeline_mod
         importlib.reload(mem_mod)
         importlib.reload(log_mod)
         monkeypatch.setattr(pipeline_mod, "record_scan", mem_mod.record_scan)
@@ -609,7 +651,7 @@ class TestRunPipelineFailureRecording:
             monkeypatch.setattr(_FakeAnalyzer, "analyze", _boom_analyze)
         elif failing_step == "valid_models":
             def _boom_load_valid_models(*a, **k):
-                from backend.ai.ai_rules import ValidModelsUnavailable
+                from ai.ai_rules import ValidModelsUnavailable
                 raise ValidModelsUnavailable("模擬白名單讀取失敗")
             monkeypatch.setattr(pipeline_mod, "load_valid_models", _boom_load_valid_models)
         elif failing_step == "post_rule":
@@ -685,7 +727,7 @@ class TestRunPipelineFailureRecording:
 
 class TestRunConfirmation:
     def test_confirmation_returns_ok_and_scan_id(self, mem):
-        from backend.ai.ai_pipeline import run_confirmation
+        from ai.ai_pipeline import run_confirmation
         result = run_confirmation(
             scan_id="scan001",
             model="PILM004",
@@ -703,7 +745,7 @@ class TestRunConfirmation:
     def test_confirmation_record_queryable(self, mem):
         """確認後可在 load_confirmed_history 查到。"""
         _, m = mem
-        from backend.ai.ai_pipeline import run_confirmation
+        from ai.ai_pipeline import run_confirmation
         run_confirmation(
             scan_id="scan002",
             model="PILM004",
@@ -720,7 +762,7 @@ class TestRunConfirmation:
 
 class TestRunCorrection:
     def test_correction_returns_ok_and_scan_id(self, mem):
-        from backend.ai.ai_pipeline import run_correction
+        from ai.ai_pipeline import run_correction
         result = run_correction(
             scan_id="scan010",
             original_model="PILM003",
@@ -738,7 +780,7 @@ class TestRunCorrection:
     def test_correction_written_to_corrections_file(self, mem):
         """修正記錄寫進 corrections/PILM004.json。"""
         tmp_path, m = mem
-        from backend.ai.ai_pipeline import run_correction
+        from ai.ai_pipeline import run_correction
         run_correction(
             scan_id="scan011",
             original_model="PILM003",
@@ -777,7 +819,7 @@ class TestResolveAlarmCodes:
         # backend.storage 導致 monkeypatch 靜默失效、斷言失敗，才發現
         # 這個雙重 sys.path 的落差）。
         import storage as storage_mod
-        from backend.ai.ai_pipeline import _resolve_alarm_codes
+        from ai.ai_pipeline import _resolve_alarm_codes
 
         monkeypatch.setattr(storage_mod.alarms_store, "find_by_code", lambda dept, model, code: [])
         result = _resolve_alarm_codes([{"code": "9999", "conf": 90}], "mf4d", "PILM004")
@@ -786,7 +828,7 @@ class TestResolveAlarmCodes:
 
     def test_single_match_replaces_code_and_fills_variant(self, monkeypatch):
         import storage as storage_mod
-        from backend.ai.ai_pipeline import _resolve_alarm_codes
+        from ai.ai_pipeline import _resolve_alarm_codes
 
         monkeypatch.setattr(
             storage_mod.alarms_store, "find_by_code",
@@ -811,9 +853,9 @@ class TestResolveAlarmCodes:
         裁決先用 AI 翻譯一版標記待校對狀態，不能讓沒校對過的翻譯看起來
         像正式版本）——有翻譯的補上，沒翻譯的兩個欄位都是 None，不
         拼湊看起來像翻譯但其實沒有的文字。"""
-        import backend.ai.ai_pipeline as pipeline_mod
+        import ai.ai_pipeline as pipeline_mod
         import storage as storage_mod
-        from backend.ai.ai_pipeline import _resolve_alarm_codes
+        from ai.ai_pipeline import _resolve_alarm_codes
 
         monkeypatch.setattr(pipeline_mod, "_variant_translations_cache", {
             "Guard door open CIP/SIP cabinet 1": {
@@ -845,7 +887,7 @@ class TestResolveAlarmCodes:
         """機種都辨識不出來時，沒有 model 可以查，不該報錯，直接標記
         全部未命中——這是既有 needs_model_selection 流程要處理的情況，
         不是這支函式的責任。"""
-        from backend.ai.ai_pipeline import _resolve_alarm_codes
+        from ai.ai_pipeline import _resolve_alarm_codes
 
         result = _resolve_alarm_codes([{"code": "0001", "conf": 90}], "mf4d", None)
         assert result == [{"code": "0001", "conf": 90, "db_matched": False, "variant": None, "candidates": None}]
@@ -860,7 +902,7 @@ class TestLoadVariantTranslations:
     依據不同，見 DRAFT_error_handling_policy.md 的四條判準）。"""
 
     def setup_method(self):
-        import backend.ai.ai_pipeline as pipeline_mod
+        import ai.ai_pipeline as pipeline_mod
         self._pipeline_mod = pipeline_mod
         self._original_cache = pipeline_mod._variant_translations_cache
         pipeline_mod._variant_translations_cache = None

@@ -174,6 +174,13 @@ def load_logs(limit: int = 100, event: Optional[str] = None) -> list:
 # ── 內部工具 ─────────────────────────────────────────────────────────────────
 
 def _use_supabase() -> bool:
+    """外部審查 2026-09-21 發現：這裡先前是獨立實作、沒有測試隔離豁免，
+    測試環境只要 .env 載入了真實 SUPABASE_URL/KEY，就會無視 AI_LOG_DIR
+    直接寫入正式 ai_logs 表——跟同一輪發現的 ai_memory.py 污染同樣的
+    模式。判斷 AI_LOG_DIR（這個模組實際使用的隔離變數）而非
+    storage.py 的 ALARM_DATA_DIR，理由同 ai_memory.py 的同名函式。"""
+    if os.environ.get("AI_LOG_DIR"):
+        return False  # test isolation mode
     return bool(os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_KEY"))
 
 

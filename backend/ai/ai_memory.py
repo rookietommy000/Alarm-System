@@ -303,6 +303,17 @@ def cleanup_expired() -> int:
 # ── Supabase helpers ─────────────────────────────────────────────────────────
 
 def _use_supabase() -> bool:
+    """外部審查 2026-09-21 發現：這裡先前是獨立實作、沒有測試隔離豁免，
+    測試環境只要 .env 載入了真實 SUPABASE_URL/KEY，就會無視 AI_MEM_DIR
+    直接查詢/寫入正式 ai_scans/ai_corrections 表，已確認造成正式環境
+    209 筆 ai_scans + 18 筆 ai_corrections（department='test_dept'）
+    假資料污染，持續超過一個月才被發現，含排查過程中一版用錯環境變數
+    （誤判斷 ALARM_DATA_DIR 而非這裡實際使用的 AI_MEM_DIR）期間新增的
+    部分。判斷 AI_MEM_DIR（這個模組實際使用的隔離變數）而非 storage.py
+    的 ALARM_DATA_DIR——alarms 業務資料跟 AI 記憶是不同性質的本機資料，
+    各自用專屬環境變數命名，不勉強拉去共用一個語意不精確的變數名稱。"""
+    if os.environ.get("AI_MEM_DIR"):
+        return False  # test isolation mode
     return bool(os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_KEY"))
 
 
