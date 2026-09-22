@@ -220,6 +220,39 @@ function printCompanionResult(result) {
   if (result.stderr) process.stderr.write(result.stderr);
 }
 
+// Best-effort: shells out to `result <job-id> --json` purely to read
+// `threadId` off the job record, so we can print a `codex resume` hint
+// (same format the official plugin uses for its own --transfer command).
+// This is a side lookup, not part of the primary command's own output —
+// it must never change the primary command's exit code or printed text.
+// threadId is populated onto the job asynchronously once the underlying
+// Codex turn actually starts, so a job looked up moments after being
+// enqueued in the background commonly has none yet; that is expected,
+// not a bug, and this function silently returns null rather than warn.
+function tryResolveResumeHint(companionCommand, jobId) {
+  if (!jobId) return null;
+  try {
+    const probe = spawnSync(companionCommand, ["result", jobId, "--json"], { encoding: "utf8" });
+    if (probe.status !== 0 || !probe.stdout) return null;
+    const parsed = JSON.parse(probe.stdout);
+    const threadId = parsed?.job?.threadId ?? parsed?.storedJob?.threadId ?? null;
+    if (!threadId) return null;
+    return { threadId, resumeCommand: `codex resume ${threadId}` };
+  } catch {
+    return null;
+  }
+}
+
+// Rendered background-launch text is fixed by the official plugin as
+// "<title> started in the background as <jobId>. Check /codex:status
+// <jobId> for progress." — pull the id back out of it rather than
+// reimplementing job creation ourselves.
+function extractJobIdFromDelegateOutput(stdout) {
+  if (!stdout) return null;
+  const match = stdout.match(/started in the background as (\S+?)\./);
+  return match ? match[1] : null;
+}
+
 // ── arg parsing ──────────────────────────────────────────────────────────────
 
 function parseFlags(argv) {
@@ -464,6 +497,14 @@ function cmdDelegate(ctx) {
     });
     if (baseline) log(`\n[codex-bridge] baseline HEAD for this delegation: ${baseline}`);
   }
+
+  // Best-effort only — see tryResolveResumeHint. For a background job this
+  // frequently resolves to nothing yet (the run hasn't started), which is
+  // fine: `codex-bridge.mjs result <job-id>` will pick it up once it has.
+  const jobId = flags.foreground ? null : extractJobIdFromDelegateOutput(result.stdout);
+  const hint = jobId ? tryResolveResumeHint(companionCommand, jobId) : null;
+  if (hint) log(`[codex-bridge] Resume in Codex: ${hint.resumeCommand}`);
+
   log("\n[codex-bridge] UNREVIEWED — nothing above is established fact until you review it yourself (see SKILL.md step 4).");
 }
 
@@ -489,6 +530,13 @@ function cmdResult(ctx) {
   if (local && local.baselineHead) {
     log(`\n[codex-bridge] diff against baseline: git diff ${local.baselineHead}`);
   }
+
+  // Best-effort only — see tryResolveResumeHint. By the time a job has a
+  // result to fetch, the run has actually started, so threadId is far more
+  // likely to be populated here than right after `delegate` enqueues it.
+  const hint = tryResolveResumeHint(companionCommand, jobId);
+  if (hint) log(`[codex-bridge] Resume in Codex: ${hint.resumeCommand}`);
+
   log("[codex-bridge] UNREVIEWED — do not treat this output, including any claim the delegate makes about tests passing, as established fact until you have reviewed it yourself (see SKILL.md step 4).");
 }
 
