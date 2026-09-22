@@ -1,0 +1,14 @@
+{
+  "rulesFile": "CLAUDE.md",
+  "rulesSections": [
+    "已知陷阱",
+    "例外處理判準",
+    "多部門相關的硬約束"
+  ],
+  "definitionOfDone": [
+    "pytest tests/"
+  ],
+  "companionCommand": "codex-companion.mjs",
+  "defaultModel": null,
+  "defaultEffort": null
+}
