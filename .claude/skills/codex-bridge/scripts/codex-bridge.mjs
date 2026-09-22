@@ -462,7 +462,7 @@ function cmdDelegate(ctx) {
     if (flags.fresh) args.push("--fresh");
     if (flags.model) args.push("--model", String(flags.model));
     if (flags.effort) args.push("--effort", String(flags.effort));
-    if (flags["read-only"]) args.push("--read-only");
+    if (!flags["read-only"]) args.push("--write");
     if (prompt) args.push(prompt);
     log(`# note: ${note}`);
     log(`# would run: ${companionCommand} ${args.map((a) => (a.includes(" ") || a.includes("\n") ? JSON.stringify(a) : a)).join(" ")}`);
@@ -477,7 +477,7 @@ function cmdDelegate(ctx) {
   if (flags.fresh) args.push("--fresh");
   if (flags.model) args.push("--model", String(flags.model));
   if (flags.effort) args.push("--effort", String(flags.effort));
-  if (flags["read-only"]) args.push("--read-only");
+  if (!flags["read-only"]) args.push("--write");
   if (prompt) args.push(prompt);
 
   log(`[codex-bridge] ${note}`);
@@ -557,7 +557,7 @@ function cmdFollowup(ctx) {
   if (!note) fail(EXIT.USAGE, "followup requires the correction text: pass it as an argument or via --task-file <path>");
   const companionCommand = requireCompanion(ctx);
 
-  const args = ["task", "--resume"];
+  const args = ["task", "--resume", "--write"];
   if (flags.model) args.push("--model", String(flags.model));
   if (flags.effort) args.push("--effort", String(flags.effort));
   args.push(note);
