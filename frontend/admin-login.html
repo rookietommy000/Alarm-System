@@ -212,8 +212,6 @@
     // /admin/login/mf4c -> ["admin", "login", "mf4c"]，取第三段
     const urlDeptId = pathParts.length >= 3 ? pathParts[2] : null;
 
-    const LAST_ADMIN_DEPT_KEY = 'alarmSystem.lastAdminDept';
-
     if (urlDeptId === '__super__') {
       deptField.value = '__super__';
       deptList.innerHTML = `<div class="dept-fixed">系統管理員登入</div>`;
@@ -221,28 +219,22 @@
       deptField.value = urlDeptId;
       deptList.innerHTML = `<div class="dept-fixed">${urlDeptId} 部門登入</div>`;
     } else {
-      // 不帶部門：裝置先前登入過就自動導去該部門頁，否則顯示靜態提示，
-      // 不再 fetch/顯示部門清單（/api/departments/public 保留給前台
-      // login.html 用，後台這邊刻意不再依賴它）。
-      const lastDept = localStorage.getItem(LAST_ADMIN_DEPT_KEY);
-      if (lastDept) {
-        window.location.replace(`/admin/login/${encodeURIComponent(lastDept)}`);
-      } else {
-        deptList.innerHTML = `<div class="dept-fixed">請使用你部門的後台登入連結，或聯絡管理員取得連結。</div>`;
-      }
+      // 不帶部門造訪，且沒有登入狀態——外部審查 2026-09-22 建議：導去前台
+      // /login 這個系統唯一的正常入口，比原本的純文字死路提示（使用者
+      // 沒書籤/不知道網址時完全卡住）更合理。已登入前台的一般使用者點
+      // 「後台管理」時，admin_required 裝飾器會用 session["department"]
+      // 自動帶對的 dept_id 導來這裡（見 app.py admin_required），不會經過
+      // 這個分支——這裡處理的是「完全沒有任何登入狀態」的情況，導去
+      // /login 讓使用者從頭正常登入，取代原本 localStorage 記憶部門的
+      // 自動重導（該機制已移除，見同一輪修復：對未登入訪客洩漏裝置曾
+      // 登入過的真實部門 id）。
+      window.location.replace('/login');
     }
 
-    // 送出前記住這次登入的部門，供下次不帶部門造訪時自動重導
-    // （__super__ 不記錄——它不是一個部門，記了會讓忘記帶 dept_id 的
-    // 操作者被自動導去超管登入頁，違背這次改動要降低超管入口可及性
-    // 的目的）。
-    //
     // 送出中的按鈕狀態（同 login.html：UI/UX 檢查發現正常送出路徑
     // 完全沒有 loading 回饋）。不 preventDefault()，只是在導航發生前
     // 把按鈕 disable+換文字。
     document.getElementById('adminLoginForm').addEventListener('submit', () => {
-      const code = deptField.value;
-      if (code && code !== '__super__') localStorage.setItem(LAST_ADMIN_DEPT_KEY, code);
       const btn = document.getElementById('submitBtn');
       btn.disabled = true;
       btn.textContent = '登入中…';
