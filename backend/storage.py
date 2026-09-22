@@ -1731,6 +1731,11 @@ class LoginAttemptStore:
 
     _TABLE = "login_attempts"
 
+    # 跟 app.py 的 SUPER_DEPT_SENTINEL 字面值一致（"__super__"），這裡獨立
+    # 定義而非 import app.py——storage.py 是底層模組，不應反向依賴 app.py
+    # 避免循環 import。超管登入告警規格 2026-09-22。
+    _SUPER_DEPT_SENTINEL = "__super__"
+
     # 降級節流的窗口/門檻（外部專家建議值，使用者裁決採用）：
     # Supabase 查詢連續失敗時，5 分鐘內同一 IP 超過此次數才擋，比正常
     # 模式（_remaining_delay 的指數退避，N=1 就開始）寬鬆得多——降級
@@ -1890,19 +1895,38 @@ class LoginAttemptStore:
         return self._count_since_last_success(ip, None, scope_by_department=False, label="coarse")
 
     def cleanup_expired(self, days: int = 90) -> int:
-        """PLAN 2.2.1 節：併入 cleanup-expired 端點，90 天保留期。"""
+        """PLAN 2.2.1 節：併入 cleanup-expired 端點，90 天保留期。
+
+        排除 department='__super__' 的記錄（超管登入告警規格 2026-09-22）：
+        超管登入紀錄是安全稽核用途，不是純節流噪音，不該套用跟一般部門
+        節流記錄相同的 90 天保留期——事後稽核可能需要回溯超過 90 天前
+        的異常。目前先用排除法（不設自動清除），不新增獨立的保留期方法，
+        理由：超管登入頻率遠低於一般部門的節流噪音，暫不設自動清除不會
+        造成表膨脹問題，之後真的需要再補獨立的 cleanup_superadmin_logs()。"""
         if not _use_supabase():
             return 0
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
         try:
             deleted = self._req(
                 "DELETE",
-                f"{self._TABLE}?attempted_at=lt.{urllib.parse.quote(cutoff, safe='')}",
+                f"{self._TABLE}?attempted_at=lt.{urllib.parse.quote(cutoff, safe='')}"
+                f"&department=neq.{self._SUPER_DEPT_SENTINEL}",
                 extra_headers={"Prefer": "return=representation"},
             )
             return len(deleted) if isinstance(deleted, list) else 0
         except Exception:
             return -1
+
+    def list_superadmin_attempts(self, limit: int = 100, success_only: Optional[bool] = None) -> list:
+        """超管登入嘗試紀錄查詢，供 GET /api/admin/superadmin-login-log 使用。
+        success_only=None 回傳全部；True/False 過濾成功/失敗。"""
+        if not _use_supabase():
+            return []
+        qs = (f"select=ip,success,attempted_at&department=eq.{self._SUPER_DEPT_SENTINEL}"
+              f"&order=attempted_at.desc&limit={limit}")
+        if success_only is not None:
+            qs += f"&success=eq.{'true' if success_only else 'false'}"
+        return self._req("GET", f"{self._TABLE}?{qs}")
 
 
 class VariantTranslationStore:

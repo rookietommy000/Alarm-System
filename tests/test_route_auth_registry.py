@@ -71,6 +71,7 @@ ROUTE_AUTH_REGISTRY = {
     ("/api/admin/ai-logs", "GET"): "admin",
     ("/api/admin/ai-usage-stats", "GET"): "admin",
     ("/api/admin/cleanup-expired", "POST"): "superadmin",
+    ("/api/admin/superadmin-login-log", "GET"): "superadmin",
 
     ("/api/admin/departments", "GET"): "superadmin",
     ("/api/admin/departments", "POST"): "superadmin",

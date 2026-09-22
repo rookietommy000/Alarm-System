@@ -2071,6 +2071,32 @@ def create_app() -> Flask:
             "login_attempts_removed": login_attempts_removed,
         })
 
+    # ── 超管登入告警（外部審查 2026-09-22）──────────────────────────
+    # login_attempts 表本來就在記錄超管登入嘗試（_do_login() 第 551 行
+    # 附近的 login_attempt_store.record(ip, SUPER_DEPT_SENTINEL, ok)），
+    # 缺的只是讀取端點跟保留期不被 90 天節流清除策略誤清（已在
+    # LoginAttemptStore.cleanup_expired() 補排除條件）。權限用
+    # superadmin_required 而非 admin_required——執行門檻是 superadmin，
+    # 查看門檻不能只要 admin，否則權限不對稱（同 DepartmentAuditLogStore
+    # 的既有教訓）：超管登入紀錄本身就是最高權限層級的操作軌跡，一般
+    # 部門 admin 不該看到「有沒有人在嘗試超管登入」這件事本身。
+
+    @app.get("/api/admin/superadmin-login-log")
+    @superadmin_required
+    def superadmin_login_log():
+        try:
+            limit = max(1, min(int(request.args.get("limit", 100)), 500))
+        except ValueError:
+            abort(400, "limit 必須是數字")
+        success_raw = request.args.get("success")
+        success_only = None
+        if success_raw is not None:
+            if success_raw not in ("true", "false"):
+                abort(400, "success 必須是 true 或 false")
+            success_only = success_raw == "true"
+        items = login_attempt_store.list_superadmin_attempts(limit, success_only)
+        return jsonify({"items": items, "limit": limit})
+
     # ── 4.5 節：部門管理端點（superadmin_required）───────────────────
 
     @app.get("/api/admin/departments")
