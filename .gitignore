@@ -6,7 +6,10 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .DS_Store
-.claude/
+.claude/*
+!.claude/skills/
+!.claude/hooks/
+.claude/settings.local.json
 Alerm Data/
 
 # 本機資料（JsonStore fallback、備份、AI 記憶）
