@@ -568,7 +568,19 @@ def create_app() -> Flask:
             check_password_hash(_DUMMY_HASH, password)  # 2.2.2 節：枚舉防護，消耗相同時間
             login_attempt_store.record(ip, form_department, False)
             return None
+        # 外部審查 2026-09-22 發現：admin_pw_hash 為選填欄位（部門可以只設一般
+        # 密碼、不設管理密碼），若直接把 None 丟進 check_password_hash() 會拋
+        # AttributeError，導致這類部門在 /admin/login 提交後回 500，跟「密碼
+        # 錯誤」的 302 在 HTTP 狀態碼層級就能被區分——等同對外洩漏「這個部門
+        # 沒有設管理密碼」。不管是一般登入(pw_hash)或管理員登入(admin_pw_hash)，
+        # 該欄位為 None 時都視同這個登入方式在這個部門不可用，比照上面「部門
+        # 不存在」分支處理：消耗等長時間、回傳 False、正常記錄，不能讓例外
+        # 冒出去變成有區別性的狀態碼。
         pw_field = "admin_pw_hash" if admin else "pw_hash"
+        if dept.get(pw_field) is None:
+            check_password_hash(_DUMMY_HASH, password)
+            login_attempt_store.record(ip, form_department, False)
+            return None
         ok = check_password_hash(dept[pw_field], password)
         login_attempt_store.record(ip, form_department, ok)
         if not ok:
