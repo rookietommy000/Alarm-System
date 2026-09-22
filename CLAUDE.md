@@ -126,6 +126,9 @@ pytest 環境用的是 `JsonStore`（單租戶本機檔案），測不到：跨�
 - `openpyxl` 讀出的儲存格值可能是 `int`/`float` 而非 `str`（例如警報代碼被 Excel 存成數字），涉及 code 欄位一律先過 `alarm_ingest/detect.py` 的 `_cell_to_str()`
 - 前端動態插入的 DOM（例如清單裡的按鈕）要用事件委派（綁在容器上），逐一綁 listener 在重繪後會失效——見 `login.html`/`admin-login.html` 的 `deptList.addEventListener`
 - Supabase 執行 DDL（新增欄位/約束）後，PostgREST 的 schema cache 不會自動刷新，migration 檔案結尾要下 `notify pgrst, 'reload schema';`（見 `006_add_variant.sql`/`007_add_import_snapshots.sql`）
+- **超管入口（外部審查 2026-09-22，方案三度定案）**：超管沒有專屬觸發機制，入口是既有的 `/admin/login/__super__`（`SUPER_DEPT_SENTINEL`，login isolation v3 已具備的路徑段，`0b331a6`）。曾評估在裸 `/admin/login`（不帶路徑）疊加 query string token 機制，外部意見否決：裸路徑是最常被掃描器探測的路徑，把最高權限登入表單放在那裡反而更差；且 token 本質是「沒有節流保護、外洩無法察覺的第二組密碼」，換來的增益與新增的管理成本不成比例——遂改用 `/admin/login/__super__` 這個「不公開的路徑段」，零額外實作成本。裸 `/admin/login`（不帶路徑）維持現況，導向 `/login`，不做任何特殊判斷。
+
+  **最終定案（使用者明確風險裁決，非工程判斷）**：`frontend/login.html` 前台部門選擇畫面新增一條明確連結 `<a href="/admin/login/__super__">超管後台 →</a>`（原本是指向裸 `/admin/login` 的「後台管理 →」死路連結，改造成直接可用的超管入口），讓前台訪客不需要口頭告知/記住網址就能找到超管登入頁。使用者原話：「我決定還是放在入口頁專門進入超管後台的好了，先不用考慮安全，反正最終系統還是要移轉到公司，這不是我要考慮的。」`SUPER_DEPT_SENTINEL`（`__super__`）本來就已經在原始碼/測試裡明著存在，不是需要保護的秘密，寫進前端 HTML 不構成新的資訊揭露面。若未來系統移轉/情境改變，這是可以重新評估的一次性風險裁決，不代表往後任何類似情境都比照辦理。
 
 ## 可用 Skill
 
