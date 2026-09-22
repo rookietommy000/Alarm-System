@@ -306,6 +306,20 @@ def create_app() -> Flask:
             if not is_admin():
                 if request.path.startswith("/api/"):
                     return jsonify({"error": "需要管理員權限"}), 403
+                # login isolation v3 上線後的銜接缺口（外部審查 2026-09-22
+                # 發現）：前台已登入的一般使用者（session["department"]
+                # 已有值，只是 admin=False）點「後台管理」或直接訪問
+                # /admin（書籤/快取舊頁）時，若一律重導不帶部門的
+                # /admin/login，會落入 fallback 邏輯——裝置 localStorage
+                # 沒有 alarmSystem.lastAdminDept 記錄時完全卡住。這裡
+                # 利用已存在的 session["department"] 帶回正確的部門登入
+                # 頁；完全未登入（session 全空）時 dept_id 本來就是 None，
+                # 維持現狀 fallback，不是 bug。superadmin_required 不比照
+                # 這個修法——一般部門的 department 不等於 superadmin 權限，
+                # 帶過去會誤導使用者到超管登入頁。
+                dept_id = session.get("department")
+                if dept_id:
+                    return redirect(url_for("admin_login_page", dept_id=dept_id))
                 return redirect(url_for("admin_login_page"))
             assert_session_valid()
             return f(*args, **kwargs)

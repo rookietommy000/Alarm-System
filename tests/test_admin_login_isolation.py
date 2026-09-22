@@ -87,3 +87,53 @@ def test_login_page_unaffected_by_admin_login_changes(anon_client):
     新增了 dept_id 參數但帶預設值，login_submit() 呼叫時不傳這個參數）。"""
     r = anon_client.get("/login")
     assert r.status_code == 200
+
+
+# ── admin_required 銜接缺口修復（外部審查 2026-09-22）──────────────────
+#
+# login isolation v3 上線後，admin_required 未登入時一律重導不帶部門的
+# /admin/login，前台已登入的一般使用者（session["department"] 已有值，
+# 只是 admin=False）點「後台管理」或直接訪問 /admin（書籤/快取）時，
+# 會落入 fallback 邏輯——裝置 localStorage 沒有 alarmSystem.lastAdminDept
+# 記錄時完全卡住，全部門都進不去後台。修法：admin_required 重導時，
+# 若 session["department"] 已有值就帶入 dept_id 導去對的部門登入頁；
+# 完全未登入（session 全空）維持現狀 fallback，不是 bug。
+
+def test_admin_required_redirects_with_dept_id_when_session_has_department(anon_client):
+    """前台已登入的一般使用者（session 有 department，admin=False）
+    訪問 /admin 時，要重導到帶著正確 dept_id 的部門登入頁，不能落入
+    不帶部門的 fallback。"""
+    with anon_client.session_transaction() as sess:
+        sess["auth"] = True
+        sess["admin"] = False
+        sess["department"] = "mf4c"
+
+    r = anon_client.get("/admin", follow_redirects=False)
+
+    assert r.status_code == 302
+    assert r.headers["Location"] == "/admin/login/mf4c"
+
+
+def test_admin_required_redirects_without_dept_id_when_completely_logged_out(anon_client):
+    """完全未登入（session 全空）時，沒有部門可帶，維持現狀重導到不帶
+    dept_id 的 /admin/login——這是既有合理設計，不是這次要修的 bug。"""
+    r = anon_client.get("/admin", follow_redirects=False)
+
+    assert r.status_code == 302
+    assert r.headers["Location"] == "/admin/login"
+
+
+def test_superadmin_required_does_not_use_session_department(anon_client):
+    """superadmin_required 不比照 admin_required 的修法——一般部門的
+    department 不等於 superadmin 權限，帶過去會誤導使用者到超管登入頁。
+    這裡用 /api/admin/departments（superadmin_required 保護的既有端點）
+    驗證：即使 session 有 department，重導／回應都不能受它影響。"""
+    with anon_client.session_transaction() as sess:
+        sess["auth"] = True
+        sess["admin"] = True
+        sess["superadmin"] = False
+        sess["department"] = "mf4c"
+
+    r = anon_client.get("/api/admin/departments", follow_redirects=False)
+
+    assert r.status_code == 403

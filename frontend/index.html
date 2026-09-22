@@ -747,7 +747,7 @@
           <button class="nav-btn" :class="{ active: page === 'camera' }" @click="page = 'camera'">📷 拍照分析</button>
           <button class="nav-btn" :class="{ active: page === 'search' }" @click="page = 'search'">🔍 搜尋代碼</button>
           <span class="nav-divider"></span>
-          <a href="/admin" class="nav-link-muted">後台</a>
+          <a :href="whoami.department ? `/admin/login/${encodeURIComponent(whoami.department)}` : '/admin'" class="nav-link-muted">後台</a>
           <a href="/logout" class="nav-link-muted">登出</a>
         </nav>
       </div>
@@ -1139,7 +1139,7 @@
 
     <div v-if="moreMenuOpen" class="more-menu-backdrop" @click.self="moreMenuOpen = false">
       <div class="more-menu-sheet">
-        <a href="/admin" class="more-menu-item">
+        <a :href="whoami.department ? `/admin/login/${encodeURIComponent(whoami.department)}` : '/admin'" class="more-menu-item">
           <span class="more-menu-icon">📊</span>後台管理
         </a>
         <a href="/logout" class="more-menu-item">
