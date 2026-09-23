@@ -20,6 +20,7 @@ import csv
 import pathlib
 import re
 import sys
+import unicodedata
 from collections import Counter
 
 from .quality import clean, split_code as _split_code
@@ -54,10 +55,10 @@ def _cell_to_str(v) -> str:
     return str(v)
 
 
-def read_grid(path: pathlib.Path, sheet: str = None) -> list:
-    """讀 .xlsx/.xlsm/.csv 成 [(分頁名, grid), ...]。純讀檔，不做欄位判斷、
-    不做 code 切分。CSV 沒有分頁概念，統一包成一個 ("csv", grid) 維持
-    介面一致。
+def read_grid(path: pathlib.Path, sheet: str = None, with_merges: bool = False) -> list:
+    """讀 .xlsx/.xlsm/.csv 成 [(分頁名, grid, merges), ...]。純讀檔，不做欄位判斷、
+    不做 code 切分。CSV 沒有分頁概念，統一包成一個 ("csv", grid, []) 維持
+    介面一致。with_merges=True 時讀取 Excel 合併範圍，否則 merges 為空 list。
 
     sheet 指定時只回傳該分頁（找不到則報錯）——多分頁檔案預設會全部
     讀入，曾經因此把不相關的分頁一起解析進來而不自知（ACM002警報.xlsx
@@ -65,26 +66,67 @@ def read_grid(path: pathlib.Path, sheet: str = None) -> list:
     需要能只鎖定單一分頁重現特定來源。"""
     if path.suffix.lower() == ".csv":
         with path.open(encoding="utf-8-sig", newline="") as f:
-            grids = [("csv", [list(r) for r in csv.reader(f)])]
+            grids = [("csv", [list(r) for r in csv.reader(f)], [])]
     else:
         import openpyxl
         wb = openpyxl.load_workbook(path, data_only=True)
-        grids = [(ws.title, [list(r) for r in ws.iter_rows(values_only=True)])
-                 for ws in wb.worksheets]
+        try:
+            grids = [(ws.title, [list(r) for r in ws.iter_rows(values_only=True)],
+                      list(ws.merged_cells.ranges) if with_merges else [])
+                     for ws in wb.worksheets]
+        finally:
+            wb.close()
 
     if sheet is None:
         return grids
     matched = [g for g in grids if g[0] == sheet]
     if not matched:
-        available = ", ".join(repr(n) for n, _ in grids)
+        available = ", ".join(repr(n) for n, _, _ in grids)
         raise ValueError(f"找不到分頁 {sheet!r}，此檔案的分頁：{available}")
     return matched
+
+
+# LINE3 原廠模板的整格表頭；支援新片語時在此擴充並補上格式測試。
+PRECISE_HEADER_PHRASES = frozenset({
+    "alarm type", "alarm number", "hmi message", "alarm description",
+    "solution", "alarm simulation", "alarm effects", "alarm reset",
+    "validation test", "operating modes",
+})
+
+
+def _normalize_header_cell(value) -> str:
+    """全形英文轉半形，將換行與連續空白合併，忽略大小寫。"""
+    return " ".join(unicodedata.normalize("NFKC", _cell_to_str(value)).split()).casefold()
+
+
+def _find_precise_header_row(grid: list):
+    """回傳通過 A/B 的最佳表頭列索引；同分取較後列，找不到回 None。"""
+    best = None
+    for row_idx, row in enumerate(grid):
+        cells = [_normalize_header_cell(value) for value in row]
+        hits = sum(cell in PRECISE_HEADER_PHRASES for cell in cells)
+        if hits < 6 or "alarm number" not in cells:
+            continue
+        number_col = cells.index("alarm number")
+        nonempty = matches = 0
+        for data_row in grid[row_idx + 2:]:
+            if not any(_cell_to_str(value).strip() for value in data_row):
+                continue
+            nonempty += 1
+            if number_col < len(data_row):
+                number = _cell_to_str(data_row[number_col]).strip()
+                matches += bool(re.fullmatch(r"\d+", number))
+        if matches and matches * 5 >= nonempty * 4:
+            candidate = (hits, row_idx)
+            if best is None or candidate > best:
+                best = candidate
+    return best[1] if best is not None else None
 
 
 def detect_columns(grid: list) -> tuple:
     """回傳 (描述欄, 原因欄, 處置欄, 資料起始列)。認不出來回 None。
 
-    先用表頭關鍵字找，找不到再退回「掃前 20 列，哪一欄最常以代碼開頭」。
+    先找精確表頭組合，再用前五列關鍵字，找不到再退回「掃前 20 列，哪一欄最常以代碼開頭」。
     後者是為了沒有表頭或表頭被合併儲存格吃掉的情況。
 
     兩個實測踩到的坑：
@@ -93,6 +135,21 @@ def detect_columns(grid: list) -> tuple:
       * Problem 分頁是問答清單不是警報資料，但內文提到代碼，會被 fallback
         誤判 → 要求至少 MIN_CODE_ROWS 列以代碼開頭才採用該分頁。
     """
+    precise_row = _find_precise_header_row(grid)
+    if precise_row is not None:
+        cells = [_normalize_header_cell(value) for value in grid[precise_row]]
+        # desc_i = Alarm Number 是階段一的權宜值，遷就 grid_to_rows() 既有的
+        # 三角色（代碼欄/原因欄/處置欄）介面——Alarm Number 欄在這批檔案裡是
+        # 純數字，split_code() 會把它整段當代碼、variant 永遠是空字串，
+        # HMI Message 欄（真正的警報名稱文字）目前完全沒被這個回傳值引用。
+        # 這不是刻意的欄位對應決策，是階段二完整欄位映射改寫前的過渡狀態
+        # （見 line3_import_format_support_proposal.md 81、98、194 行），
+        # 不要把這個回傳形狀當成定案抄去別處用。
+        return (cells.index("alarm number"),
+                cells.index("alarm description") if "alarm description" in cells else None,
+                cells.index("solution") if "solution" in cells else None,
+                precise_row + 2)
+
     HEAD = {"desc": ("description", "message", "alarm", "代碼", "訊息", "描述"),
             "cause": ("cause", "reason", "原因"),
             "action": ("action", "solution", "remedy", "comment", "處置", "對策", "備註")}
@@ -163,7 +220,7 @@ def read_tabular(path: pathlib.Path, sheet: str = None) -> list:
     後台 inspect 端點不走這支，而是分開呼叫 read_grid()/detect_columns()，
     把建議交給人確認後才呼叫 grid_to_rows()。"""
     rows: list = []
-    for name, grid in read_grid(path, sheet=sheet):
+    for name, grid, _ in read_grid(path, sheet=sheet):
         cols = detect_columns(grid)
         if cols is None:
             print(f"  [略過] 分頁 {name!r}：找不到含警報代碼的欄位", file=sys.stderr)
@@ -177,4 +234,4 @@ def read_tabular(path: pathlib.Path, sheet: str = None) -> list:
 def list_sheets(path: pathlib.Path) -> list:
     """回傳 [(分頁名, 是否偵測到警報欄位), ...]，供 --sheet-list 與
     inspect 端點列出分頁供人選擇，不解析內容。"""
-    return [(name, detect_columns(grid) is not None) for name, grid in read_grid(path)]
+    return [(name, detect_columns(grid) is not None) for name, grid, _ in read_grid(path)]

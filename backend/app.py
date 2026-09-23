@@ -1217,7 +1217,7 @@ def create_app() -> Flask:
         # 用 grid 列數把關，門檻跟固定範本路徑（BULK_IMPORT_MAX_ROWS）
         # 共用同一個常數——雖然口徑不同（那邊是解析後筆數，這裡是原始
         # 列數），但目的一致：避免過大的檔案拖垮偵測與 samples 抓取。
-        total_rows = sum(len(grid) for _, grid in sheets)
+        total_rows = sum(len(grid) for _, grid, _ in sheets)
         if total_rows > BULK_IMPORT_MAX_ROWS:
             abort(400, f"檔案總列數 {total_rows} 超過上限 {BULK_IMPORT_MAX_ROWS} 列（含所有分頁）")
 
@@ -1226,7 +1226,7 @@ def create_app() -> Flask:
         selected_detail = None
         first_name, first_grid, first_cols = None, None, None
 
-        for name, grid in sheets:
+        for name, grid, _ in sheets:
             cols = ingest_detect_columns(grid)
             if first_name is None:
                 first_name, first_grid, first_cols = name, grid, cols
