@@ -509,8 +509,13 @@ function cmdDelegate(ctx) {
 }
 
 function cmdJobs(ctx) {
+  // The installed companion CLI's real subcommand is "status --all", not
+  // "jobs" — confirmed against `codex-companion.mjs --help` after the plugin
+  // was actually installed. "jobs" was this wrapper's working name for the
+  // concept during initial implementation, before the real CLI was available
+  // to check against.
   const companionCommand = requireCompanion(ctx);
-  const result = runCompanion(companionCommand, ["jobs"], { capture: true });
+  const result = runCompanion(companionCommand, ["status", "--all"], { capture: true });
   printCompanionResult(result);
   if (result.error) fail(EXIT.ENVIRONMENT, `failed to launch companion CLI: ${result.error.message}`);
   if (result.status !== 0) process.exit(classifyCompanionFailure(result));
