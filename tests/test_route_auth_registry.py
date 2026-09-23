@@ -39,6 +39,7 @@ ROUTE_AUTH_REGISTRY = {
     # local 端點改為任何登入者皆可編輯，不再限管理員
     ("/api/alarms/<department>/<device_model>/<code>/local", "PUT"): "login",
     ("/api/alarms/<department>/<device_model>/<code>/suggestions", "POST"): "login",
+    ("/api/admin/pending-review", "GET"): "admin",
     ("/api/admin/suggestions", "GET"): "admin",
     ("/api/admin/suggestions/<int:suggestion_id>", "PUT"): "admin",
     ("/api/admin/pending-alarm-imports", "GET"): "admin",

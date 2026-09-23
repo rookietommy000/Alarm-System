@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>待審核總覽 · 警報查找系統</title>
+<link rel="icon" type="image/svg+xml" href="/icon.svg">
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script src="/js/api.js"></script>
+<style>
+:root { --bg:#f2f2f3; --text:#1d1f20; --accent:#5980a6; --divider:#1d1f2029; }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--text); font:15px/1.55 "Barlow",system-ui,sans-serif; }
+[v-cloak] { display:none; }
+main { max-width:1200px; margin:auto; padding:28px 24px; }
+a { color:var(--accent); text-underline-offset:3px; }
+header,.toolbar { display:flex; flex-wrap:wrap; gap:16px; align-items:center; justify-content:space-between; }
+header { border-bottom:1px solid var(--divider); padding-bottom:20px; }
+h1 { margin:4px 0; font-size:30px; line-height:1.2; }
+.kicker { font-size:11px; letter-spacing:.12em; color:var(--accent); }
+.toolbar { justify-content:flex-start; margin:22px 0 12px; }
+button,select,input { font:inherit; color:inherit; border:1px solid var(--divider); border-radius:0; padding:8px 10px; background:transparent; max-width:100%; }
+button { cursor:pointer; }
+button:disabled { opacity:.5; cursor:wait; }
+label { display:flex; gap:8px; align-items:center; }
+.muted { color:#606569; font-size:13px; }
+.error { color:#a23b3b; border:1px solid currentColor; padding:14px; }
+.table-wrap { overflow-x:auto; border:1px solid var(--divider); }
+table { border-collapse:collapse; width:100%; text-align:left; }
+th { font-size:12px; background:#e9e9ea; white-space:nowrap; }
+th,td { padding:14px; border-bottom:1px solid var(--divider); vertical-align:top; }
+td { overflow-wrap:anywhere; }
+.summary { white-space:pre-wrap; min-width:180px; max-width:420px; }
+.badge { display:inline-block; padding:2px 8px; background:#5980a619; color:#416180; white-space:nowrap; font-size:12px; }
+.empty { padding:36px; text-align:center; border:1px solid var(--divider); }
+@media(max-width:600px) { main { padding:18px 12px; } h1 { font-size:26px; } .toolbar label { width:100%; } }
+</style>
+</head>
+<body>
+<main id="app" v-cloak>
+  <header>
+    <div><div class="kicker">ADMIN CONSOLE / PENDING REVIEW</div><h1>待審核總覽</h1><span class="muted">彙總待審項目，前往既有入口處理</span></div>
+    <a :href="'/admin' + deptQuery">← 返回後台</a>
+  </header>
+  <div class="toolbar">
+    <label v-if="whoami.superadmin">檢視部門
+      <select v-model="department" @change="changeDepartment" :disabled="loading">
+        <option value="__all__">全部部門</option>
+        <option v-for="d in departments" :key="d.id" :value="d.id">{{ d.name }}{{ d.active ? '' : '（停用）' }}</option>
+      </select>
+    </label>
+    <span v-else class="muted">部門：{{ whoami.department_name || whoami.department }}</span>
+    <label>來源
+      <select v-model="source"><option value="">全部來源（{{ items.length }}）</option><option v-for="(label,key) in labels" :key="key" :value="key">{{ label }}（{{ items.filter(i => i.source_type === key).length }}）</option></select>
+    </label>
+    <label>搜尋 <input v-model="search" type="search" placeholder="機種、代碼或內容"></label>
+    <button @click="load" :disabled="loading">{{ loading ? '載入中…' : '重新整理' }}</button>
+  </div>
+  <p class="muted">語意疑慮為全庫共用清單；審核時使用所選部門。現場處置建議的審核路徑依既有決策停用，本頁僅列出內容。</p>
+  <p v-if="error" class="error" role="alert">{{ error }}</p>
+  <p v-if="loading" role="status">正在載入待審項目…</p>
+  <template v-else-if="!error">
+    <p class="muted" aria-live="polite">顯示 {{ filtered.length }} / {{ items.length }} 筆待審項目</p>
+    <div v-if="!filtered.length" class="empty">{{ items.length ? '沒有符合篩選條件的項目' : '目前沒有待審項目' }}</div>
+    <div v-else class="table-wrap">
+      <table><thead><tr><th>來源 / 部門</th><th>機種 / 代碼</th><th>待審內容</th><th>審核入口</th></tr></thead>
+        <tbody><tr v-for="item in filtered" :key="item.source_type + ':' + (item.review_index ?? item.id)">
+          <td><span class="badge">{{ labels[item.source_type] }}</span><div class="muted">{{ item.source_type === 'semantic_review' ? '全庫共用' : departmentName(item.department) }}</div></td>
+          <td>{{ item.device_model }}<br><strong>{{ item.code }}</strong><div v-if="item.variant" class="muted">{{ item.variant }}</div></td>
+          <td class="summary">{{ summary(item) }}</td>
+          <td><span v-if="item.source_type === 'suggestion'" class="muted">審核路徑停用，尚無審核頁</span>
+            <a v-else-if="reviewLink(item)" :href="reviewLink(item)">前往審核 →</a>
+            <span v-else class="muted">請先選擇目標部門</span></td>
+        </tr></tbody>
+      </table>
+    </div>
+  </template>
+</main>
+<script>
+Vue.createApp({
+  data() { return { whoami:{}, departments:[], department:'__all__', source:'', search:'', items:[], loading:true, error:'',
+    labels:{suggestion:'現場處置建議', pending_import:'異常匯入', semantic_review:'語意疑慮'} }; },
+  computed:{
+    deptQuery() { return this.whoami.superadmin ? '?dept=' + encodeURIComponent(this.department) : ''; },
+    filtered() { const q = this.search.trim().toLowerCase(); return this.items.filter(i => (!this.source || i.source_type === this.source) &&
+      (!q || [i.device_model,i.code,i.variant,this.summary(i)].join(' ').toLowerCase().includes(q))); }
+  },
+  async mounted() { await this.load(); },
+  methods:{
+    departmentName(id) { return this.departments.find(d => d.id === id)?.name || id || '—'; },
+    summary(item) { return item.source_type === 'suggestion' ? [item.suggestion,item.reason].filter(Boolean).join('\n') :
+      item.source_type === 'semantic_review' ? [item.description,item.issue,item.suggested_description || item.suggested_zh].filter(Boolean).join('\n') :
+      [item.description,item.flagged_reason].filter(Boolean).join('\n'); },
+    reviewLink(item) {
+      if (item.source_type === 'suggestion') return null;
+      const semantic = item.source_type === 'semantic_review';
+      const dept = semantic ? (this.whoami.superadmin ? this.department : this.whoami.department) : item.department;
+      if (!dept || dept === '__all__') return null;
+      const query = new URLSearchParams({dept, page:semantic ? 'semantic-review' : 'pending-imports'});
+      return '/admin?' + query + '#' + (semantic ? 'semantic-review-' + item.review_index : 'pending-import-' + item.id);
+    },
+    async changeDepartment() {
+      const url = new URL(location.href); url.searchParams.set('dept', this.department); history.replaceState({}, '', url);
+      await this.load();
+    },
+    async load() {
+      this.loading = true; this.error = ''; this.items = [];
+      try {
+        this.whoami = await AlarmApi.whoami();
+        if (!this.whoami.admin && !this.whoami.superadmin) { location.href = '/admin/login'; return; }
+        if (this.whoami.superadmin) {
+          const r = await AlarmApi.get('/api/admin/departments');
+          if (!r.ok) throw new Error('無法載入部門清單，請重試');
+          this.departments = await r.json();
+          this.department = new URLSearchParams(location.search).get('dept') || '__all__';
+          if (this.department !== '__all__' && !this.departments.some(d => d.id === this.department)) throw new Error('找不到指定部門，請重新選擇');
+        } else { this.department = this.whoami.department; }
+        const r = await AlarmApi.get('/api/admin/pending-review' + this.deptQuery);
+        if (r.status === 403) { location.href = '/admin/login'; return; }
+        const body = await r.json();
+        if (!r.ok) throw new Error(body.error || '載入失敗，請重試');
+        this.items = body.items;
+      } catch (e) { this.error = e.message || '載入失敗，請重試'; }
+      finally { this.loading = false; }
+    }
+  }
+}).mount('#app');
+</script>
+</body>
+</html>

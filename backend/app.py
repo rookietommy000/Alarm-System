@@ -1563,6 +1563,29 @@ def create_app() -> Flask:
             raise
         return jsonify(row), 201
 
+    @app.get("/api/admin/pending-review")
+    @admin_required
+    def list_pending_review():
+        scope, dept = scope_department()
+        department = dept if scope == DeptScope.DEPT else None
+        items = []
+        for source_type, store in (
+            ("suggestion", alarm_suggestion_store),
+            ("pending_import", pending_alarm_import_store),
+        ):
+            items.extend(
+                {**row, "source_type": source_type}
+                for row in store.list_pending(department=department)
+            )
+        # 語意清單沿用既有全庫共用範圍；index 必須在過濾前取得，
+        # 才能對應既有 update_semantic_review 的完整清單索引。
+        items.extend(
+            {**row, "source_type": "semantic_review", "review_index": index}
+            for index, row in enumerate(_load_semantic_review())
+            if row.get("status") == "pending"
+        )
+        return jsonify({"items": items})
+
     @app.get("/api/admin/suggestions")
     @admin_required
     def list_suggestions():
@@ -2314,6 +2337,11 @@ def create_app() -> Flask:
     @admin_required
     def admin():
         return _no_cache(send_from_directory(FRONTEND, "dashboard.html"))
+
+    @app.get("/admin/pending-review")
+    @admin_required
+    def pending_review_page():
+        return _no_cache(send_from_directory(FRONTEND, "pending-review.html"))
 
     @app.get("/admin/dashboard")
     @admin_required

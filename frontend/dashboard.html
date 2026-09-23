@@ -231,6 +231,7 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
         </select>
       </div>
       <div class="user" style="margin-top:auto; padding:14px 18px 0; border-top:1px solid var(--color-divider); display:flex; flex-direction:column; gap:4px">
+        <a :href="'/admin/pending-review' + deptQuery()" style="font-size:13px">待審核總覽 →</a>
         <a href="/app" style="font-size:13px">← 回到前台查詢</a>
         <a href="/admin/logout" style="font-size:13px">登出後台</a>
       </div>
@@ -672,7 +673,7 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
             </p>
 
             <div style="display:flex; flex-direction:column; gap:10px">
-              <div v-for="row in filteredSemanticReview" :key="row.idx" class="blueprint"
+              <div v-for="row in filteredSemanticReview" :key="row.idx" :id="'semantic-review-' + row.idx" tabindex="-1" class="blueprint"
                    style="border:1px solid var(--color-divider); padding:14px 16px; display:flex; flex-direction:column; gap:8px">
                 <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
                 <div style="display:flex; justify-content:space-between; align-items:baseline; gap:12px; flex-wrap:wrap">
@@ -754,7 +755,7 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
             </p>
 
             <div style="display:flex; flex-direction:column; gap:10px">
-              <div v-for="row in filteredPendingImports" :key="row.id" class="blueprint"
+              <div v-for="row in filteredPendingImports" :key="row.id" :id="'pending-import-' + row.id" tabindex="-1" class="blueprint"
                    style="border:1px solid var(--color-divider); padding:14px 16px; display:flex; flex-direction:column; gap:8px">
                 <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
                 <div style="display:flex; justify-content:space-between; align-items:baseline; gap:12px; flex-wrap:wrap">
@@ -1661,6 +1662,11 @@ createApp({
       // 部門管理員固定看自己的部門，不受 viewDept 影響
       this.viewDept = this.whoami.department;
     }
+    // 統一待審列表的深連結：部門初始化完成後才載入既有審核分頁。
+    const reviewPage = new URLSearchParams(location.search).get('page');
+    if (['semantic-review', 'pending-imports'].includes(reviewPage)) {
+      this.page = reviewPage;
+    }
     this.setAuditQuickRange('month');  // 預設本月，load() 內的 loadAudit() 會沿用這個區間
     await this.load();
 
@@ -1673,6 +1679,18 @@ createApp({
     this.nowLabel = '資料更新於 ' + String(d.getMonth()+1).padStart(2,'0') + '/' + String(d.getDate()).padStart(2,'0') + ' ' + String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
   },
   methods: {
+    async focusReviewItem(prefix) {
+      const id = location.hash.slice(1);
+      if (!id.startsWith(prefix) || !/^\d+$/.test(id.slice(prefix.length))) return;
+      await this.$nextTick();
+      const row = document.getElementById(id);
+      if (row) {
+        row.scrollIntoView({ block: 'center' });
+        row.focus({ preventScroll: true });
+      } else {
+        this.showToast('此項目已處理或已不在目前待審清單，請返回總覽重新整理');
+      }
+    },
     async loadWhoami() {
       const data = await AlarmApi.whoami();
       this.whoami = data;
@@ -2117,6 +2135,7 @@ createApp({
           busy: false, rowError: '',
         }));
         this.semanticReview.loaded = true;
+        await this.focusReviewItem('semantic-review-');
       } catch (err) {
         this.semanticReview.error = '網路錯誤，請稍後再試';
       } finally {
@@ -2170,12 +2189,13 @@ createApp({
     async loadPendingImports() {
       this.pendingImports.loading = true; this.pendingImports.error = '';
       try {
-        const r = await AlarmApi.get('/api/admin/pending-alarm-imports');
+        const r = await AlarmApi.get('/api/admin/pending-alarm-imports' + this.deptQuery());
         if (r.status === 403) { location.href = '/admin/login'; return; }
         if (!r.ok) { this.pendingImports.error = (await r.json().catch(() => ({}))).error || '載入失敗'; return; }
         const rows = await r.json();
         this.pendingImports.items = rows.map(row => ({ ...row, busy: false, rowError: '' }));
         this.pendingImports.loaded = true;
+        await this.focusReviewItem('pending-import-');
       } catch (err) {
         this.pendingImports.error = '網路錯誤，請稍後再試';
       } finally {
