@@ -1574,22 +1574,11 @@ class StatusTransitionMixin:
         self._req("PATCH", f"{self._TABLE}?id=eq.{row_id}", patch)
 
 
-class AlarmSuggestionStore(StatusTransitionMixin):
-    """alarm_suggestions 表的讀寫（PLAN_local_solution.md 3.2/4.2 節）。
+class _PendingReviewCrudMixin:
+    """兩種待審 Store 的 CRUD 骨架；子類提供 _TABLE 與公開方法介面。
 
-    只服務 Supabase——這張表本身就是多部門功能（一般使用者提交建議、
-    管理員依部門審核），JsonStore 環境測不到跨部門隔離，這裡不假裝
-    支援，比照 AiScanStore/LoginAttemptStore 的既有模式：
-    _use_supabase()=False 時讀回空清單、寫入 no-op。
-
-    目前無前端呼叫端。審核路徑已停用：部門共用密碼、無個人帳號，提交者
-    與審核者無法區分，審核在此模型下摩擦為真、把關為假（PLAN_local_
-    solution.md 審核路徑停用決策記錄）。已對正式 Supabase 端到端驗證過
-    （提交 → 待審 → 接受 → alarms.local_solution 生效），技術上完好，
-    保留供個人帳號功能完成後重新評估啟用，不刪除。
+    狀態轉換仍由獨立的 StatusTransitionMixin 負責。
     """
-
-    _TABLE = "alarm_suggestions"
 
     def _base_key(self):
         base = os.environ.get("SUPABASE_URL", "").rstrip("/")
@@ -1612,21 +1601,56 @@ class AlarmSuggestionStore(StatusTransitionMixin):
             raw = r.read().decode()
             return json.loads(raw) if raw.strip() else []
 
+    def _create(self, body: dict) -> dict:
+        if not _use_supabase():
+            return {}
+        result = self._req("POST", f"{self._TABLE}",
+                           [{k: v for k, v in body.items() if v is not None}],
+                           extra_headers={"Prefer": "return=representation"})
+        return result[0] if result else {}
+
+    def _list_pending(self, department: Optional[str], *, select: str = "*") -> list:
+        if not _use_supabase():
+            return []
+        qs = f"select={select}&status=eq.pending&order=submitted_at.desc"
+        if department is not None:
+            qs += f"&department=eq.{urllib.parse.quote(department, safe='')}"
+        return self._req("GET", f"{self._TABLE}?{qs}")
+
+    def _get_by_id(self, row_id: int) -> Optional[dict]:
+        if not _use_supabase():
+            return None
+        result = self._req("GET", f"{self._TABLE}?id=eq.{row_id}&select=*")
+        return result[0] if result else None
+
+
+class AlarmSuggestionStore(StatusTransitionMixin, _PendingReviewCrudMixin):
+    """alarm_suggestions 表的讀寫（PLAN_local_solution.md 3.2/4.2 節）。
+
+    只服務 Supabase——這張表本身就是多部門功能（一般使用者提交建議、
+    管理員依部門審核），JsonStore 環境測不到跨部門隔離，這裡不假裝
+    支援，比照 AiScanStore/LoginAttemptStore 的既有模式：
+    _use_supabase()=False 時讀回空清單、寫入 no-op。
+
+    目前無前端呼叫端。審核路徑已停用：部門共用密碼、無個人帳號，提交者
+    與審核者無法區分，審核在此模型下摩擦為真、把關為假（PLAN_local_
+    solution.md 審核路徑停用決策記錄）。已對正式 Supabase 端到端驗證過
+    （提交 → 待審 → 接受 → alarms.local_solution 生效），技術上完好，
+    保留供個人帳號功能完成後重新評估啟用，不刪除。
+    """
+
+    _TABLE = "alarm_suggestions"
+
     def create(self, department: str, device_model: str, code: str,
                suggestion: str, reason: Optional[str], submitted_by: str, variant: str = "") -> dict:
         """一般使用者提交建議，狀態固定為 pending，不直接寫入 alarms
         （PLAN_local_solution.md 2.2 節：一個人改、全部門立刻看到，
         工廠環境風險過高，所以只能建議、由管理員審核後才生效）。"""
-        if not _use_supabase():
-            return {}
         body = {
             "department": department, "device_model": device_model, "code": code,
             "variant": variant, "suggestion": suggestion, "reason": reason, "submitted_by": submitted_by,
         }
-        result = self._req("POST", f"{self._TABLE}",
-                           [{k: v for k, v in body.items() if v is not None}],
-                           extra_headers={"Prefer": "return=representation"})
-        return result[0] if result else {}
+        return self._create(body)
 
     def list_pending(self, department: Optional[str]) -> list:
         """待審清單，依 scope_department() 過濾（department=None 是總管
@@ -1638,13 +1662,9 @@ class AlarmSuggestionStore(StatusTransitionMixin):
         建議文字本身，沒有現值對照無法判斷這是從無到有還是覆蓋既有內容；
         且外鍵已是複合鍵 (department, device_model, code)，逐筆查詢或
         前端另外打 API 都是 N+1，這裡用單一往返的 embedding 查詢）。"""
-        if not _use_supabase():
-            return []
-        qs = ("select=*,alarms(solution,local_solution,local_reason,description)"
-              "&status=eq.pending&order=submitted_at.desc")
-        if department is not None:
-            qs += f"&department=eq.{urllib.parse.quote(department, safe='')}"
-        return self._req("GET", f"{self._TABLE}?{qs}")
+        return self._list_pending(
+            department, select="*,alarms(solution,local_solution,local_reason,description)",
+        )
 
     def has_pending(self, department: str, device_model: str, code: str, variant: str = "") -> bool:
         """單筆存在性檢查，不撈整個部門的待審清單（外部審查第四輪發現：
@@ -1681,10 +1701,7 @@ class AlarmSuggestionStore(StatusTransitionMixin):
             return total.isdigit() and int(total) > 0
 
     def get_by_id(self, suggestion_id: int) -> Optional[dict]:
-        if not _use_supabase():
-            return None
-        result = self._req("GET", f"{self._TABLE}?id=eq.{suggestion_id}&select=*")
-        return result[0] if result else None
+        return self._get_by_id(suggestion_id)
 
     def review(self, suggestion_id: int, status: str, reviewed_by: str,
                review_note: Optional[str]) -> Optional[dict]:
@@ -2099,7 +2116,7 @@ class SemanticReviewStore:
         _urlopen(req)
 
 
-class PendingAlarmImportStore(StatusTransitionMixin):
+class PendingAlarmImportStore(StatusTransitionMixin, _PendingReviewCrudMixin):
     """異常匯入資料的待審清單（見 migration 010_add_pending_alarm_
     imports.sql）。比照 AlarmSuggestionStore 的既有模式（storage.py
     AlarmSuggestionStore 類別）：只服務 Supabase，_use_supabase()=False
@@ -2118,27 +2135,6 @@ class PendingAlarmImportStore(StatusTransitionMixin):
 
     _TABLE = "pending_alarm_imports"
 
-    def _base_key(self):
-        base = os.environ.get("SUPABASE_URL", "").rstrip("/")
-        key = os.environ.get("SUPABASE_KEY", "")
-        return base, key
-
-    def _req(self, method: str, path: str, body=None, extra_headers: Optional[dict] = None):
-        base, key = self._base_key()
-        headers = {
-            "apikey": key,
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json",
-        }
-        if extra_headers:
-            headers.update(extra_headers)
-        data = json.dumps(body).encode() if body is not None else None
-        req = urllib.request.Request(f"{base}/rest/v1/{path}", data=data,
-                                     headers=headers, method=method)
-        with _urlopen(req) as r:
-            raw = r.read().decode()
-            return json.loads(raw) if raw.strip() else []
-
     def create(self, department: str, device_model: str, code: str, variant: str,
                description: str, source: str, flagged_reason: str,
                severity: Optional[str] = None, cause: Optional[str] = None,
@@ -2156,8 +2152,6 @@ class PendingAlarmImportStore(StatusTransitionMixin):
         呼叫端（批次匯入/AI 辨識）負責判斷「這筆是不是異常該進待審」，
         這裡只單純負責寫入，不做業務判斷——同本檔一貫的 store 層分工。
         """
-        if not _use_supabase():
-            return {}
         body = {
             "department": department, "device_model": device_model, "code": code,
             "variant": variant, "description": description, "source": source,
@@ -2166,26 +2160,15 @@ class PendingAlarmImportStore(StatusTransitionMixin):
             "raw_source_text": raw_source_text, "confidence": confidence,
             "submitted_by": submitted_by,
         }
-        result = self._req("POST", f"{self._TABLE}",
-                           [{k: v for k, v in body.items() if v is not None}],
-                           extra_headers={"Prefer": "return=representation"})
-        return result[0] if result else {}
+        return self._create(body)
 
     def list_pending(self, department: Optional[str]) -> list:
         """待審清單，依 scope_department() 過濾（department=None 是總管
         不過濾的明確選擇，同 alarms_store.load() 一致的既有原則）。"""
-        if not _use_supabase():
-            return []
-        qs = "select=*&status=eq.pending&order=submitted_at.desc"
-        if department is not None:
-            qs += f"&department=eq.{urllib.parse.quote(department, safe='')}"
-        return self._req("GET", f"{self._TABLE}?{qs}")
+        return self._list_pending(department)
 
     def get_by_id(self, import_id: int) -> Optional[dict]:
-        if not _use_supabase():
-            return None
-        result = self._req("GET", f"{self._TABLE}?id=eq.{import_id}&select=*")
-        return result[0] if result else None
+        return self._get_by_id(import_id)
 
     def review(self, import_id: int, status: str, reviewed_by: str,
                review_note: Optional[str]) -> Optional[dict]:

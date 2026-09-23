@@ -12,6 +12,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 BACKEND = Path(__file__).resolve().parent.parent / "backend"
 sys.path.insert(0, str(BACKEND))
 
@@ -101,3 +103,106 @@ def test_create_includes_optional_fields_when_provided(monkeypatch):
     assert sent["raw_source_text"] == "0099.raw"
     assert sent["confidence"] == 42.5
     assert sent["submitted_by"] == "tester"
+
+
+@pytest.fixture(params=[
+    ("AlarmSuggestionStore", "alarm_suggestions", "suggestion_id",
+     {"suggestion": "建議", "reason": None, "submitted_by": "tester"},
+     "*,alarms(solution,local_solution,local_reason,description)"),
+    ("PendingAlarmImportStore", "pending_alarm_imports", "import_id",
+     {"description": "描述", "source": "bulk_import", "flagged_reason": "格式",
+      "confidence": 0, "keywords": [], "cause": None}, "*"),
+])
+def crud_case(request, monkeypatch):
+    name, table, id_arg, fields, select = request.param
+    monkeypatch.setenv("SUPABASE_URL", "https://example.invalid/")
+    monkeypatch.setenv("SUPABASE_KEY", "test-key")
+    monkeypatch.setattr(storage_mod, "_use_supabase", lambda: True)
+    calls = []
+    response = {"raw": b'[{"id": 7}]'}
+
+    def fake_urlopen(req):
+        calls.append(req)
+        return FakeResponse(response["raw"])
+
+    monkeypatch.setattr(storage_mod, "_urlopen", fake_urlopen)
+    return (getattr(storage_mod, name)(), table, id_arg,
+            dict(department="local", device_model="M1", code="001", variant="", **fields),
+            select, calls, response)
+
+
+def test_crud_noop_without_supabase(crud_case, monkeypatch):
+    store, _, id_arg, fields, _, calls, _ = crud_case
+    monkeypatch.setattr(storage_mod, "_use_supabase", lambda: False)
+    assert store.create(**fields) == {}
+    assert store.list_pending(department=None) == []
+    assert store.get_by_id(**{id_arg: 7}) is None
+    assert store.review(**{id_arg: 7}, status="rejected", reviewed_by="admin", review_note=None) is None
+    assert store.claim(7, from_status="pending", to_status="rejected", actor="admin") is None
+    assert store.release(7) is None
+    assert calls == []
+
+
+@pytest.mark.parametrize("raw, expected", [(b'[{"id": 7}]', {"id": 7}), (b'[]', {}), (b' ', {})])
+def test_crud_create_payload_and_response(crud_case, raw, expected):
+    store, table, _, fields, _, calls, response = crud_case
+    response["raw"] = raw
+    assert store.create(**fields) == expected
+    req, = calls
+    assert req.full_url == f"https://example.invalid/rest/v1/{table}"
+    assert req.get_method() == "POST"
+    assert json.loads(req.data) == [{k: v for k, v in fields.items() if v is not None}]
+    assert req.get_header("Prefer") == "return=representation"
+    assert req.get_header("Apikey") == "test-key"
+    assert req.get_header("Authorization") == "Bearer test-key"
+    assert req.get_header("Content-type") == "application/json"
+
+
+@pytest.mark.parametrize("department, suffix", [(None, ""), ("", "&department=eq."),
+    ("部門/a b", "&department=eq.%E9%83%A8%E9%96%80%2Fa%20b")])
+def test_crud_list_query(crud_case, department, suffix):
+    store, table, _, _, select, calls, _ = crud_case
+    assert store.list_pending(department=department) == [{"id": 7}]
+    req, = calls
+    assert req.get_method() == "GET"
+    assert req.data is None
+    assert req.full_url == (f"https://example.invalid/rest/v1/{table}?select={select}"
+                            f"&status=eq.pending&order=submitted_at.desc{suffix}")
+
+
+@pytest.mark.parametrize("raw, expected", [(b'[]', None), (b'', None), (b'[{"id": 7}]', {"id": 7})])
+def test_crud_get_by_id_contract(crud_case, raw, expected):
+    store, table, id_arg, _, _, calls, response = crud_case
+    response["raw"] = raw
+    assert store.get_by_id(**{id_arg: 7}) == expected
+    req, = calls
+    assert req.get_method() == "GET"
+    assert req.full_url == f"https://example.invalid/rest/v1/{table}?id=eq.7&select=*"
+
+
+@pytest.mark.parametrize("note", [None, "", "審核說明"])
+def test_crud_review_claim_release_contract(crud_case, note):
+    store, table, id_arg, _, _, calls, response = crud_case
+    base = f"https://example.invalid/rest/v1/{table}?id=eq.7"
+    assert store.review(**{id_arg: 7}, status="rejected", reviewed_by="admin", review_note=note) == {"id": 7}
+    assert calls[-1].full_url == base  # review 保留既有的無條件 PATCH。
+    review_body = json.loads(calls[-1].data)
+    assert review_body.pop("reviewed_at")
+    expected = {"status": "rejected", "reviewed_by": "admin"}
+    if note is not None:
+        expected["review_note"] = note
+    assert review_body == expected
+    assert store.claim(7, from_status="pending", to_status="rejected", actor="admin", review_note=note) == {"id": 7}
+    assert calls[-1].full_url == base + "&status=eq.pending"
+    claim_body = json.loads(calls[-1].data)
+    assert claim_body.pop("reviewed_at")
+    assert claim_body == expected
+    for req in calls:
+        assert req.get_method() == "PATCH"
+        assert req.get_header("Prefer") == "return=representation"
+    response["raw"] = b'[]'
+    assert store.claim(7, from_status="pending", to_status="rejected", actor="admin") is None
+    assert store.release(7) is None
+    assert calls[-1].full_url == base
+    assert calls[-1].get_method() == "PATCH"
+    assert json.loads(calls[-1].data) == {"status": "pending", "reviewed_by": None, "reviewed_at": None}
