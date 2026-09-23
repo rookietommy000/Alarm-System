@@ -2108,9 +2108,11 @@ def create_app() -> Flask:
     @superadmin_required
     def superadmin_login_log():
         try:
-            limit = max(1, min(int(request.args.get("limit", 100)), 500))
+            limit = int(request.args.get("limit", 100))
         except ValueError:
             abort(400, "limit 必須是數字")
+        if not 1 <= limit <= 500:
+            abort(400, "limit 必須介於 1 到 500")
         success_raw = request.args.get("success")
         success_only = None
         if success_raw is not None:
