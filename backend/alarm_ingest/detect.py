@@ -22,6 +22,7 @@ import re
 import sys
 import unicodedata
 from collections import Counter
+from enum import Enum
 
 from .quality import clean, split_code as _split_code
 
@@ -121,6 +122,83 @@ def _find_precise_header_row(grid: list):
             if best is None or candidate > best:
                 best = candidate
     return best[1] if best is not None else None
+
+
+def _find_operating_modes_range(header_row_idx: int, header_row: list, merges: list):
+    """回傳 Operating Modes 的欄範圍（0-based，含右界）；缺席回 None。
+
+    merges 必須來自 read_grid(..., with_merges=True)，不猜測右側欄位。
+    """
+    for col_idx, cell in enumerate(header_row):
+        if _normalize_header_cell(cell) != "operating modes":
+            continue
+        for merged in merges:
+            if (merged.min_row <= header_row_idx + 1 <= merged.max_row
+                    and merged.min_col <= col_idx + 1 <= merged.max_col):
+                return merged.min_col - 1, merged.max_col - 1
+        return col_idx, col_idx
+    return None
+
+
+def _operating_modes_sub_columns(grid: list, header_row_idx: int, col_range: tuple) -> list:
+    """保留非空子表頭的實際欄索引，避免中間空白造成後續欄位左移。"""
+    sub_row = grid[header_row_idx + 1] if header_row_idx + 1 < len(grid) else []
+    start_col, end_col = col_range
+    return [(col, _cell_to_str(sub_row[col]).strip())
+            for col in range(start_col, min(end_col + 1, len(sub_row)))
+            if _cell_to_str(sub_row[col]).strip()]
+
+
+def _extract_operating_modes_sub_fields(grid: list, header_row_idx: int,
+                                       col_range: tuple) -> list:
+    """依原始欄序回傳非空子欄位名稱，不排序、不補齊空白子表頭。"""
+    return [name for _, name in _operating_modes_sub_columns(grid, header_row_idx, col_range)]
+
+
+class OperatingModesCellState(Enum):
+    ENABLED = "enabled"
+    DISABLED = "disabled"
+    UNKNOWN = "unknown"
+
+
+def _parse_operating_modes_cell(value) -> OperatingModesCellState:
+    """三態判斷；UNKNOWN 必須由呼叫端記錄警告，不可當成 DISABLED。"""
+    normalized = _normalize_header_cell(value)
+    if normalized == "x":
+        return OperatingModesCellState.ENABLED
+    if normalized in ("", "-", "—", "n/a"):
+        return OperatingModesCellState.DISABLED
+    return OperatingModesCellState.UNKNOWN
+
+
+def extract_operating_modes(grid: list, header_row_idx: int, col_range,
+                            sub_fields: list, data_row_idx: int) -> tuple:
+    """解析一列，回傳 (啟用名稱清單, 警告清單)，不寫入或依 code 去重。
+
+    col_range=None 表示檔案缺席此欄，回傳 (None, [])；有欄但全未啟用
+    則回傳 ([], [])。sub_fields 由 _extract_operating_modes_sub_fields()
+    取得，與非空子表頭位置一一對應。警告保留原值文字、欄名及 0-based
+    row/column，呼叫端負責連同來源檔名/分頁呈現；有警告時清單只包含
+    確認啟用的模式，不代表其他模式已確認停用。
+    """
+    if col_range is None:
+        return None, []
+    columns = _operating_modes_sub_columns(grid, header_row_idx, col_range)
+    if len(columns) != len(sub_fields):
+        raise ValueError("Operating Modes 子欄位數量與子表頭位置不符")
+    if not 0 <= data_row_idx < len(grid):
+        raise IndexError("Operating Modes 資料列索引超出範圍")
+    row = grid[data_row_idx]
+    modes, warnings = [], []
+    for (col_idx, _), field_name in zip(columns, sub_fields):
+        value = row[col_idx] if col_idx < len(row) else None
+        state = _parse_operating_modes_cell(value)
+        if state is OperatingModesCellState.ENABLED:
+            modes.append(field_name)
+        elif state is OperatingModesCellState.UNKNOWN:
+            warnings.append({"field": field_name, "row": data_row_idx,
+                             "column": col_idx, "raw_value": _cell_to_str(value)})
+    return modes, warnings
 
 
 def detect_columns(grid: list) -> tuple:
