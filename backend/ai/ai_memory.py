@@ -48,10 +48,16 @@ _SAFE_KEY_RE = re.compile(r"[^A-Za-z0-9_\-]")
 
 # ── 設定 ────────────────────────────────────────────────────────────────────
 
-MEM_DIR = Path(os.environ.get(
-    "AI_MEM_DIR",
-    str(Path(__file__).resolve().parent.parent.parent / "data" / "ai_memory")
-))
+def _mem_dir() -> Path:
+    """每次呼叫時才讀 os.environ，不在模組載入當下固化成常數——固化成
+    常數會讓測試用 monkeypatch.setenv("AI_MEM_DIR", ...) 之後，任何在
+    模組已經 import 過的情況下呼叫的函式仍拿到載入時的舊值，必須額外
+    importlib.reload() 才能生效，而 reload 又對具名匯入的呼叫端無效。
+    改成函式讓 monkeypatch.setenv() 本身就足夠，不再需要 reload。"""
+    return Path(os.environ.get(
+        "AI_MEM_DIR",
+        str(Path(__file__).resolve().parent.parent.parent / "data" / "ai_memory")
+    ))
 
 # [MEM-001] 保留天數分級（從 ai_config 讀，不寫死）
 RETENTION = {
@@ -286,7 +292,7 @@ def cleanup_expired() -> int:
     removed = 0
 
     for subdir in ["history", "corrections"]:
-        folder = MEM_DIR / subdir
+        folder = _mem_dir() / subdir
         if not folder.exists():
             continue
         for f in folder.glob("*.json"):
@@ -393,7 +399,7 @@ def _append_record(subdir: str, key: str, record: dict, department: Optional[str
             })
         return
 
-    folder = MEM_DIR / subdir
+    folder = _mem_dir() / subdir
     folder.mkdir(parents=True, exist_ok=True)
     safe_key = (_SAFE_KEY_RE.sub("_", key) or "_unknown")[:64]
     path = folder / f"{safe_key}.json"
@@ -415,7 +421,7 @@ def _load_records(subdir: str, key: str, department: Optional[str]) -> list:
         return []
 
     safe_key = (_SAFE_KEY_RE.sub("_", key) or "_unknown")[:64]
-    path = MEM_DIR / subdir / f"{safe_key}.json"
+    path = _mem_dir() / subdir / f"{safe_key}.json"
     now = datetime.now(timezone.utc)
     return [r for r in _read_file(path) if _not_expired(r, now)]
 

@@ -24,10 +24,14 @@ from .ai_config import LOG as _LOG_CFG
 
 # ── 設定 ────────────────────────────────────────────────────────────────────
 
-LOG_DIR = Path(os.environ.get(
-    "AI_LOG_DIR",
-    str(Path(__file__).resolve().parent.parent.parent / "data" / "ai_logs")
-))
+def _log_dir() -> Path:
+    """每次呼叫時才讀 os.environ，理由同 ai_memory.py 的 _mem_dir()——
+    模組頂層常數在測試 monkeypatch.setenv() 後不會自動更新，必須靠
+    函式延遲讀取才能讓隔離設定即時生效。"""
+    return Path(os.environ.get(
+        "AI_LOG_DIR",
+        str(Path(__file__).resolve().parent.parent.parent / "data" / "ai_logs")
+    ))
 
 LOG_RETENTION_DAYS = _LOG_CFG["retain_days"]
 
@@ -236,4 +240,4 @@ def _write(record: dict):
 
 def _today_log_path() -> Path:
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    return LOG_DIR / f"{today}.json"
+    return _log_dir() / f"{today}.json"

@@ -224,6 +224,25 @@ class TestUseSupabaseFlagRespectsLocalDirEnvVar:
         importlib.reload(m)
         assert m._use_supabase() is False
 
+    def test_ai_memory_mem_dir_reads_env_without_reload(self, monkeypatch, tmp_path):
+        """持續污染修復（2026-09-23）：MEM_DIR 先前是模組頂層常數，只在
+        import 當下讀一次 os.environ，導致具名匯入具名匯入的呼叫端
+        （ai_pipeline.py 用 `from .ai_memory import record_scan` 這種
+        寫法）即使測試設了 AI_MEM_DIR、也要額外 importlib.reload() 才能
+        生效——而 reload 對具名匯入本身沒有幫助（reload 只換掉
+        sys.modules 裡的模組物件，具名匯入抓走的函式參照不會跟著換）。
+        改成 _mem_dir() 函式後，monkeypatch.setenv() 本身就足夠，這裡
+        刻意不 reload，證明新設計真的不需要它。"""
+        import ai.ai_memory as m
+        monkeypatch.setenv("AI_MEM_DIR", str(tmp_path))
+        assert m._mem_dir() == tmp_path
+
+    def test_ai_logger_log_dir_reads_env_without_reload(self, monkeypatch, tmp_path):
+        """同上，log_dir()/ai_logger.py 版本。"""
+        import ai.ai_logger as m
+        monkeypatch.setenv("AI_LOG_DIR", str(tmp_path))
+        assert m._log_dir() == tmp_path
+
 
 class TestRecordScanFormat:
     def test_scan_id_generated(self, mem):

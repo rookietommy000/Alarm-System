@@ -18,6 +18,19 @@ BACKEND = Path(__file__).resolve().parent.parent / "backend"
 sys.path.insert(0, str(BACKEND))
 
 
+@pytest.fixture(autouse=True)
+def _ai_isolation_env(tmp_path, monkeypatch):
+    """AI_MEM_DIR/AI_LOG_DIR 的安全網：ai_memory.py/ai_logger.py 的
+    _mem_dir()/_log_dir() 每次呼叫都即時讀取這兩個環境變數（不是模組
+    載入時固化的常數），所以這裡單純 monkeypatch.setenv() 就足夠讓任何
+    測試——即使完全沒有主動設定隔離目錄的測試——也不會不小心打到
+    .env 載入的正式 Supabase。個別測試若需要用自己的 tmp_path 子目錄
+    （例如既有的 mem/pipeline_mem fixture），可以再自行覆寫，不會跟
+    這裡衝突。"""
+    monkeypatch.setenv("AI_MEM_DIR", str(tmp_path / "ai_mem"))
+    monkeypatch.setenv("AI_LOG_DIR", str(tmp_path / "ai_log"))
+
+
 @pytest.fixture
 def anon_client(tmp_path, monkeypatch):
     """未登入的測試 client（本機模式，.env 明文密碼 fallback）。"""
