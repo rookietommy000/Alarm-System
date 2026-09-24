@@ -291,6 +291,72 @@ def grid_to_rows(grid: list, mapping: tuple, source: str) -> list:
     return rows
 
 
+def grid_to_alarm_dicts(grid: list, header_row_idx: int, merges: list,
+                        source: str, device_model: str, *, existing_keys: set) -> list:
+    """依已確認的 LINE3 表頭轉出標準 alarm dict；不讀寫資料庫。
+
+    header_row_idx 為 0-based，資料從表頭後第二列開始；merges 應由
+    read_grid(..., with_merges=True) 提供。device_model 原樣保留。
+    existing_keys 必填：第一批傳 set()，後續各檔／分頁傳入先前輸出的
+    (device_model, code, variant) 集合；本函式不修改該集合。批內或跨批
+    重複、非空但非純數字的 Alarm Number 都拋 ValueError，中止整批。
+
+    每筆另含 _source 與 _warnings（沿用 Operating Modes 的警告結構，
+    row/column 為 0-based，原始文字在 raw_value）。未知 Alarm Type
+    的 severity 為 None 並附警告，呼叫端須呈現警告、處理後才能匯入。
+    operating_modes 缺欄為 None，有欄但全未啟用為 []。
+    """
+    if not isinstance(device_model, str):
+        raise TypeError("device_model 必須是字串")
+    if not 0 <= header_row_idx < len(grid):
+        raise ValueError("LINE3 表頭列索引超出範圍")
+    header = grid[header_row_idx]
+    normalized = [_normalize_header_cell(value) for value in header]
+    columns = {}
+    for field in ("alarm type", "alarm number", "hmi message",
+                  "alarm description", "solution"):
+        if normalized.count(field) != 1:
+            raise ValueError(f"LINE3 表頭必須恰有一個 {field!r}")
+        columns[field] = normalized.index(field)
+    col_range = _find_operating_modes_range(header_row_idx, header, merges)
+    sub_fields = (_extract_operating_modes_sub_fields(grid, header_row_idx, col_range)
+                  if col_range is not None else [])
+    seen = set(existing_keys)
+    rows = []
+    for row_idx in range(header_row_idx + 2, len(grid)):
+        row = grid[row_idx]
+
+        def cell(field):
+            col = columns[field]
+            return row[col] if col < len(row) else None
+
+        code = _cell_to_str(cell("alarm number")).strip()
+        if not code:
+            continue
+        if re.fullmatch(r"\d+", code) is None:
+            raise ValueError(f"{source} row={row_idx}: 無效 Alarm Number {code!r}")
+        key = (device_model, code, "")
+        if key in seen:
+            raise ValueError(f"{source} row={row_idx}: 重複 alarm 主鍵 {key!r}")
+        seen.add(key)
+        modes, warnings = extract_operating_modes(
+            grid, header_row_idx, col_range, sub_fields, row_idx)
+        alarm_type = cell("alarm type")
+        severity = {"a": "警告", "w": "資訊"}.get(_normalize_header_cell(alarm_type))
+        if severity is None:
+            warnings.append({"field": "Alarm Type", "row": row_idx,
+                             "column": columns["alarm type"],
+                             "raw_value": _cell_to_str(alarm_type)})
+        rows.append({
+            "code": code, "variant": "", "device_model": device_model,
+            "severity": severity, "description": clean(cell("hmi message")),
+            "cause": clean(cell("alarm description")),
+            "solution": clean(cell("solution")), "operating_modes": modes,
+            "_source": source, "_warnings": warnings,
+        })
+    return rows
+
+
 def read_tabular(path: pathlib.Path, sheet: str = None) -> list:
     """讀 .xlsx/.xlsm/.csv，自動掃描分頁（或 sheet 指定的單一分頁）並
     套用 detect_columns() 的建議。CLI 用這支——等同「人工確認欄位對應」
