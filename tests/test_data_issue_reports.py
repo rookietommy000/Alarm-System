@@ -108,3 +108,83 @@ def test_parser_source_presence():
     assert not set(source) & _to_payload(row_to_alarm(BODY)).keys()
     assert _to_payload(row_to_alarm({**BODY, **source})).items() >= source.items()
     assert _to_payload(row_to_alarm({**BODY, 'imported_at': ''}))['imported_at'] is None
+
+
+READ_URL = '/api/admin/data-issue-reports/local'
+
+
+def test_load_json_reports_by_department(client):
+    import storage
+    store = storage.DataIssueReportStore()
+    assert store.load('local') == []
+    store.append({**BODY, 'created_at': '2026-09-23T00:00:00Z'}, department='local')
+    store.append({**BODY, 'content': 'other'}, department='other')
+    newest = {**BODY, 'created_at': '2026-09-24T00:00:00Z'}
+    store.append(newest, department='local')
+    rows = store.load('local')
+    assert len(rows) == 2
+    assert rows[0].items() >= newest.items()
+    assert all(row['department'] == 'local' for row in rows)
+    assert len(store.load('other')) == 1
+    assert store.load('missing') == []
+    for invalid in (None, ''):
+        with pytest.raises(ValueError, match='department'):
+            store.load(invalid)
+
+
+def test_admin_reads_reports_using_path(client):
+    assert client.get(READ_URL).get_json() == {'reports': []}
+    assert client.post(URL, json=BODY).status_code == 201
+    response = client.get(READ_URL + '?department=other&dept=other')
+    assert response.status_code == 200
+    assert response.get_json()['reports'][0].items() >= BODY.items()
+    assert client.get('/api/admin/data-issue-reports/other').status_code == 404
+
+
+def test_report_read_requires_admin(anon_client):
+    assert anon_client.get(READ_URL).status_code == 403
+    anon_client.post('/login', data={'password': 'test-pw'})
+    assert anon_client.get(READ_URL).status_code == 403
+
+
+def test_report_read_failure_returns_500(client, monkeypatch, caplog):
+    import app
+    monkeypatch.setattr(app.data_issue_report_store, 'load', Mock(side_effect=RuntimeError('offline')))
+    client.application.config['PROPAGATE_EXCEPTIONS'] = False
+    response = client.get(READ_URL)
+    assert response.status_code == 500
+    assert 'error' in response.get_json()
+    assert 'offline' in caplog.text
+
+
+def test_report_supabase_read_query_and_failure(client, monkeypatch):
+    import storage
+    from urllib.parse import urlparse, parse_qs
+    monkeypatch.setattr(storage, '_use_supabase', lambda: True)
+    monkeypatch.setenv('SUPABASE_URL', 'https://example.invalid')
+    monkeypatch.setenv('SUPABASE_KEY', 'test-key')
+    opener = Mock(return_value=io.BytesIO(json.dumps([BODY]).encode()))
+    monkeypatch.setattr(storage, '_urlopen', opener)
+    assert storage.DataIssueReportStore().load('line/2') == [BODY]
+    req = opener.call_args.args[0]
+    assert req.get_method() == 'GET'
+    assert urlparse(req.full_url).path == '/rest/v1/data_issue_reports'
+    assert parse_qs(urlparse(req.full_url).query) == {
+        'select': ['*'], 'order': ['created_at.desc'], 'limit': ['5000'],
+        'department': ['eq.line/2'],
+    }
+    opener.side_effect = RuntimeError('offline')
+    with pytest.raises(RuntimeError, match='offline'):
+        storage.DataIssueReportStore().load('local')
+
+
+def test_report_invalid_json_is_not_empty(client):
+    import storage
+    (Path(os.environ['ALARM_DATA_DIR']) / 'data_issue_reports.json').write_text('invalid')
+    with pytest.raises(json.JSONDecodeError):
+        storage.DataIssueReportStore().load('local')
+
+
+@pytest.mark.parametrize('path', ['/api/admin/data-issue-reports', '/api/admin/data-issue-reports/'])
+def test_report_read_missing_department_returns_404(client, path):
+    assert client.get(path).status_code == 404

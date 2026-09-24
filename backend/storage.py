@@ -1187,6 +1187,37 @@ class DataIssueReportStore:
             tmp.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
             tmp.replace(path)
 
+    def load(self, department: str) -> list:
+        if not department:
+            raise ValueError("department 為必填")
+        if _use_supabase():
+            return self._load_supabase(department)
+        return self._load_json(department)
+
+    def _load_json(self, department: str) -> list:
+        path = _data_dir() / "data_issue_reports.json"
+        with self._lock:
+            if not path.exists():
+                return []
+            records = json.loads(path.read_text(encoding="utf-8"))
+        return sorted(
+            (row for row in records if row.get("department") == department),
+            key=lambda row: row.get("created_at") or "", reverse=True,
+        )
+
+    def _load_supabase(self, department: str) -> list:
+        base = os.environ.get("SUPABASE_URL", "").rstrip("/")
+        key = os.environ.get("SUPABASE_KEY", "")
+        qs = "select=*&order=created_at.desc&limit=5000"
+        qs += f"&department=eq.{urllib.parse.quote(department, safe='')}"
+        req = urllib.request.Request(
+            f"{base}/rest/v1/data_issue_reports?{qs}",
+            headers={"apikey": key, "Authorization": f"Bearer {key}"},
+            method="GET",
+        )
+        with _urlopen(req) as response:
+            return json.loads(response.read().decode())
+
 
 class FeedbackStore:
     """Append-only store for user feedback entries."""

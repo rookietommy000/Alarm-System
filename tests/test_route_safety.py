@@ -202,6 +202,8 @@ def test_no_route_collapse_collisions(app):
         ("GET", "/api/alarms/<department>/<device_model>/<code>", "static"),
         ("GET", "/api/devices/<department>/<device_model>", "static"),
         ("GET", "/api/admin/semantic-review/<department>", "static"),
+        # 缺部門僅命中不存在的靜態檔案；test_report_read_missing_department_returns_404 驗證。
+        ("GET", "/api/admin/data-issue-reports/<department>", "static"),
         ("GET", "/api/admin/import/<department>/snapshots", "static"),
         ("GET", "/api/admin/departments/<dept_id>/impact", "static"),
         ("PUT", "/api/alarms/<department>/<device_model>/<code>/local", "update_alarm"),

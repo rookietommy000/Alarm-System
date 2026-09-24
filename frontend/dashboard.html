@@ -630,6 +630,27 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
           </section>
         </div>
 
+        <section v-if="page === 'data-issue-reports'" class="card blueprint">
+          <h2 style="font-size:18px">資料異常回報</h2>
+          <p v-if="isAll">請先選擇部門以查看回報</p>
+          <p v-else-if="dataIssueReports.loading">載入中…</p>
+          <p v-else-if="dataIssueReports.error" role="alert" style="color:#a23b3b">{{ dataIssueReports.error }}</p>
+          <p v-else-if="!dataIssueReports.items.length">目前沒有異常回報</p>
+          <div v-else class="table-wrap">
+            <table class="table" style="min-width:800px">
+              <thead><tr><th>回報時間</th><th>機種</th><th>代碼</th><th>變體</th><th>回報內容</th><th>回報者</th></tr></thead>
+              <tbody>
+                <tr v-for="(report, index) in dataIssueReports.items" :key="report.id || index">
+                  <td>{{ report.created_at }}</td><td>{{ report.device_model }}</td><td>{{ report.code }}</td>
+                  <td>{{ report.variant || '—' }}</td>
+                  <td style="white-space:pre-wrap; overflow-wrap:anywhere; min-width:240px">{{ report.content }}</td>
+                  <td>{{ report.reporter }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
         <!-- ══ 全庫語意品質審核 ══
              AI 逐筆審核既有警報資料的中文欄位是否與英文原文語意相符
              （全庫語意品質掃描，規劃第 1c 項），這裡呈現的是已經跑完
@@ -1368,6 +1389,7 @@ createApp({
         { key: 'dashboard', label: 'Dashboard 統計', code: 'D' },
         { key: 'scans', label: '掃描紀錄管理', code: 'S' },
         { key: 'alarms', label: '警報管理', code: 'A' },
+        { key: 'data-issue-reports', label: '資料異常回報', code: 'I', hideOnAll: true },
         { key: 'semantic-review', label: 'AI 語意審核', code: 'R', hideOnAll: true },
         { key: 'pending-imports', label: '匯入待審核', code: 'P' },
         { key: 'models', label: '機種管理', code: 'M' },
@@ -1377,6 +1399,7 @@ createApp({
         dashboard: ['總覽', 'Dashboard 統計'],
         scans: ['紀錄', '掃描紀錄管理'],
         alarms: ['主檔', '警報管理'],
+        'data-issue-reports': ['回報', '資料異常回報'],
         'semantic-review': ['AI 輔助', '全庫語意品質審核'],
         'pending-imports': ['審核', '異常匯入資料待審核'],
         models: ['主檔', '機種管理'],
@@ -1424,6 +1447,7 @@ createApp({
       localEdit: null,
       bulkImport: null,
       vendorImport: null,
+      dataIssueReports: { items: [], loading: false, error: '' },
       semanticReview: { items: [], loading: false, error: '', loaded: false },
       semanticReviewFilter: { status: 'pending', model: '' },
       pendingImports: { items: [], loading: false, error: '', loaded: false },
@@ -1627,6 +1651,7 @@ createApp({
       if (this.bulkImport) { this.bulkImport.preview = null; this.bulkImport.result = null; }
     },
     page(next) {
+      if (next === 'data-issue-reports') this.loadDataIssueReports();
       if (next === 'semantic-review' && !this.semanticReview.loaded) {
         this.loadSemanticReview();
       }
@@ -1732,6 +1757,7 @@ createApp({
     // 列表已顯示、使用者在操作，幾秒後延後批次才回 403 把人踢出去的
     // 體驗倒退。
     async load() {
+      if (this.page === 'data-issue-reports') this.loadDataIssueReports();
       this.loading = true;
       try {
         const primaryOk = await this.loadPrimary();
@@ -2117,6 +2143,24 @@ createApp({
       }
     },
 
+    async loadDataIssueReports() {
+      this.dataIssueReports = { items: [], loading: true, error: '' };
+      const state = this.dataIssueReports;
+      const dept = this.writeDept();
+      if (!dept || this.isAll) { state.loading = false; return; }
+      try {
+        const r = await AlarmApi.get(`/api/admin/data-issue-reports/${encodeURIComponent(dept)}`);
+        if (!r.ok) {
+          state.error = (await r.json().catch(() => ({}))).error || '回報載入失敗，請稍後再試';
+          return;
+        }
+        state.items = (await r.json()).reports;
+      } catch (err) {
+        state.error = '回報載入失敗，請稍後再試';
+      } finally {
+        state.loading = false;
+      }
+    },
     // ── 語意審核（規劃第 1c 項）：讀取離線工具產出的疑慮清單，逐筆
     // 採用（寫入 alarms 正式表）或略過。AI 建議只是起點，editText
     // 預先帶入 suggested_zh 但完全可編輯——審核者才是最終決定的人

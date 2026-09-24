@@ -1318,6 +1318,12 @@ def create_app() -> Flask:
         from storage import semantic_review_store
         semantic_review_store.save_all(findings)
 
+    @app.get("/api/admin/data-issue-reports/<department>")
+    @admin_required
+    def list_data_issue_reports(department: str):
+        target = resolve_target_department(department)
+        return jsonify({"reports": data_issue_report_store.load(target)})
+
     @app.get("/api/admin/semantic-review/<department>")
     @admin_required
     def list_semantic_review(department: str):
