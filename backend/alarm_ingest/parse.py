@@ -22,9 +22,9 @@ from pathlib import Path
 
 from .detect import _cell_to_str  # noqa: F401 (re-export，見下方說明)
 
-# 與 app.py 的 ALARM_FIELDS 定義一致（多加 variant）。
+# 匯入欄位包含 variant 與可選的來源中繼資料；來源不屬於手動編輯欄位。
 ALARM_FIELDS = ["code", "device_model", "severity", "description", "cause", "solution",
-                "local_solution", "keywords", "sol_steps", "variant"]
+                "local_solution", "keywords", "sol_steps", "variant", "import_source", "imported_at"]
 
 # 固定範本的必要表頭（批次匯入 UI 規劃第 5 節專家分析）。code/
 # device_model 同時也是 row_to_alarm() 的必填檢查（缺值時報「code 為
@@ -36,7 +36,7 @@ ALARM_FIELDS = ["code", "device_model", "severity", "description", "cause", "sol
 # 額外攔。
 REQUIRED_HEADERS = {"code", "device_model", "variant", "description", "cause", "solution", "local_solution"}
 
-# 批次匯入是 upsert 語意，不是整列取代——這三個欄位在來源缺席時不該
+# 批次匯入是 upsert 語意，不是整列取代——這些選填欄位在來源缺席時不該
 # 被送進資料庫覆蓋既有值。剛好是 ALARM_FIELDS 扣掉 REQUIRED_HEADERS
 # 的補集：REQUIRED_HEADERS 之內的欄位一定有表頭，使用者留空代表刻意
 # 清空，是正當意圖；只有「表頭根本不存在」的欄位才需要保護，這條界線
@@ -47,7 +47,7 @@ REQUIRED_HEADERS = {"code", "device_model", "variant", "description", "cause", "
 # payload（Prefer: resolution=merge-duplicates），查回來 keywords 保留
 # 原值——INSERT ... ON CONFLICT DO UPDATE SET col = EXCLUDED.col 只更新
 # payload 裡列出的欄位，不送就不動。這是這個修法成立的前提，不是假設。
-OPTIONAL_FIELDS = {"severity", "keywords", "sol_steps"}
+OPTIONAL_FIELDS = {"severity", "keywords", "sol_steps", "import_source", "imported_at"}
 
 SEVERITIES = {"嚴重", "警告", "資訊"}
 
@@ -104,6 +104,10 @@ def row_to_alarm(row: dict) -> dict:
         "keywords": keywords,
         "sol_steps": sol_steps,
     }
+    # 缺席不補值；明確留白以 NULL 清空，避免 timestamptz 收到空字串。
+    for field in ("import_source", "imported_at"):
+        if field in row:
+            out[field] = (row[field] or "").strip() or None
     # 記錄來源實際提供了哪些欄位，供 commit_rows() 決定寫入 payload 要不要
     # 包含 OPTIONAL_FIELDS——寫入前會被剝掉（見 commit.py），不影響 out
     # 本身作為完整 dict 給 dedupe_check()/completeness_report() 等下游使用。

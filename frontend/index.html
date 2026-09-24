@@ -342,6 +342,9 @@
     /* Modal */
     .modal-body h2 { font-size: 16px; line-height: 1.4; }
     .modal-body dd { white-space: pre-wrap; line-height: 1.6; }
+    dialog { border: 1px solid var(--border); border-radius: 12px; max-width: min(90vw, 480px); background: var(--surface); color: var(--text); }
+    dialog::backdrop { background: rgba(0,0,0,0.45); }
+    #issue-content { display: block; width: 100%; box-sizing: border-box; margin: 12px 0; }
     .feedback-row { display: flex; align-items: center; gap: 8px; margin: 16px 0 8px; padding-top: 14px; border-top: 1px solid var(--border); }
     .feedback-label { font-size: 13px; color: var(--muted); flex-shrink: 0; }
     .feedback-btn { font-size: 13px; padding: 5px 14px; border-radius: 8px; border: 1.5px solid var(--border); background: var(--surface); cursor: pointer; transition: background 0.12s; }
@@ -1218,8 +1221,24 @@
               <button v-if="whoami.auth && whoami.department" class="local-sol-edit-btn" @click="openLocalSolutionEditor">💡 補充現場方案</button>
             </dd>
           </template>
+          <template v-if="selected.import_source">
+            <dt>資料來源</dt>
+            <dd>{{ selected.import_source }}<span v-if="selected.imported_at"> · 匯入於 {{ fmtLocalTime(selected.imported_at) }}</span></dd>
+          </template>
           <dt>關鍵字</dt><dd>{{ (selected.keywords || []).join('、') || '—' }}</dd>
         </dl>
+        <button class="feedback-btn" @click="openDataIssueReport">這筆資料不對</button>
+        <dialog ref="dataIssueDialog" @cancel="issueError = ''">
+          <form @submit.prevent="submitDataIssueReport">
+            <h3>回報資料異常</h3>
+            <label for="issue-content">請說明哪裡不對</label>
+            <textarea id="issue-content" v-model="issueContent" required maxlength="2000" rows="5" :disabled="issueSending"></textarea>
+            <p v-if="issueError" role="alert">{{ issueError }}</p>
+            <button type="button" :disabled="issueSending" @click="$refs.dataIssueDialog.close()">取消</button>
+            <button type="submit" :disabled="issueSending">{{ issueSending ? '送出中…' : '送出回報' }}</button>
+          </form>
+        </dialog>
+        <p v-if="issueSent" role="status">回報已送出，謝謝！</p>
         <div class="feedback-row">
           <span class="feedback-label">此方案有效嗎？</span>
           <template v-if="!feedbackSent">
@@ -1275,6 +1294,11 @@
           // 這台裝置」自己查過什麼，見 _recentViewsKey()/loadRecentViews()）。
           recentDeviceModels: [],
           recentQueries: [],
+          issueContent: '',
+          issueError: '',
+          issueSending: false,
+          issueSent: false,
+          issueAlarm: null,
           feedbackSent: false,
           feedbackStats: {},
           viewStats: {},
@@ -1450,6 +1474,7 @@
         },
         async openDetail(a) {
           this.selected = a;
+          this.issueSent = false;
           this.feedbackSent = false;
           this.showOldSolution = false;
           this.showLocalHistory = false;
@@ -1459,6 +1484,37 @@
             await AlarmApi.post('/api/view', { code: a.code, device_model: a.device_model });
             this.refreshViewStats();
           } catch {}
+        },
+        openDataIssueReport() {
+          this.issueAlarm = { ...this.selected };
+          this.issueContent = '';
+          this.issueError = '';
+          this.issueSent = false;
+          this.$refs.dataIssueDialog.showModal();
+        },
+        async submitDataIssueReport() {
+          if (this.issueSending) return;
+          const a = this.issueAlarm;
+          const dept = this.deptOf(a);
+          if (!dept) { this.issueError = '無法判定部門，請重新載入頁面'; return; }
+          if (!this.issueContent.trim()) { this.issueError = '請填寫回報內容'; return; }
+          this.issueSending = true;
+          this.issueError = '';
+          try {
+            const r = await AlarmApi.post(`/api/data-issue-reports/${encodeURIComponent(dept)}`, {
+              device_model: a.device_model, code: a.code, variant: a.variant || '', content: this.issueContent.trim()
+            });
+            if (!r.ok) {
+              const body = await r.json();
+              throw new Error(body.error || '回報儲存失敗，請稍後再試');
+            }
+            this.$refs.dataIssueDialog.close();
+            this.issueSent = true;
+          } catch (e) {
+            this.issueError = e.message || '回報儲存失敗，請稍後再試';
+          } finally {
+            this.issueSending = false;
+          }
         },
         fmtLocalTime(iso) {
           if (!iso) return '—';

@@ -54,6 +54,7 @@ ROUTE_AUTH_REGISTRY = {
 
     ("/api/server-url", "GET"): "public",
 
+    ("/api/data-issue-reports/<department>", "POST"): "login",
     ("/api/feedback", "POST"): "login",
     ("/api/feedback/stats", "GET"): "login",
     ("/api/view", "POST"): "login",

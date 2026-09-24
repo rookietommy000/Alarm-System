@@ -11,9 +11,10 @@ CONFLICT_TARGET = "department,device_model,code,variant"
 
 def _to_payload(row: dict) -> dict:
     """批次匯入是 upsert 語意，不是整列取代——OPTIONAL_FIELDS
-    （severity/keywords/sol_steps）在來源缺席時不送進 payload，讓既有
-    值保留（PostgREST 的 merge-duplicates upsert 只更新 payload 裡列出
-    的欄位，不送就不動，這個前提已對 zztest 部門實測驗證過）。
+    （severity/keywords/sol_steps/import_source/imported_at）在來源缺席
+    時不送進 payload，讓既有值保留（PostgREST 的 merge-duplicates
+    upsert 只更新 payload 裡列出的欄位，不送就不動，這個前提已對
+    zztest 部門實測驗證過）。
 
     row_to_alarm() 產出的 dict 帶一個 "_present" 鍵記錄來源實際提供
     的欄位；沒有這個鍵（例如非批次匯入路徑呼叫 upsert_one 時）代表

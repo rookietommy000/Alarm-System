@@ -1153,6 +1153,39 @@ class ImportSnapshotStore:
             pass
 
 
+class DataIssueReportStore:
+    """資料內容異常回報，獨立於處置效果 feedback；寫入失敗必須往上拋。"""
+
+    def __init__(self):
+        self._lock = Lock()
+
+    def append(self, entry: dict, department: str) -> None:
+        if not department:
+            raise ValueError("department 為必填")
+        entry = {**entry, "department": department}
+        if _use_supabase():
+            base = os.environ.get("SUPABASE_URL", "").rstrip("/")
+            key = os.environ.get("SUPABASE_KEY", "")
+            req = urllib.request.Request(
+                f"{base}/rest/v1/data_issue_reports",
+                data=json.dumps(entry).encode(),
+                headers={"apikey": key, "Authorization": f"Bearer {key}",
+                         "Content-Type": "application/json", "Prefer": "return=minimal"},
+                method="POST",
+            )
+            with _urlopen(req):
+                pass
+            return
+        path = _data_dir() / "data_issue_reports.json"
+        with self._lock:
+            records = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+            records.append(entry)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp.replace(path)
+
+
 class FeedbackStore:
     """Append-only store for user feedback entries."""
 
@@ -2290,3 +2323,4 @@ variant_translation_store = VariantTranslationStore()
 semantic_review_store = SemanticReviewStore()
 pending_alarm_import_store = PendingAlarmImportStore()
 department_audit_log_store = DepartmentAuditLogStore()
+data_issue_report_store = DataIssueReportStore()

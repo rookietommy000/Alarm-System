@@ -22,7 +22,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 from storage import (
     ai_scan_store, alarm_suggestion_store, alarms_store, audit_logger, department_audit_log_store,
-    department_store, devices_store, feedback_store, login_attempt_store, pending_alarm_import_store,
+    department_store, devices_store, feedback_store, data_issue_report_store, login_attempt_store, pending_alarm_import_store,
     view_store, _use_supabase,
 )
 from alarm_ingest import (
@@ -1780,6 +1780,36 @@ def create_app() -> Flask:
             raise
         audit_logger.log("CREATE", department=department, new_data=new_row)
         return jsonify(claimed)
+
+    @app.post("/api/data-issue-reports/<department>")
+    @login_required
+    def submit_data_issue_report(department):
+        target = resolve_target_department(department)
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            abort(400, "請提供 JSON 物件")
+        _check_body_department_conflict(body, target)
+        for field in ("device_model", "code", "variant", "content"):
+            if not isinstance(body.get(field), str):
+                abort(400, f"{field} 為必填文字欄位")
+            if field != "variant" and not body[field].strip():
+                abort(400, f"{field} 不可空白")
+        if len(body["content"].strip()) > 2000:
+            abort(400, "回報內容不可超過 2000 字")
+        match = {"device_model": body["device_model"].strip(),
+                 "code": body["code"].strip(), "variant": normalize_variant(body["variant"])}
+        if alarms_store.get_one(department=target, match=match) is None:
+            abort(404, NOT_FOUND_MSG)
+        role = "superadmin" if is_superadmin() else ("admin" if is_admin() else "user")
+        entry = {**match, "content": body["content"].strip(),
+                 "reporter": f"{target}/{role}",
+                 "created_at": datetime.now(timezone.utc).isoformat()}
+        try:
+            data_issue_report_store.append(entry, department=target)
+        except Exception:
+            app.logger.exception("資料異常回報儲存失敗")
+            abort(503, "回報儲存失敗，請稍後再試")
+        return jsonify({"ok": True}), 201
 
     @app.post("/api/feedback")
     @login_required
