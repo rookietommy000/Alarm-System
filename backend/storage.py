@@ -2303,6 +2303,166 @@ class DepartmentAuditLogStore:
                   f"{type(e).__name__}: {e}", file=_sys.stderr)
 
 
+class OrphanConflict(ValueError):
+    def __init__(self, mismatched, processed=None):
+        super().__init__("孤兒資料已變動，請重新診斷確認")
+        self.mismatched = mismatched
+        self.processed = processed or {"deleted": 0, "rejected": 0}
+
+
+class OrphanScanner:
+    """跨 Store 對帳；JsonStore 僅支援單租戶，不查真實部門服務。"""
+
+    def __init__(self, alarms, devices, departments, suggestions, imports):
+        self.stores = {"alarms": alarms, "devices": devices}
+        self.pending = {"alarm_suggestions": suggestions, "pending_alarm_imports": imports}
+        self.departments = departments
+
+    @staticmethod
+    def _eq(value):
+        # PostgREST 保留字元需先用雙引號包住，再做 URL encoding。
+        value = str(value)
+        if any(c in value for c in ',.():"\\'):
+            value = '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
+        return "eq." + urllib.parse.quote(value, safe="")
+
+    @staticmethod
+    def _empty(table, row):
+        fields = ("model",) if table == "devices" else ("device_model", "code")
+        return [field for field in fields if row.get(field) == ""]
+
+    @staticmethod
+    def _fresh_load(store, department):
+        # 不改動一般 load() 的快取；診斷及刪前比對必須讀目前資料。
+        if isinstance(store, SupabaseStore):
+            return store._load_uncached(department)
+        return store.load(department)
+
+    def scan(self, department, pending_days):
+        now = datetime.now(timezone.utc)
+        target = None if department in (None, "__all__") else department
+        found = []
+
+        def add(kind, table, row, dept, detail):
+            fields = ("model",) if table == "devices" else ("device_model", "code", "variant")
+            pk = {field: row.get(field, "") for field in fields}
+            if kind == "C":
+                pk = {"id": row["id"]}
+            item = dict(type=kind, table=table, department=dept, pk=pk, detail=detail)
+            if kind == "C":
+                item["submitted_at"] = row["submitted_at"]
+            found.append(item)
+
+        for table, store in self.stores.items():
+            if isinstance(store, SupabaseStore):
+                condition = "model=eq." if table == "devices" else "or=(device_model.eq.,code.eq.)"
+                qs = f"select=*&{condition}&limit=1000"
+                if target is not None:
+                    qs += "&department=" + self._eq(target)
+                rows = store._req("GET", f"{table}?{qs}")
+                # 最多接受 999 筆，多要一筆，碰上伺服器 1000 筆上限也拒絕截斷。
+                if len(rows) >= 1000:
+                    raise RuntimeError(f"{table} A 類掃描達上限，請縮小部門範圍")
+            else:
+                rows = store.load(target)
+            for row in rows:
+                empty = self._empty(table, row)
+                if empty:
+                    add("A", table, row, row.get("department", target),
+                        ", ".join(empty) + " 為空字串，正常 CRUD API 無法定位刪除")
+
+        if department is not None:
+            alarms = self.stores["alarms"]
+            if department == "__all__" and isinstance(alarms, SupabaseStore):
+                # 包含部門本身已消失、但仍有 alarms 的情況。
+                depts = sorted({row["department"] for row in self._fresh_load(alarms, None)})
+            else:
+                depts = [target]
+            for dept in depts:
+                models = {row["model"] for row in self._fresh_load(self.stores["devices"], dept)}
+                for row in self._fresh_load(alarms, dept):
+                    if not self._empty("alarms", row) and row["device_model"] not in models:
+                        add("B", "alarms", row, row.get("department", dept),
+                            "device_model 在 devices 表（同部門）查無對應機種")
+
+        dept_states = {}
+        for table, store in self.pending.items():
+            for row in store.list_pending(target):
+                dept = row["department"]
+                if dept not in dept_states:
+                    dept_states[dept] = self.departments.get_by_id(dept)
+                state = dept_states[dept]
+                submitted = datetime.fromisoformat(row["submitted_at"].replace("Z", "+00:00"))
+                if submitted.tzinfo is None:
+                    raise ValueError(f"{table} id={row['id']} submitted_at 缺少時區")
+                reasons = []
+                if (now - submitted).total_seconds() > pending_days * 86400:
+                    reasons.append(f"status=pending 超過 {pending_days} 天未處理")
+                if state is None:
+                    reasons.append("提交部門已被 purge")
+                elif state.get("active") is False:
+                    reasons.append("提交部門已停用")
+                if reasons:
+                    add("C", table, row, dept, "，".join(reasons))
+        found.sort(key=lambda item: json.dumps(item, sort_keys=True, ensure_ascii=False))
+        result = {"generated_at": now.isoformat().replace("+00:00", "Z"),
+                  "scope": {"department": department, "pending_days": pending_days},
+                  "orphans": found, "counts": {kind: sum(r["type"] == kind for r in found) for kind in "ABC"}}
+        if department is None:
+            result["B_skipped"] = "帶 department 參數以掃描 B 類"
+        return result
+
+    def purge(self, department, pending_days, confirm_token):
+        actual = self.scan(department, pending_days)["orphans"]
+        canonical = lambda row: json.dumps(row, sort_keys=True, ensure_ascii=False)
+        confirmed = sorted(confirm_token, key=canonical)
+        current = sorted(actual, key=canonical)
+        if confirmed != current:
+            raise OrphanConflict({"confirmed": confirmed, "actual": current})
+        processed = {"deleted": 0, "rejected": 0}
+        # 現有 FK ON DELETE CASCADE 與 C 類保留要求衝突時，整批拒絕，不能
+        # 先 claim 再刪 alarms（那仍會刪掉剛 rejected 的稽核列）。
+        alarm_keys = {(r["department"], r["pk"]["device_model"], r["pk"]["code"], r["pk"]["variant"])
+                      for r in actual if r["table"] == "alarms"}
+        for row in actual:
+            if row["table"] == "alarm_suggestions":
+                suggestion = self.pending["alarm_suggestions"].get_by_id(row["pk"]["id"])
+                if suggestion and (suggestion["department"], suggestion["device_model"],
+                                   suggestion["code"], suggestion.get("variant", "")) in alarm_keys:
+                    raise OrphanConflict({"confirmed": row,
+                        "actual": "ON DELETE CASCADE 會刪除 C 類稽核列，需先處理外鍵保留策略"})
+        for row in sorted(actual, key=lambda item: item["type"] != "C"):
+            table, pk, dept = row["table"], row["pk"], row["department"]
+            if row["type"] == "C":
+                changed = self.pending[table].claim(pk["id"], from_status="pending",
+                    to_status="rejected", actor="superadmin", review_note="孤兒資料對帳 purge")
+                count = int(changed is not None)
+                operation = "rejected"
+            else:
+                store = self.stores[table]
+                if isinstance(store, SupabaseStore):
+                    store._require_full_pk_match(pk)
+                    match = {"department": dept, **pk}
+                    qs = "&".join(f"{key}={self._eq(value)}" for key, value in match.items())
+                    try:
+                        deleted = store._req("DELETE", f"{table}?{qs}",
+                            extra_headers={"Prefer": "return=representation"})
+                    finally:
+                        store._invalidate_cache(dept)
+                    count = len(deleted)
+                else:
+                    rows = store.load(dept)
+                    kept = [item for item in rows if not all(item.get(k, "") == v for k, v in pk.items())]
+                    count = len(rows) - len(kept)
+                    if count == 1:
+                        store.save(kept, dept)
+                operation = "deleted"
+            if count != 1:
+                raise OrphanConflict({"confirmed": row, "actual_count": count}, processed)
+            processed[operation] += count
+        return processed
+
+
 _ALARMS_CACHE_TTL_SECONDS = 60  # PLAN 效能優化第 4 項：mf4d 部門 1759 筆分頁查詢實測約 1.6 秒
 
 if _use_supabase():

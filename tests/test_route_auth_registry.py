@@ -20,6 +20,8 @@ sys.path.insert(0, str(BACKEND))
 # key 為 (rule, method) 元組——權限層級是按 HTTP method 分的，不是按路徑分的
 # （PLAN 4.4/8.1 節第七輪審查修正）。
 ROUTE_AUTH_REGISTRY = {
+    ("/api/admin/orphans", "GET"): "superadmin",
+    ("/api/admin/orphans/purge", "POST"): "superadmin",
     ("/api/alarms", "GET"): "login",
     ("/api/alarms/<department>/<device_model>/<code>", "GET"): "login",
     ("/api/alarms/<department>", "POST"): "admin",

@@ -23,7 +23,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from storage import (
     ai_scan_store, alarm_suggestion_store, alarms_store, audit_logger, department_audit_log_store,
     department_store, devices_store, feedback_store, data_issue_report_store, login_attempt_store, pending_alarm_import_store,
-    view_store, _use_supabase,
+    view_store, _use_supabase, OrphanScanner, OrphanConflict,
 )
 from alarm_ingest import (
     load_file as ingest_load_file,
@@ -2314,6 +2314,44 @@ def create_app() -> Flask:
             abort(400, str(e))
         _invalidate_dept_cache(dept_id)
         return jsonify({"ok": True, "removed": removed})
+
+    def orphan_scope():
+        department = request.args.get("department")
+        if department is not None and not department.strip():
+            abort(400, "department 不可為空字串")
+        raw_days = request.args.get("pending_days", "30")
+        if not raw_days.isascii() or not raw_days.isdigit() or len(raw_days) > 9:
+            abort(400, "pending_days 必須是正整數")
+        days = int(raw_days)
+        if days < 1:
+            abort(400, "pending_days 必須是正整數")
+        return department, days
+
+    def orphan_scanner():
+        return OrphanScanner(alarms_store, devices_store, department_store,
+                             alarm_suggestion_store, pending_alarm_import_store)
+
+    @app.get("/api/admin/orphans")
+    @superadmin_required
+    def diagnose_orphans():
+        return jsonify(orphan_scanner().scan(*orphan_scope()))
+
+    @app.post("/api/admin/orphans/purge")
+    @superadmin_required
+    def purge_orphans():
+        # 查詢參數只界定重新診斷範圍；寫入目標來自已逐筆核對的資料庫 PK。
+        department, days = orphan_scope()
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict) or not isinstance(body.get("confirm_token"), list):
+            abort(400, "confirm_token 必須是診斷回應的完整 orphans 陣列")
+        if any(not isinstance(row, dict) for row in body["confirm_token"]):
+            abort(400, "confirm_token 每筆必須是物件")
+        try:
+            processed = orphan_scanner().purge(department, days, body["confirm_token"])
+        except OrphanConflict as exc:
+            return jsonify(error=str(exc), mismatched=exc.mismatched,
+                           processed=exc.processed), 409
+        return jsonify(ok=True, **processed)
 
     # ── 4.6/4.7 節：公開端點 ──────────────────────────────────────────
 

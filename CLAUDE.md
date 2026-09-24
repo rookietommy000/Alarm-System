@@ -64,6 +64,7 @@ pytest tests/test_api.py::test_create_alarm -v
 
 這些是踩過真實坑之後定下來的規則，改動涉及部門／權限的程式碼時務必遵守：
 
+- 任何新增的 Store 類別若資料帶 `department` 欄位，必須同步將表名加入 `DepartmentStore.purge()` 的表清單，並在 PR/commit 訊息中明確提及「已檢查purge清單」。
 - 所有 `department` 參數必填無預設值（漏傳要讓程式明確報錯，不可靜默不過濾——那會讓查詢意外跨部門）
 - 新增 `/api/*` 路由必須同步更新 `ROUTE_AUTH_REGISTRY`（`tests/test_route_auth_registry.py`），鍵為 `(rule, method)`
 - `alarms.solution` 為原廠欄位，任何路徑都不得覆寫；現場處置寫法走 `local_solution`（見 `PLAN_local_solution.md`）
