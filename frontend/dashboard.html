@@ -287,7 +287,6 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
           <span class="kicker" style="font-size:11px; letter-spacing:0.12em; text-transform:uppercase; color:color-mix(in srgb, var(--color-text) 60%, transparent)">管理範圍</span>
           <span style="font-family:var(--font-heading); font-size:20px; font-weight:700">{{ currentDeptName || whoami.department }}</span>
           <span style="font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace; font-size:12px; color:color-mix(in srgb, var(--color-text) 60%, transparent)">{{ whoami.department }}</span>
-          <span style="font-size:13px; color:color-mix(in srgb, var(--color-text) 60%, transparent)">部門管理員只管理自己的部門，無切換器。</span>
         </div>
       </div>
 
@@ -749,9 +748,8 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
              部門檢視合理有意義），所以navItems沒有加hideOnAll。 -->
         <div v-if="page === 'pending-imports'" style="display:flex; flex-direction:column; gap:18px">
           <div style="background:color-mix(in srgb, #9a7c1a 10%, transparent); border:1px solid color-mix(in srgb, #9a7c1a 30%, transparent); border-radius:8px; padding:12px 16px; font-size:13px; line-height:1.6">
-            這份清單是批次匯入或AI拍照辨識時被標記異常、需要人工判斷的資料。「原始輸入」欄位是轉換前的原始快照——
-            最終值看起來合法不代表轉換過程沒問題（例如Excel儲存格被存成數字格式導致前導零被吃掉），核准前務必核對原始輸入。
-            <strong style="color:#a23b3b">若 variant 欄位為空，核准後會直接覆蓋掉該部門/機種/代碼下 variant 也剛好是空字串的既有資料</strong>，不會另外跳出衝突提示。
+            核准前請核對「原始輸入」與轉換後的值是否一致。
+            <strong style="color:#a23b3b">variant 為空時，核准會直接覆蓋同代碼下 variant 也是空的既有資料，不會提示衝突。</strong>
           </div>
           <section>
             <div style="display:flex; justify-content:space-between; align-items:baseline; gap:12px; flex-wrap:wrap; margin-bottom:10px">
