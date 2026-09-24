@@ -433,7 +433,7 @@ def create_app() -> Flask:
     @public_endpoint
     def logout():
         session.clear()
-        return redirect("/")
+        return redirect("/login")
 
     # ── Admin login / logout ────────────────────────────────────────
 
@@ -655,8 +655,14 @@ def create_app() -> Flask:
         # 這兩個鍵會殘留 auth=True／department，對超管而言 department 是
         # None，登出後台後 scope_department() 會一律 401，前台永久壞掉
         # 直到重新登入）。比照 /logout 直接清空整個 session。
+        #
+        # 導向 /login（不是 /app）：後台登出（含超管）應該直接落在前台
+        # 登入介面，不要先繞去 /app 這個沒有登入檢查的公開殼頁面再等前端
+        # JS 判斷未登入——session 已經清空，導去 /app 只是多一次無意義的
+        # redirect，且 /app 本身不會自動跳轉，使用者會看到功能不正常的
+        # 空殼畫面。
         session.clear()
-        return redirect("/app")
+        return redirect("/login")
 
     # ── Data normalize ──────────────────────────────────────────────
 
