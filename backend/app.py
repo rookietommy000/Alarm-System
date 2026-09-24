@@ -769,6 +769,11 @@ def create_app() -> Flask:
     @app.put("/api/devices/<department>/<device_model>")
     @admin_required
     def update_device(department: str, device_model: str):
+        """改名只更新 devices 表本身，不會連帶更新 alarms.device_model 或
+        semantic_review_findings 的機種字串副本。已有關聯警報資料時，
+        改名前應確認是否需要額外處理；這是已知架構限制，批次同步
+        不在本次改名 409 修復範圍內。
+        """
         target = resolve_target_department(department)
         body = request.get_json(silent=True) or {}
         _check_body_department_conflict(body, target)
@@ -776,14 +781,15 @@ def create_app() -> Flask:
         existing = next((d for d in items if d.get("model") == device_model), None)
         if existing is None:
             abort(404, "找不到此機種")
-        device = devices_store.upsert_one(
-            {"id": existing["id"],
-             "model": (body.get("model") or body.get("device_model") or device_model).strip(),
-             "category": (body.get("category") or existing.get("category") or "").strip(),
-             "line": (body.get("line") or existing.get("line") or "").strip()},
+        device = devices_store.patch_one(
             department=target,
-            on_conflict="department,model",
+            match={"id": existing["id"], "model": existing["model"]},
+            patch={"model": (body.get("model") or body.get("device_model") or device_model).strip(),
+                   "category": (body.get("category") or existing.get("category") or "").strip(),
+                   "line": (body.get("line") or existing.get("line") or "").strip()},
         )
+        if device is None:
+            abort(404, "找不到此機種")
         return jsonify(device)
 
     @app.delete("/api/devices/<department>/<device_model>")

@@ -115,7 +115,13 @@ CAS 更新狀態（PATCH 帶 status=eq.<原狀態> 條件，僅當狀態仍是�
 
 pytest 環境用的是 `JsonStore`（單租戶本機檔案），測不到：跨部門過濾、session 三態檢查、登入節流、PostgREST 分頁/upsert 語意。這些只能用 `sentinel_pack/verify_isolation.sh` 對真實 Supabase 驗證。任何 pytest 測試如果宣稱驗證了這類機制，那個宣稱本身就是假的——`tests/test_no_fake_isolation_claims.py` 會擋住這類測試名稱/docstring 再次出現。「程式碼裡有這段防護邏輯」跟「這段邏輯經黑箱測試證實真的擋得住」是兩個不同等級的結論，報告/commit message 裡不要混用。
 
+## 機種更新 API 限制
+
+`PUT /api/devices/<department>/<device_model>` 以 URL 的舊機種名稱定位，body 的 `model`（或 `device_model`）可指定新名稱，亦可更新 `category`、`line`；成功回傳更新後機種，`id` 不變。改名僅影響 devices 表，不會更新既有 `alarms.device_model` 或 `semantic_review_findings` 字串副本；有關聯資料時，呼叫前須另行確認同步需求。
+
 ## 已知陷阱
+
+- **機種改名 409（2026-09-24 修復）**：`update_device()` 原實作（commit `4d519d4a`）用 `upsert_one(..., on_conflict="department,model")` 改名，新 `(department, model)` 不存在時 PostgREST 會 INSERT，但 payload 的舊 `id` 已被佔用，觸發 PRIMARY KEY 衝突。改用 `patch_one(department=target, match={"id": existing["id"], "model": existing["model"]}, patch=...)`；devices 的 `pk_fields` 是 `department,model`，match 不能只給 id，必須包含舊 model。**只更新 devices 表本身，不會回溯同步 `alarms.device_model` 或 `semantic_review_findings` 的機種字串副本**；有關聯警報時，改名前須確認額外處理需求，批次同步屬獨立工作。
 
 - Flask/Werkzeug 的 `<string>` 路由段不匹配空字串——URL 該段為空時會直接塌陷成路由層 404，不會進到你寫的視圖函式
 - **路由重導向端點混淆（外部審查 2026-09-02，嚴重）**：Werkzeug 預設開啟 `merge_slashes`，含連續斜線（`//`）的路徑會被自動 308 重導向到合併後的路徑——**308 保留原始 method 跟 body**，且授權檢查發生在重導向後的全新 request（client 收到 308 後用新 URL 重新發請求，走的是新 URL 命中的端點自己的裝飾器，不是原端點的）。已重現真實案例：`PUT /api/admin/departments/<空dept_id>/reset-password` 被合併成 `PUT /api/admin/departments/reset-password`，命中 `rename_department()`（`/api/admin/departments/<dept_id>`），`dept_id` 的值變成字面字串 `"reset-password"`，若呼叫端 body 剛好帶 `name` 欄位會真的執行改名——這次兩端點權限層級剛好相同（都是 `superadmin_required`）不構成漏洞，是僥倖不是安全。修法（`app.py` `create_app()` 最前面）：`app.url_map.merge_slashes = False` + `before_request` 攔截路徑含 `//` 直接 404，兩者是不同防線，只做前者防不了「路徑段整段消失但前面只有單一斜線」的變體（例如 `POST /api/alarms/` 會落入 `static_url_path=""` 的萬用靜態路由）。

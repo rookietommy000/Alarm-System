@@ -241,7 +241,7 @@ class JsonStore:
             with tmp.open("w", encoding="utf-8") as f:
                 json.dump(raw, f, ensure_ascii=False, indent=2)
             tmp.replace(self.path)
-        return updated
+        return _row_to_device(updated) if self.is_devices else updated
 
 
 def _row_to_device(row: dict) -> dict:
@@ -568,7 +568,9 @@ class SupabaseStore:
         result = self._req("PATCH", f"{self.table}?{qs}", patch,
                            extra_headers={"Prefer": "return=representation"})
         self._invalidate_cache(department)
-        return result[0] if result else None
+        if not result:
+            return None
+        return _row_to_device(result[0]) if self.is_devices else result[0]
 
 
 def _use_supabase() -> bool:
