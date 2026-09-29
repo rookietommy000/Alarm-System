@@ -8,6 +8,8 @@ reject 分工是否正確），不是 PendingAlarmImportStore 對真實 Supabase
 真的生效——兩者是不同等級的結論（CLAUDE.md「測試的能力邊界」）。
 """
 import sys
+
+import pytest
 from pathlib import Path
 
 BACKEND = Path(__file__).resolve().parent.parent / "backend"
@@ -335,3 +337,57 @@ def test_review_invalid_action_returns_400(client, monkeypatch):
     r = client.put("/api/admin/pending-alarm-imports/11", json={"action": "delete"})
 
     assert r.status_code == 400
+
+
+@pytest.mark.parametrize('edits, expected_variant', [
+    ({'variant': '  A—B （C）／D  '}, 'A-B (C)/D'),
+    ({'variant': None}, ''),
+    ({}, ''),
+])
+def test_accept_edited_values_written(client, monkeypatch, edits, expected_variant):
+    import storage as storage_mod
+
+    row = _pending_row(variant=None, keywords=['保留'], sol_steps={'1': '保留'})
+    monkeypatch.setattr(storage_mod.pending_alarm_import_store, 'get_by_id', lambda _: row)
+    monkeypatch.setattr(storage_mod.pending_alarm_import_store, 'claim', lambda *a, **kw: {**row, 'status': 'approved'})
+    edits = {**edits, 'description': '修正描述', 'severity': '資訊', 'cause': '修正原因', 'solution': '修正原廠方案'}
+    response = client.put('/api/admin/pending-alarm-imports/1', json={
+        'action': 'accept', 'edits': edits, 'department': 'ignored',
+    })
+    assert response.status_code == 200
+    alarm = storage_mod.alarms_store.get_one(department='local', match={
+        'device_model': row['device_model'], 'code': row['code'], 'variant': expected_variant,
+    })
+    assert alarm is not None
+    for field in ('description', 'severity', 'cause', 'solution'):
+        assert alarm[field] == edits[field]
+    assert alarm['variant'] == expected_variant
+    assert alarm['keywords'] == row['keywords']
+    assert alarm['sol_steps'] == row['sol_steps']
+
+
+@pytest.mark.parametrize('field', ['device_model', 'code'])
+@pytest.mark.parametrize('nested', [False, True])
+def test_accept_refuses_key_changes_before_claim(client, monkeypatch, field, nested):
+    import storage as storage_mod
+
+    monkeypatch.setattr(storage_mod.pending_alarm_import_store, 'get_by_id', lambda _: _pending_row())
+    calls = []
+    monkeypatch.setattr(storage_mod.pending_alarm_import_store, 'claim', lambda *a, **kw: calls.append('claim'))
+    monkeypatch.setattr(storage_mod.alarms_store, 'upsert_one', lambda *a, **kw: calls.append('write'))
+    body = {'action': 'accept'}
+    body.update({'edits': {field: 'changed'}} if nested else {field: 'changed'})
+    assert client.put('/api/admin/pending-alarm-imports/1', json=body).status_code == 400
+    assert calls == []
+
+
+@pytest.mark.parametrize('edits', [None, [], {'variant': 123}, {'description': None},
+                                   {'severity': 'unknown'}, {'keywords': []}, {'department': 'other'}])
+def test_accept_invalid_edits_do_not_claim(client, monkeypatch, edits):
+    import storage as storage_mod
+
+    monkeypatch.setattr(storage_mod.pending_alarm_import_store, 'get_by_id', lambda _: _pending_row())
+    calls = []
+    monkeypatch.setattr(storage_mod.pending_alarm_import_store, 'claim', lambda *a, **kw: calls.append('claim'))
+    assert client.put('/api/admin/pending-alarm-imports/1', json={'action': 'accept', 'edits': edits}).status_code == 400
+    assert calls == []

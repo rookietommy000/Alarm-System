@@ -810,7 +810,7 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
 
                 <div v-if="row.status === 'pending'" style="display:flex; gap:8px; justify-content:flex-end; padding-top:6px; border-top:1px solid color-mix(in srgb, var(--color-text) 10%, transparent)">
                   <button class="btn btn-secondary" style="font-size:12px" @click="rejectPendingImport(row)" :disabled="row.busy">退回</button>
-                  <button class="btn btn-primary" style="font-size:12px" @click="approvePendingImport(row)" :disabled="row.busy">
+                  <button class="btn btn-primary" style="font-size:12px" @click="openPendingImport(row)" :disabled="row.busy">
                     {{ row.busy ? '處理中…' : '核准並寫入' }}
                   </button>
                 </div>
@@ -897,6 +897,31 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
 
       </div>
     </main>
+  </div>
+
+  <!-- 匯入待審核編輯 Dialog -->
+  <div class="dialog-backdrop" v-if="pendingImportDraft" @click.self="cancelPendingImport">
+    <div class="dialog blueprint" role="dialog" aria-modal="true" aria-labelledby="pending-import-title">
+      <div class="dialog-title" id="pending-import-title">編輯後核准</div>
+      <div class="field"><label>機種</label><input class="input" :value="pendingImportDraft.row.device_model" :disabled="true" /></div>
+      <div class="field"><label>代碼</label><input class="input" :value="pendingImportDraft.row.code" :disabled="true" /></div>
+      <div class="field"><label>描述</label><input class="input" v-model="pendingImportDraft.edits.description" :disabled="pendingImportDraft.row.busy" /></div>
+      <div class="field"><label>variant</label><input class="input" v-model="pendingImportDraft.edits.variant" :disabled="pendingImportDraft.row.busy" /></div>
+      <p v-if="!pendingImportDraft.edits.variant.trim()" style="color:#a23b3b; font-size:12px; margin:0">variant 為空時，核准會直接覆蓋同代碼下 variant 也是空的既有資料，不會提示衝突。</p>
+      <div class="field"><label>嚴重度</label>
+        <select class="input" v-model="pendingImportDraft.edits.severity" :disabled="pendingImportDraft.row.busy">
+          <option value="">（未指定）</option>
+          <option>嚴重</option><option>警告</option><option>資訊</option>
+        </select>
+      </div>
+      <div class="field"><label>原因</label><textarea class="input" v-model="pendingImportDraft.edits.cause" rows="2" :disabled="pendingImportDraft.row.busy"></textarea></div>
+      <div class="field"><label>解決方案</label><textarea class="input" v-model="pendingImportDraft.edits.solution" rows="3" :disabled="pendingImportDraft.row.busy"></textarea></div>
+      <p v-if="pendingImportDraft.row.rowError" style="color:#a23b3b; font-size:13px; margin:0">{{ pendingImportDraft.row.rowError }}</p>
+      <div class="dialog-actions">
+        <button class="btn btn-secondary" @click="cancelPendingImport" :disabled="pendingImportDraft.row.busy">取消</button>
+        <button class="btn btn-primary" @click="approvePendingImport" :disabled="pendingImportDraft.row.busy">{{ pendingImportDraft.row.busy ? '處理中…' : '確認核准' }}</button>
+      </div>
+    </div>
   </div>
 
   <!-- 警報編輯 Dialog -->
@@ -1450,6 +1475,7 @@ createApp({
       semanticReviewFilter: { status: 'pending', model: '' },
       pendingImports: { items: [], loading: false, error: '', loaded: false },
       pendingImportsFilter: { status: 'pending' },
+      pendingImportDraft: null,
       deviceDraft: null, deviceError: '',
       toast: '',
       loadError: '',
@@ -2244,16 +2270,37 @@ createApp({
         this.pendingImports.loading = false;
       }
     },
-    async approvePendingImport(row) {
+    openPendingImport(row) {
+      if (row.busy || row.status !== 'pending') return;
+      const edits = {};
+      for (const field of ['description', 'variant', 'severity', 'cause', 'solution']) {
+        edits[field] = row[field] ?? '';
+      }
+      row.rowError = '';
+      this.pendingImportDraft = { row, edits };
+    },
+    cancelPendingImport() {
+      if (!this.pendingImportDraft?.row.busy) this.pendingImportDraft = null;
+    },
+    async approvePendingImport() {
+      const draft = this.pendingImportDraft;
+      if (!draft || draft.row.busy) return;
+      const { row } = draft;
+      const edits = {};
+      for (const [field, value] of Object.entries(draft.edits)) {
+        // 未填的選填欄位若未修改，保留既有 upsert 的省略語意。
+        if (value !== (row[field] ?? '')) edits[field] = value;
+      }
       row.busy = true; row.rowError = '';
       try {
         const r = await AlarmApi.put(
           `/api/admin/pending-alarm-imports/${row.id}`,
-          { action: 'accept' });
+          { action: 'accept', edits });
         if (r.status === 403) { location.href = '/admin/login'; return; }
         if (!r.ok) { row.rowError = (await r.json().catch(() => ({}))).error || '核准失敗'; return; }
         const updated = await r.json();
         Object.assign(row, updated);
+        this.pendingImportDraft = null;
         this.showToast(`${row.device_model} ${row.code} 已核准並寫入`);
       } catch (err) {
         row.rowError = '網路錯誤，請稍後再試';

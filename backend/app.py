@@ -1737,6 +1737,23 @@ def create_app() -> Flask:
             if claimed is None:
                 abort(409, "這筆待審資料已經審核過了")
             return jsonify(claimed)
+        # 驗證編輯內容後才搶佔狀態，寫入仍須先通過 CAS。
+        edits = body.get("edits", {})
+        if not isinstance(edits, dict):
+            abort(400, "edits 必須是 JSON 物件")
+        for source in (body, edits):
+            for field in ("device_model", "code"):
+                if field in source and source[field] != row[field]:
+                    abort(400, f"不可修改 {field}")
+        editable_fields = {"description", "variant", "severity", "cause", "solution"}
+        if set(edits) - editable_fields - {"device_model", "code"}:
+            abort(400, "edits 含有不允許編輯的欄位")
+        for field in editable_fields & edits.keys():
+            if not isinstance(edits[field], str) and not (field == "variant" and edits[field] is None):
+                abort(400, f"{field} 必須是文字")
+        if edits.get("severity") and edits["severity"] not in SEVERITIES:
+            abort(400, f"severity 必須為 {sorted(SEVERITIES)} 之一")
+        variant = normalize_variant((edits["variant"] if "variant" in edits else row.get("variant")) or "")
         # accept：CAS 搶佔在寫入 alarms 之前執行，不是之後（CLAUDE.md
         # 「狀態轉換鐵則」）——這支端點還沒上線，直接照對的順序寫，不用
         # 先寫錯再改。claim() 帶 status=eq.pending 條件，回傳 None 代表
@@ -1750,7 +1767,7 @@ def create_app() -> Flask:
         # delete_one() 有 _require_full_pk_match() 這層結構性保護，
         # variant 若真的傳 None 會被 PostgREST 當成 NULL 寫入，撞上
         # migration 006 記載過的「複合主鍵含 NULL 是已知的坑」，這裡
-        # 一律用 row.get("variant") or "" 確保 variant 至少是空字串，
+        # 上方編輯值或原值一律經 or "" 與 normalize_variant()，
         # 不會是 None（跟 migration 010 的 not null default '' 一致）。
         #
         # department/device_model/code 用 row[...] 索引而不是同樣的
@@ -1765,14 +1782,14 @@ def create_app() -> Flask:
         department = row["department"]
         device_model = row["device_model"]
         code = row["code"]
-        variant = row.get("variant") or ""
         new_alarm = {
             "department": department, "device_model": device_model,
-            "code": code, "variant": variant, "description": row["description"],
+            "code": code, "variant": variant, "description": edits.get("description", row["description"]),
         }
         for optional_field in ("severity", "cause", "solution", "keywords", "sol_steps"):
-            if row.get(optional_field) is not None:
-                new_alarm[optional_field] = row[optional_field]
+            value = edits.get(optional_field, row.get(optional_field))
+            if value is not None:
+                new_alarm[optional_field] = value
         try:
             new_row = alarms_store.upsert_one(
                 new_alarm, department=department,
