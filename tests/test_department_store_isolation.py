@@ -45,7 +45,7 @@ def test_count_impact_returns_zero_counts_when_not_using_supabase(store):
     counts = store.count_impact("any-dept")
     assert counts == {
         "alarms": 0, "ai_scans": 0, "ai_corrections": 0, "ai_logs": 0,
-        "feedback": 0, "alarm_views": 0, "alarm_history": 0, "devices": 0,
+        "feedback": 0, "alarm_views": 0, "alarm_history": 0, "devices": 0, "semantic_review_findings": 0,
     }
 
 

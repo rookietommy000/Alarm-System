@@ -760,11 +760,13 @@ class DepartmentStore:
         if not _use_supabase():
             return {table: 0 for table in
                      ("alarms", "ai_scans", "ai_corrections", "ai_logs",
-                      "feedback", "alarm_views", "alarm_history", "devices")}
+                      "feedback", "alarm_views", "alarm_history", "devices",
+                      "semantic_review_findings")}
         counts = {}
         dept_qs = f"department=eq.{urllib.parse.quote(dept_id, safe='')}"
         for table in ("alarms", "ai_scans", "ai_corrections", "ai_logs",
-                      "feedback", "alarm_views", "alarm_history", "devices"):
+                      "feedback", "alarm_views", "alarm_history", "devices",
+                      "semantic_review_findings"):
             counts[table] = self._count(table, dept_qs)
         return counts
 
@@ -808,7 +810,8 @@ class DepartmentStore:
         removed = {}
         dept_qs = f"department=eq.{urllib.parse.quote(dept_id, safe='')}"
         for table in ("alarms", "ai_scans", "ai_corrections", "ai_logs",
-                      "feedback", "alarm_views", "alarm_history", "devices"):
+                      "feedback", "alarm_views", "alarm_history", "devices",
+                      "semantic_review_findings"):
             deleted = self._req("DELETE", f"{table}?{dept_qs}",
                                 extra_headers={"Prefer": "return=representation"})
             removed[table] = len(deleted) if isinstance(deleted, list) else 0
@@ -2067,35 +2070,39 @@ class VariantTranslationStore:
 
 
 class SemanticReviewStore:
-    """全庫語意品質審核清單（303 筆 AI 語意疑慮發現，見 migration
-    009_add_semantic_review_findings.sql）。跟 department 無關——既有
-    API（app.py 的 list_semantic_review()）本來就不依 department 過濾，
-    回傳整份清單給任何呼叫的部門看，這裡忠實保留既有行為。
+    """依部門讀寫語意審核清單；index 是部門清單內的穩定順序。
 
-    介面刻意跟 app.py 原本的 _load_semantic_review()/_save_semantic_review()
-    保持相容（load_all() 回傳 list、save_all(findings) 整批覆蓋寫回），
-    這樣 update_semantic_review() 的「讀出整個 list、改一筆、存回整個
-    list」邏輯完全不用改，呼叫端不用感知底層是 JSON 檔案還是 DB 表。
-    順序穩定很重要：前端用陣列 index 當這筆審核項目的識別碼（不是用
-    device_model/code），load_all() 必須每次回傳同一個順序，這裡固定
-    用 created_at 排序，不能讓 Supabase 的預設回傳順序（無 order 時
-    不保證）打亂既有的 index 契約。
-
-    本機/測試模式讀 data/semantic_scan_fixes.json（既有格式，fail-open：
-    找不到檔案回空清單，這代表「還沒跑過離線掃描工具」不是系統壞了，
-    行為完全複製自原本 app.py 的 _load_semantic_review()）。
+    Supabase 以 created_at 排序，JSON 保留檔案順序。
+    缺少 JSON 檔案代表尚未產出清單；查詢失敗則向上拋錯。
     """
 
-    def load_all(self) -> list:
+    def load_all(self, department: str) -> list:
+        if not isinstance(department, str) or not department:
+            raise ValueError("department 必須是非空字串")
         if _use_supabase():
-            return self._load_supabase()
-        return self._load_json()
+            return self._load_supabase(department)
+        # 舊 JSON 未標示 department 的資料不屬於任何部門，不自動猜測。
+        return [f for f in self._load_json() if f.get("department") == department]
 
-    def save_all(self, findings: list) -> None:
+    def save_all(self, findings: list, department: str) -> None:
+        if not isinstance(department, str) or not department:
+            raise ValueError("department 必須是非空字串")
+        rows = [{**f, "department": department} for f in findings]
         if _use_supabase():
-            self._save_supabase(findings)
+            self._save_supabase(rows)
         else:
-            self._save_json(findings)
+            # 與 Supabase upsert 一致，保留其他部門及本次未更新的項目。
+            existing = self._load_json()
+            positions = {(f.get("department"), f["device_model"], f["code"]): i
+                         for i, f in enumerate(existing)}
+            for row in rows:
+                key = (department, row["device_model"], row["code"])
+                if key in positions:
+                    existing[positions[key]] = row
+                else:
+                    positions[key] = len(existing)
+                    existing.append(row)
+            self._save_json(existing)
 
     def _path(self):
         return _data_dir() / "semantic_scan_fixes.json"
@@ -2119,7 +2126,7 @@ class SemanticReviewStore:
             json.dump({"findings": findings}, f, ensure_ascii=False, indent=2)
         tmp.replace(path)
 
-    _FIELDS = ["device_model", "code", "description", "issue", "confidence",
+    _FIELDS = ["department", "device_model", "code", "description", "issue", "confidence",
                "suggested_zh", "suggested_description"]
 
     def _row_to_finding(self, row: dict) -> dict:
@@ -2138,34 +2145,27 @@ class SemanticReviewStore:
         row["snapshot_id"] = finding.get("snapshot_id")
         return row
 
-    def _load_supabase(self) -> list:
-        try:
-            base = os.environ.get("SUPABASE_URL", "").rstrip("/")
-            key = os.environ.get("SUPABASE_KEY", "")
-            qs = "select=*&order=created_at.asc&limit=5000"
-            req = urllib.request.Request(
-                f"{base}/rest/v1/semantic_review_findings?{qs}",
-                headers={"apikey": key, "Authorization": f"Bearer {key}"},
-                method="GET",
-            )
-            with _urlopen(req) as r:
-                rows = json.loads(r.read().decode())
-            return [self._row_to_finding(row) for row in rows]
-        except Exception as e:
-            # fail-open：跟既有 _load_semantic_review() 對「檔案不存在」
-            # 的處理一致——查詢失敗時如實回空清單，不是報錯，但例外
-            # 本身要留痕（CLAUDE.md 例外處理判準），不能完全空白吞掉。
-            import sys as _sys
-            print(f"[SemanticReviewStore] _load_supabase 查詢失敗（退回空清單）："
-                  f"{type(e).__name__}: {e}", file=_sys.stderr)
-            return []
+    def _load_supabase(self, department: str) -> list:
+        base = os.environ.get("SUPABASE_URL", "").rstrip("/")
+        key = os.environ.get("SUPABASE_KEY", "")
+        qs = ("select=*&order=created_at.asc,id.asc&limit=5000"
+              f"&department=eq.{urllib.parse.quote(department, safe='')}")
+        req = urllib.request.Request(
+            f"{base}/rest/v1/semantic_review_findings?{qs}",
+            headers={"apikey": key, "Authorization": f"Bearer {key}"},
+            method="GET",
+        )
+        # 無備援：schema/查詢異常不可偽裝成「沒有待審資料」。
+        with _urlopen(req) as r:
+            rows = json.loads(r.read().decode())
+        return [self._row_to_finding(row) for row in rows]
 
     def _save_supabase(self, findings: list) -> None:
         base = os.environ.get("SUPABASE_URL", "").rstrip("/")
         key = os.environ.get("SUPABASE_KEY", "")
         data = json.dumps([self._finding_to_row(f) for f in findings]).encode()
         req = urllib.request.Request(
-            f"{base}/rest/v1/semantic_review_findings?on_conflict=device_model,code",
+            f"{base}/rest/v1/semantic_review_findings?on_conflict=department,device_model,code",
             data=data,
             headers={
                 "apikey": key, "Authorization": f"Bearer {key}",

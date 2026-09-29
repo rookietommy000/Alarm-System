@@ -18,6 +18,7 @@ def _write_review_file(tmp_path_dir, findings):
 
 
 SAMPLE_FINDING = {
+    "department": "local",
     "code": "0003", "device_model": "CNC-A100",
     "description": "OPEN UNITS/CHECK DISABLE 打開單位/檢查禁用",
     "issue": "units 被誤譯為單位", "confidence": "high",
@@ -247,3 +248,44 @@ class TestImportSnapshotStoreIsAvailable:
         monkeypatch.setattr(storage_mod.urllib.request, "urlopen", lambda req, *a, **kw: FakeResponse(b"[]"))
         store = storage_mod.ImportSnapshotStore()
         assert store.is_available() is True
+
+
+def test_json_api_uses_department_filtered_index(client, tmp_path):
+    """驗證 JSON 清單過濾及 API index 契約；不宣稱驗證真實 Supabase。"""
+    rows = [
+        {**SAMPLE_FINDING, "department": "mf4d", "code": "B0"},
+        {**SAMPLE_FINDING, "department": "LINE3", "code": "A0"},
+        {**SAMPLE_FINDING, "department": "mf4d", "code": "B1"},
+    ]
+    _write_review_file(tmp_path, rows)
+    for department, expected in [("mf4d", ["B0", "B1"]), ("LINE3", ["A0"])]:
+        with client.session_transaction() as session:
+            session["department"] = department
+        response = client.get(f"/api/admin/semantic-review/{department}")
+        assert [r["code"] for r in response.get_json()["findings"]] == expected
+        summary = client.get("/api/admin/pending-review").get_json()["items"]
+        assert [r["code"] for r in summary] == expected
+        assert [r["review_index"] for r in summary] == list(range(len(expected)))
+    # LINE3 只有一筆，猜測全域 index 2 不得碰到 mf4d 的 B1。
+    assert client.put("/api/admin/semantic-review/LINE3/2", json={"action": "reject"}).status_code == 404
+    response = client.put("/api/admin/semantic-review/LINE3/0", json={"action": "reject"})
+    assert response.status_code == 200
+    assert response.get_json()["code"] == "A0"
+    assert client.put("/api/admin/semantic-review/mf4d/0", json={"action": "reject"}).status_code == 404
+    with client.session_transaction() as session:
+        session["department"] = "mf4d"
+    findings = client.get("/api/admin/semantic-review/mf4d").get_json()["findings"]
+    assert [r["status"] for r in findings] == ["pending", "pending"]
+    response = client.put("/api/admin/semantic-review/mf4d/1", json={"action": "reject"})
+    assert response.get_json()["code"] == "B1"
+
+
+def test_update_rejects_wrong_department_from_store(client, monkeypatch):
+    import storage
+    monkeypatch.setattr(storage.semantic_review_store, "load_all",
+                        lambda department: [{**SAMPLE_FINDING, "department": "mf4d", "status": "pending"}])
+    def unexpected_save(*args, **kwargs):
+        pytest.fail("department 斷言失敗後不得寫入")
+    monkeypatch.setattr(storage.semantic_review_store, "save_all", unexpected_save)
+    client.application.config["PROPAGATE_EXCEPTIONS"] = False
+    assert client.put("/api/admin/semantic-review/local/0", json={"action": "reject"}).status_code == 500

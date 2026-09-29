@@ -33,7 +33,13 @@ def test_cli_with_fake_store(tmp_path, monkeypatch, capsys, write):
         return alarms
     existing = [dict(device_model="M", code=str(i), status=status)
                 for i, status in enumerate(["accepted", "rejected", "unknown", "pending"])]
-    store = SimpleNamespace(load_all=lambda: existing, save_all=writes.append)
+    def load_findings(*, department):
+        assert department == "mf4d"
+        return existing
+    def save_findings(rows, *, department):
+        assert department == "mf4d"
+        writes.append(rows)
+    store = SimpleNamespace(load_all=load_findings, save_all=save_findings)
     monkeypatch.setattr(fixes, "load_storage", lambda: SimpleNamespace(
         alarms_store=SimpleNamespace(load=load, _invalidate_cache=lambda department: None), SemanticReviewStore=lambda: store))
     monkeypatch.setattr(fixes, "_load_client", lambda: None)
@@ -60,7 +66,7 @@ def test_write_requires_explicit_environment(monkeypatch):
 
 
 def test_existing_query_failure_is_not_empty_table():
-    def failed():
+    def failed(*, department):
         print("查詢失敗", file=sys.stderr)
         return []
     with pytest.raises(RuntimeError, match="load_all"):

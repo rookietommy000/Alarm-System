@@ -1300,23 +1300,16 @@ def create_app() -> Flask:
     # 清單存放（2026-09-02 改）：本機/測試模式仍讀 data/semantic_scan_
     # fixes.json（data/ 整層被 .gitignore 排除，正式環境永遠讀不到這個
     # 檔案），production 走 Supabase 的 semantic_review_findings 表
-    # （見 migration 009），雙軌邏輯收斂進 storage.SemanticReviewStore，
-    # 這裡的兩個函式維持原本簽名不變、只是委派給 store，呼叫端（下面
-    # 的兩個端點）完全不用改——理由同 variant_translations 的搬遷：
-    # 這批清單會持續被審核/更新，改存 DB 才不用每次都走 commit+部署。
-    #
-    # 審核狀態（status: pending/accepted/rejected）的寫回語意不變：讀出
-    # 整個 list、改其中一筆、存回整個 list——SemanticReviewStore.save_all()
-    # 在 Supabase 模式下用 (device_model, code) 當 on_conflict 逐筆
-    # upsert，不是真的整批覆蓋，效果對呼叫端透明。
+    # （見 migration 009/011）。讀寫皆限定部門，index 對應該部門完整
+    # 清單（包含已處理項目）；Supabase 以 department/device_model/code upsert。
 
-    def _load_semantic_review() -> list:
+    def _load_semantic_review(department: str) -> list:
         from storage import semantic_review_store
-        return semantic_review_store.load_all()
+        return semantic_review_store.load_all(department=department)
 
-    def _save_semantic_review(findings: list) -> None:
+    def _save_semantic_review(findings: list, department: str) -> None:
         from storage import semantic_review_store
-        semantic_review_store.save_all(findings)
+        semantic_review_store.save_all(findings, department=department)
 
     @app.get("/api/admin/data-issue-reports/<department>")
     @admin_required
@@ -1327,8 +1320,8 @@ def create_app() -> Flask:
     @app.get("/api/admin/semantic-review/<department>")
     @admin_required
     def list_semantic_review(department: str):
-        resolve_target_department(department)  # 路由權限一致性檢查，讀取本身不觸碰資料庫
-        return jsonify({"findings": _load_semantic_review()})
+        target = resolve_target_department(department)
+        return jsonify({"findings": _load_semantic_review(target)})
 
     @app.put("/api/admin/semantic-review/<department>/<int:index>")
     @admin_required
@@ -1338,7 +1331,7 @@ def create_app() -> Flask:
         看過原文後可能要自己微調文字，不強制照抄 AI 的建議。"""
         target = resolve_target_department(department)  # URL path 決定目標部門，同 inspect/split 端點的規則
 
-        findings = _load_semantic_review()
+        findings = _load_semantic_review(target)
         if index < 0 or index >= len(findings):
             abort(404, "找不到這筆審核項目")
 
@@ -1348,12 +1341,14 @@ def create_app() -> Flask:
             abort(400, 'action 必須為 "accept" 或 "reject"')
 
         item = findings[index]
+        if item.get("department") != target:
+            raise AssertionError("語意審核項目的 department 與目標部門不符")
         if item.get("status") != "pending":
             abort(409, f"這筆已經處理過（{item['status']}），不可重複處理")
 
         if action == "reject":
             item["status"] = "rejected"
-            _save_semantic_review(findings)
+            _save_semantic_review(findings, target)
             return jsonify(item)
 
         final_zh = (body.get("final_zh") or item.get("suggested_zh") or "").strip()
@@ -1415,7 +1410,7 @@ def create_app() -> Flask:
         item["status"] = "accepted"
         item["final_zh"] = final_zh
         item["snapshot_id"] = snapshot_id
-        _save_semantic_review(findings)
+        _save_semantic_review(findings, target)
         return jsonify(item)
 
     # ── 整批復原（批次匯入 UI 規劃第 5 階段）────────────────────────
@@ -1595,13 +1590,15 @@ def create_app() -> Flask:
                 {**row, "source_type": source_type}
                 for row in store.list_pending(department=department)
             )
-        # 語意清單沿用既有全庫共用範圍；index 必須在過濾前取得，
-        # 才能對應既有 update_semantic_review 的完整清單索引。
-        items.extend(
-            {**row, "source_type": "semantic_review", "review_index": index}
-            for index, row in enumerate(_load_semantic_review())
-            if row.get("status") == "pending"
-        )
+        # 每個部門各自編 index，再篩 pending，與審核端點的清單契約一致。
+        semantic_departments = ([department] if department is not None else
+                                [row["id"] for row in department_store.list()])
+        for target in semantic_departments:
+            items.extend(
+                {**row, "source_type": "semantic_review", "review_index": index}
+                for index, row in enumerate(_load_semantic_review(target))
+                if row.get("status") == "pending"
+            )
         return jsonify({"items": items})
 
     @app.get("/api/admin/suggestions")

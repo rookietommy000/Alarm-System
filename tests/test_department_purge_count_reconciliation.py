@@ -19,7 +19,7 @@ import storage as storage_mod
 
 
 _TABLES = ("alarms", "ai_scans", "ai_corrections", "ai_logs",
-           "feedback", "alarm_views", "alarm_history", "devices")
+           "feedback", "alarm_views", "alarm_history", "devices", "semantic_review_findings")
 
 
 @pytest.fixture
@@ -41,7 +41,7 @@ def test_matching_counts_permits_deletion(store, monkeypatch):
 
     removed = store.purge("dept1", "dept1", acknowledge_counts=counts)
 
-    assert isinstance(removed, dict)
+    assert set(removed) == set(_TABLES)
 
 
 def test_mismatched_counts_blocks_deletion_and_reports_actual(store, monkeypatch):

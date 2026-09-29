@@ -117,7 +117,7 @@ def prepare_findings(findings, alarms, store):
     current = {(a["device_model"], a["code"]): a for a in alarms}
     diagnostics = io.StringIO()
     with redirect_stderr(diagnostics):
-        existing = store.load_all()
+        existing = store.load_all(department="mf4d")
     if diagnostics.getvalue():
         print(diagnostics.getvalue(), end="", file=sys.stderr)
         raise RuntimeError("load_all() 有異常訊息，無法確認既有審核狀態，停止寫入")
@@ -205,7 +205,7 @@ def main():
     rows = prepare_findings(findings, load_alarms(storage), store)
     if args.write:
         if rows:
-            store.save_all(rows)
+            store.save_all(rows, department="mf4d")
         print(f"已送出 {len(rows)} 筆 pending findings", file=sys.stderr)
     else:
         print(json.dumps(rows, ensure_ascii=False, indent=2))
