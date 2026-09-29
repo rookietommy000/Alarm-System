@@ -23,6 +23,9 @@ pytest tests/
 
 # 執行單一測試
 pytest tests/test_api.py::test_create_alarm -v
+
+# 執行前端 Vue 組件單元測試（Node.js 原生 test runner，pytest 不涵蓋這塊）
+sh tests/run_frontend_unit_tests.sh
 ```
 
 > **Port 注意**：README 寫 5000，但實際使用 **5001**。macOS 的 AirPlay Receiver 會佔用 5000 並回 403，已在 `backend/app.py` 固定為 5001。
