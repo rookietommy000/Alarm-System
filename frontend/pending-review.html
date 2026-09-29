@@ -79,7 +79,7 @@ td { overflow-wrap:anywhere; }
 <script>
 Vue.createApp({
   data() { return { whoami:{}, departments:[], department:'__all__', source:'', search:'', items:[], loading:true, error:'',
-    labels:{suggestion:'現場處置建議', pending_import:'異常匯入', semantic_review:'語意疑慮'} }; },
+    labels:{suggestion:'現場處置建議', pending_import:'異常匯入'} }; },
   computed:{
     deptQuery() { return this.whoami.superadmin ? '?dept=' + encodeURIComponent(this.department) : ''; },
     filtered() { const q = this.search.trim().toLowerCase(); return this.items.filter(i => (!this.source || i.source_type === this.source) &&
@@ -89,15 +89,13 @@ Vue.createApp({
   methods:{
     departmentName(id) { return this.departments.find(d => d.id === id)?.name || id || '—'; },
     summary(item) { return item.source_type === 'suggestion' ? [item.suggestion,item.reason].filter(Boolean).join('\n') :
-      item.source_type === 'semantic_review' ? [item.description,item.issue,item.suggested_description || item.suggested_zh].filter(Boolean).join('\n') :
       [item.description,item.flagged_reason].filter(Boolean).join('\n'); },
     reviewLink(item) {
       if (item.source_type === 'suggestion') return null;
-      const semantic = item.source_type === 'semantic_review';
       const dept = item.department;
       if (!dept || dept === '__all__') return null;
-      const query = new URLSearchParams({dept, page:semantic ? 'semantic-review' : 'pending-imports'});
-      return '/admin?' + query + '#' + (semantic ? 'semantic-review-' + item.review_index : 'pending-import-' + item.id);
+      const query = new URLSearchParams({dept, page:'pending-imports'});
+      return '/admin?' + query + '#' + ('pending-import-' + item.id);
     },
     async changeDepartment() {
       const url = new URL(location.href); url.searchParams.set('dept', this.department); history.replaceState({}, '', url);

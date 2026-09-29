@@ -760,13 +760,11 @@ class DepartmentStore:
         if not _use_supabase():
             return {table: 0 for table in
                      ("alarms", "ai_scans", "ai_corrections", "ai_logs",
-                      "feedback", "alarm_views", "alarm_history", "devices",
-                      "semantic_review_findings")}
+                      "feedback", "alarm_views", "alarm_history", "devices")}
         counts = {}
         dept_qs = f"department=eq.{urllib.parse.quote(dept_id, safe='')}"
         for table in ("alarms", "ai_scans", "ai_corrections", "ai_logs",
-                      "feedback", "alarm_views", "alarm_history", "devices",
-                      "semantic_review_findings"):
+                      "feedback", "alarm_views", "alarm_history", "devices"):
             counts[table] = self._count(table, dept_qs)
         return counts
 
@@ -810,8 +808,7 @@ class DepartmentStore:
         removed = {}
         dept_qs = f"department=eq.{urllib.parse.quote(dept_id, safe='')}"
         for table in ("alarms", "ai_scans", "ai_corrections", "ai_logs",
-                      "feedback", "alarm_views", "alarm_history", "devices",
-                      "semantic_review_findings"):
+                      "feedback", "alarm_views", "alarm_history", "devices"):
             deleted = self._req("DELETE", f"{table}?{dept_qs}",
                                 extra_headers={"Prefer": "return=representation"})
             removed[table] = len(deleted) if isinstance(deleted, list) else 0
@@ -1008,8 +1005,7 @@ class ImportSnapshotStore:
         正式環境執行）。save_snapshot() 本身是 fail-open 設計——表不存在
         時 POST 失敗會被吞掉、印一行 stderr、回傳 None，呼叫端若沒有
         主動檢查這個 None，會在完全沒有復原保護的情況下繼續往下寫入
-        正式表（語意審核「採用並寫入」曾經就是這樣，見 update_semantic_
-        review() 的防呆修復）。這裡用 limit=0 輕量 GET 探測，不寫入
+        正式表。這裡用 limit=0 輕量 GET 探測，不寫入
         任何資料；HTTPError 明確判斷是不是 404（表不存在）而不是網路
         層問題，兩者不該混為一談——404 代表 migration 007 還沒執行，
         其他錯誤（逾時、憑證問題）不代表表不存在，但保守起見一律視為
@@ -2069,119 +2065,6 @@ class VariantTranslationStore:
             return {}
 
 
-class SemanticReviewStore:
-    """依部門讀寫語意審核清單；index 是部門清單內的穩定順序。
-
-    Supabase 以 created_at 排序，JSON 保留檔案順序。
-    缺少 JSON 檔案代表尚未產出清單；查詢失敗則向上拋錯。
-    """
-
-    def load_all(self, department: str) -> list:
-        if not isinstance(department, str) or not department:
-            raise ValueError("department 必須是非空字串")
-        if _use_supabase():
-            return self._load_supabase(department)
-        # 舊 JSON 未標示 department 的資料不屬於任何部門，不自動猜測。
-        return [f for f in self._load_json() if f.get("department") == department]
-
-    def save_all(self, findings: list, department: str) -> None:
-        if not isinstance(department, str) or not department:
-            raise ValueError("department 必須是非空字串")
-        rows = [{**f, "department": department} for f in findings]
-        if _use_supabase():
-            self._save_supabase(rows)
-        else:
-            # 與 Supabase upsert 一致，保留其他部門及本次未更新的項目。
-            existing = self._load_json()
-            positions = {(f.get("department"), f["device_model"], f["code"]): i
-                         for i, f in enumerate(existing)}
-            for row in rows:
-                key = (department, row["device_model"], row["code"])
-                if key in positions:
-                    existing[positions[key]] = row
-                else:
-                    positions[key] = len(existing)
-                    existing.append(row)
-            self._save_json(existing)
-
-    def _path(self):
-        return _data_dir() / "semantic_scan_fixes.json"
-
-    def _load_json(self) -> list:
-        path = self._path()
-        if not path.exists():
-            return []
-        with path.open("r", encoding="utf-8") as f:
-            data = json.load(f)
-        findings = data.get("findings", data) if isinstance(data, dict) else data
-        for f in findings:
-            f.setdefault("status", "pending")
-        return findings
-
-    def _save_json(self, findings: list) -> None:
-        path = self._path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
-        with tmp.open("w", encoding="utf-8") as f:
-            json.dump({"findings": findings}, f, ensure_ascii=False, indent=2)
-        tmp.replace(path)
-
-    _FIELDS = ["department", "device_model", "code", "description", "issue", "confidence",
-               "suggested_zh", "suggested_description"]
-
-    def _row_to_finding(self, row: dict) -> dict:
-        finding = {k: row[k] for k in self._FIELDS}
-        finding["status"] = row["review_status"]
-        if row.get("final_zh") is not None:
-            finding["final_zh"] = row["final_zh"]
-        if row.get("snapshot_id") is not None:
-            finding["snapshot_id"] = row["snapshot_id"]
-        return finding
-
-    def _finding_to_row(self, finding: dict) -> dict:
-        row = {k: finding[k] for k in self._FIELDS}
-        row["review_status"] = finding.get("status", "pending")
-        row["final_zh"] = finding.get("final_zh")
-        row["snapshot_id"] = finding.get("snapshot_id")
-        return row
-
-    def _load_supabase(self, department: str) -> list:
-        base = os.environ.get("SUPABASE_URL", "").rstrip("/")
-        key = os.environ.get("SUPABASE_KEY", "")
-        qs = ("select=*&order=created_at.asc,id.asc&limit=5000"
-              f"&department=eq.{urllib.parse.quote(department, safe='')}")
-        req = urllib.request.Request(
-            f"{base}/rest/v1/semantic_review_findings?{qs}",
-            headers={"apikey": key, "Authorization": f"Bearer {key}"},
-            method="GET",
-        )
-        # 無備援：schema/查詢異常不可偽裝成「沒有待審資料」。
-        with _urlopen(req) as r:
-            rows = json.loads(r.read().decode())
-        return [self._row_to_finding(row) for row in rows]
-
-    def _save_supabase(self, findings: list) -> None:
-        base = os.environ.get("SUPABASE_URL", "").rstrip("/")
-        key = os.environ.get("SUPABASE_KEY", "")
-        data = json.dumps([self._finding_to_row(f) for f in findings]).encode()
-        req = urllib.request.Request(
-            f"{base}/rest/v1/semantic_review_findings?on_conflict=department,device_model,code",
-            data=data,
-            headers={
-                "apikey": key, "Authorization": f"Bearer {key}",
-                "Content-Type": "application/json",
-                "Prefer": "resolution=merge-duplicates,return=minimal",
-            },
-            method="POST",
-        )
-        # 這裡刻意不 catch——跟 variant_translations/save_snapshot 那類
-        # 「失敗不影響主流程」的加值功能不同，這是審核動作本身唯一的
-        # 寫入路徑：accept/reject 這筆狀態如果沒真的存進去，使用者會
-        # 以為操作成功但下次載入時狀態消失，比拋錯讓 update_semantic_
-        # review() 的呼叫端得到 500 更誤導人。
-        _urlopen(req)
-
-
 class PendingAlarmImportStore(StatusTransitionMixin, _PendingReviewCrudMixin):
     """異常匯入資料的待審清單（見 migration 010_add_pending_alarm_
     imports.sql）。比照 AlarmSuggestionStore 的既有模式（storage.py
@@ -2513,7 +2396,6 @@ audit_logger = AuditLogger()
 ai_scan_store = AiScanStore()
 import_snapshot_store = ImportSnapshotStore()
 variant_translation_store = VariantTranslationStore()
-semantic_review_store = SemanticReviewStore()
 pending_alarm_import_store = PendingAlarmImportStore()
 department_audit_log_store = DepartmentAuditLogStore()
 data_issue_report_store = DataIssueReportStore()

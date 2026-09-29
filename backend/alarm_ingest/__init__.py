@@ -16,7 +16,7 @@ from .validate import (
     completeness_report,
     check_variant_consistency,
 )
-from .quality import clean, decide_variant_mode, split_code, dedup, apply_semantic_fix
+from .quality import clean, decide_variant_mode, split_code, dedup
 from .commit import commit_rows, undo_snapshot
 from .detect import (
     read_grid,
@@ -45,7 +45,6 @@ __all__ = [
     "decide_variant_mode",
     "split_code",
     "dedup",
-    "apply_semantic_fix",
     "commit_rows",
     "undo_snapshot",
     "read_grid",

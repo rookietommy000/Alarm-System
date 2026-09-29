@@ -19,7 +19,7 @@ import storage as storage_mod
 
 
 _TABLES = ("alarms", "ai_scans", "ai_corrections", "ai_logs",
-           "feedback", "alarm_views", "alarm_history", "devices", "semantic_review_findings")
+           "feedback", "alarm_views", "alarm_history", "devices")
 
 
 @pytest.fixture

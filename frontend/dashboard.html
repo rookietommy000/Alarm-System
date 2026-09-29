@@ -650,102 +650,14 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
           </div>
         </section>
 
-        <!-- ══ 全庫語意品質審核 ══
-             AI 逐筆審核既有警報資料的中文欄位是否與英文原文語意相符
-             （全庫語意品質掃描，規劃第 1c 項），這裡呈現的是已經跑完
-             兩階段離線工具（掃描找疑慮 + 產生修正建議）的結果——不在
-             這個頁面觸發任何 AI 呼叫，只做「人工逐筆核對後採用或略過」
-             這一件事。AI 建議必須經人工確認才會寫入 alarms 正式表，
-             這條線不能跳過（同 EXTRACTION_SPEC.md「一條不能跨的線」）。 -->
-        <div v-if="page === 'semantic-review'" style="display:flex; flex-direction:column; gap:18px">
-          <div style="background:color-mix(in srgb, #9a7c1a 10%, transparent); border:1px solid color-mix(in srgb, #9a7c1a 30%, transparent); border-radius:8px; padding:12px 16px; font-size:13px; line-height:1.6">
-            這份清單是 AI 兩階段離線分析的結果（找疑慮 + 產生建議修正文字），逐筆採用前建議先看完整報告的
-            <strong>「詞彙一致性」</strong>分頁（同一英文詞在不同機種的建議譯法是否一致）跟
-            <strong>「漏報抽樣核對」</strong>分頁（AI 判斷沒問題的資料是否真的沒問題）——兩者決定這份清單的可信度，
-            不是逐筆看起來合理就代表整批沒問題。「修正後文字」欄位可直接編輯，AI 的建議只是起點。
-          </div>
-          <section>
-            <div style="display:flex; justify-content:space-between; align-items:baseline; gap:12px; flex-wrap:wrap; margin-bottom:10px">
-              <div style="display:flex; gap:16px; font-size:13px; color:color-mix(in srgb, var(--color-text) 65%, transparent)">
-                <span>共 {{ semanticReview.items.length }} 筆</span>
-                <span>待處理 {{ semanticReviewCounts.pending }}</span>
-                <span style="color:#2e7d32">已採用 {{ semanticReviewCounts.accepted }}</span>
-                <span>已略過 {{ semanticReviewCounts.rejected }}</span>
-              </div>
-              <div style="display:flex; gap:8px; align-items:center">
-                <select class="input" style="width:140px" v-model="semanticReviewFilter.status">
-                  <option value="pending">待處理</option>
-                  <option value="accepted">已採用</option>
-                  <option value="rejected">已略過</option>
-                  <option value="">全部</option>
-                </select>
-                <select class="input" style="width:160px" v-model="semanticReviewFilter.model">
-                  <option value="">全部機種</option>
-                  <option v-for="m in semanticReviewModels" :key="m" :value="m">{{ m }}</option>
-                </select>
-              </div>
-            </div>
-
-            <p v-if="semanticReview.loading" style="font-size:13px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">載入中…</p>
-            <p v-if="semanticReview.error" style="color:#a23b3b; font-size:13px">{{ semanticReview.error }}</p>
-            <p v-if="!semanticReview.loading && !semanticReview.items.length" style="font-size:13px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">
-              尚未執行過語意品質掃描（tools/variant/scan_semantic_quality.py），沒有待審核項目。
-            </p>
-
-            <div style="display:flex; flex-direction:column; gap:10px">
-              <div v-for="row in filteredSemanticReview" :key="row.idx" :id="'semantic-review-' + row.idx" tabindex="-1" class="blueprint"
-                   style="border:1px solid var(--color-divider); padding:14px 16px; display:flex; flex-direction:column; gap:8px">
-                <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
-                <div style="display:flex; justify-content:space-between; align-items:baseline; gap:12px; flex-wrap:wrap">
-                  <div style="font-family:var(--font-mono, monospace); font-size:12px; color:color-mix(in srgb, var(--color-text) 65%, transparent)">
-                    <span style="color:var(--color-accent); font-weight:700">{{ row.device_model }}</span> {{ row.code }}
-                  </div>
-                  <div style="display:flex; gap:8px; align-items:center">
-                    <span style="font-family:var(--font-mono, monospace); font-size:10px; letter-spacing:0.04em; text-transform:uppercase; padding:2px 8px; border-radius:999px; font-weight:700"
-                          :style="row.confidence==='high' ? 'background:#fbe9e3; color:#b3401f' : 'background:#f8f0da; color:#9a7c1a'">
-                      {{ row.confidence === 'high' ? '高信心' : '中信心' }}
-                    </span>
-                    <span style="font-size:11px; padding:2px 8px; border-radius:999px"
-                          :style="{pending:'background:color-mix(in srgb, var(--color-text) 8%, transparent); color:color-mix(in srgb, var(--color-text) 55%, transparent)',
-                                    accepted:'background:#e3f3e5; color:#2e7d32', rejected:'background:color-mix(in srgb, var(--color-text) 8%, transparent); color:color-mix(in srgb, var(--color-text) 45%, transparent)'}[row.status]">
-                      {{ {pending:'待處理', accepted:'已採用', rejected:'已略過'}[row.status] }}
-                    </span>
-                  </div>
-                </div>
-
-                <div style="font-size:13px; font-family:var(--font-mono, monospace)"><span style="color:color-mix(in srgb, var(--color-text) 45%, transparent); font-size:11px; margin-right:6px; font-family:inherit">原文</span>{{ row.description }}</div>
-                <div v-if="row.suggested_description" style="font-size:13px; font-family:var(--font-mono, monospace); color:#2e7d32"><span style="color:color-mix(in srgb, var(--color-text) 45%, transparent); font-size:11px; margin-right:6px; font-family:inherit">AI 建議</span>{{ row.suggested_description }}</div>
-                <div style="font-size:13px; color:color-mix(in srgb, var(--color-text) 65%, transparent)">{{ row.issue }}</div>
-
-                <div v-if="row.status === 'pending'" style="display:flex; flex-direction:column; gap:6px; padding-top:6px; border-top:1px solid color-mix(in srgb, var(--color-text) 10%, transparent)">
-                  <label style="font-size:11px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">修正後文字（可直接編輯）</label>
-                  <input class="input" style="font-size:13px" v-model="row.editText" />
-                  <div style="display:flex; gap:8px; justify-content:flex-end">
-                    <button class="btn btn-secondary" style="font-size:12px" @click="rejectSemanticReview(row)" :disabled="row.busy">略過</button>
-                    <button class="btn btn-primary" style="font-size:12px" @click="acceptSemanticReview(row)" :disabled="row.busy || !row.editText.trim()">
-                      {{ row.busy ? '處理中…' : '採用並寫入' }}
-                    </button>
-                  </div>
-                  <p v-if="row.rowError" style="color:#a23b3b; font-size:12px; margin:0">{{ row.rowError }}</p>
-                </div>
-                <div v-else-if="row.status === 'accepted'" style="font-size:12px; color:#2e7d32; padding-top:6px; border-top:1px solid color-mix(in srgb, var(--color-text) 10%, transparent)">
-                  ✓ 已寫入：{{ row.final_zh }}
-                </div>
-              </div>
-            </div>
-          </section>
-        </div>
-
         <!-- ══ 異常匯入資料待審核 ══
              批次匯入或AI拍照辨識時被標記格式異常/信心度過低的資料，
              先進這份待審清單，人工核准後才寫入alarms正式表（見
              migration 010_add_pending_alarm_imports.sql）。跟alarms
              正式表不同，這裡不用department路徑段限定單一部門——後端
              list_pending_alarm_imports()走scope_department()，超管
-             跨部門檢視時可以看到所有部門的待審資料，不像semantic-
-             review那樣限定要先選定部門（那份清單本身是全庫共用不分
-             部門的性質，這份待審資料則是逐筆綁定特定department，跨
-             部門檢視合理有意義），所以navItems沒有加hideOnAll。 -->
+             跨部門檢視時可以看到所有部門的待審資料，
+             所以navItems沒有加hideOnAll。 -->
         <div v-if="page === 'pending-imports'" style="display:flex; flex-direction:column; gap:18px">
           <div style="background:color-mix(in srgb, #9a7c1a 10%, transparent); border:1px solid color-mix(in srgb, #9a7c1a 30%, transparent); border-radius:8px; padding:12px 16px; font-size:13px; line-height:1.6">
             核准前請核對「原始輸入」與轉換後的值是否一致。
@@ -1413,7 +1325,6 @@ createApp({
         { key: 'scans', label: '掃描紀錄管理', code: 'S' },
         { key: 'alarms', label: '警報管理', code: 'A' },
         { key: 'data-issue-reports', label: '資料異常回報', code: 'I', hideOnAll: true },
-        { key: 'semantic-review', label: 'AI 語意審核', code: 'R', hideOnAll: true },
         { key: 'pending-imports', label: '匯入待審核', code: 'P' },
         { key: 'models', label: '機種管理', code: 'M' },
         { key: 'depts', label: '部門管理', code: 'X', superOnly: true },
@@ -1423,7 +1334,6 @@ createApp({
         scans: ['紀錄', '掃描紀錄管理'],
         alarms: ['主檔', '警報管理'],
         'data-issue-reports': ['回報', '資料異常回報'],
-        'semantic-review': ['AI 輔助', '全庫語意品質審核'],
         'pending-imports': ['審核', '異常匯入資料待審核'],
         models: ['主檔', '機種管理'],
         depts: ['系統', '部門管理'],
@@ -1471,8 +1381,6 @@ createApp({
       bulkImport: null,
       vendorImport: null,
       dataIssueReports: { items: [], loading: false, error: '' },
-      semanticReview: { items: [], loading: false, error: '', loaded: false },
-      semanticReviewFilter: { status: 'pending', model: '' },
       pendingImports: { items: [], loading: false, error: '', loaded: false },
       pendingImportsFilter: { status: 'pending' },
       pendingImportDraft: null,
@@ -1496,25 +1404,6 @@ createApp({
       if (b.preview.errors.length) return false;
       if (b.preview.requires_accept_incomplete && !(b.acceptIncomplete || '').trim()) return false;
       return true;
-    },
-    semanticReviewCounts() {
-      const items = this.semanticReview.items;
-      return {
-        pending: items.filter(i => i.status === 'pending').length,
-        accepted: items.filter(i => i.status === 'accepted').length,
-        rejected: items.filter(i => i.status === 'rejected').length,
-      };
-    },
-    semanticReviewModels() {
-      return [...new Set(this.semanticReview.items.map(i => i.device_model))].sort();
-    },
-    filteredSemanticReview() {
-      const f = this.semanticReviewFilter;
-      return this.semanticReview.items.filter(i => {
-        if (f.status && i.status !== f.status) return false;
-        if (f.model && i.device_model !== f.model) return false;
-        return true;
-      });
     },
     pendingImportsCounts() {
       const items = this.pendingImports.items;
@@ -1676,12 +1565,8 @@ createApp({
     },
     page(next) {
       if (next === 'data-issue-reports') this.loadDataIssueReports();
-      if (next === 'semantic-review' && !this.semanticReview.loaded) {
-        this.loadSemanticReview();
-      }
       if (next === 'pending-imports') {
-        // 不用 loaded flag 卡住只載入一次——跟 semantic-review（全庫
-        // 共用清單，跟部門無關）不同，這份清單逐筆綁定 department，
+        // 這份清單逐筆綁定 department，
         // 超管切換檢視部門後內容應該要變，每次切進這個分頁都重新載入
         // 比較符合實際情況，不需要額外一個 viewDept watcher 來處理
         // 「已經在這頁時換部門」這種更少見的情境。
@@ -1713,7 +1598,7 @@ createApp({
     }
     // 統一待審列表的深連結：部門初始化完成後才載入既有審核分頁。
     const reviewPage = new URLSearchParams(location.search).get('page');
-    if (['semantic-review', 'pending-imports'].includes(reviewPage)) {
+    if (reviewPage === 'pending-imports') {
       this.page = reviewPage;
     }
     this.setAuditQuickRange('month');  // 預設本月，load() 內的 loadAudit() 會沿用這個區間
@@ -2185,75 +2070,11 @@ createApp({
         state.loading = false;
       }
     },
-    // ── 語意審核（規劃第 1c 項）：讀取離線工具產出的疑慮清單，逐筆
-    // 採用（寫入 alarms 正式表）或略過。AI 建議只是起點，editText
-    // 預先帶入 suggested_zh 但完全可編輯——審核者才是最終決定的人
-    // （EXTRACTION_SPEC.md「一條不能跨的線」同樣適用在這裡）。
-    async loadSemanticReview() {
-      this.semanticReview.loading = true; this.semanticReview.error = '';
-      try {
-        const dept = this.writeDept();
-        const r = await AlarmApi.get(`/api/admin/semantic-review/${encodeURIComponent(dept)}`);
-        if (r.status === 403) { location.href = '/admin/login'; return; }
-        if (!r.ok) { this.semanticReview.error = (await r.json().catch(() => ({}))).error || '載入失敗'; return; }
-        const body = await r.json();
-        this.semanticReview.items = body.findings.map((f, idx) => ({
-          ...f, idx,
-          editText: f.suggested_zh || '',
-          busy: false, rowError: '',
-        }));
-        this.semanticReview.loaded = true;
-        await this.focusReviewItem('semantic-review-');
-      } catch (err) {
-        this.semanticReview.error = '網路錯誤，請稍後再試';
-      } finally {
-        this.semanticReview.loading = false;
-      }
-    },
-    async acceptSemanticReview(row) {
-      row.busy = true; row.rowError = '';
-      try {
-        const dept = this.writeDept();
-        const r = await AlarmApi.put(
-          `/api/admin/semantic-review/${encodeURIComponent(dept)}/${row.idx}`,
-          { action: 'accept', final_zh: row.editText.trim() });
-        if (r.status === 403) { location.href = '/admin/login'; return; }
-        if (!r.ok) { row.rowError = (await r.json().catch(() => ({}))).error || '採用失敗'; return; }
-        const updated = await r.json();
-        Object.assign(row, updated);
-        this.showToast(`${row.device_model} ${row.code} 已採用並寫入`);
-      } catch (err) {
-        row.rowError = '網路錯誤，請稍後再試';
-      } finally {
-        row.busy = false;
-      }
-    },
-    async rejectSemanticReview(row) {
-      row.busy = true; row.rowError = '';
-      try {
-        const dept = this.writeDept();
-        const r = await AlarmApi.put(
-          `/api/admin/semantic-review/${encodeURIComponent(dept)}/${row.idx}`,
-          { action: 'reject' });
-        if (r.status === 403) { location.href = '/admin/login'; return; }
-        if (!r.ok) { row.rowError = (await r.json().catch(() => ({}))).error || '略過失敗'; return; }
-        const updated = await r.json();
-        Object.assign(row, updated);
-      } catch (err) {
-        row.rowError = '網路錯誤，請稍後再試';
-      } finally {
-        row.busy = false;
-      }
-    },
-
     // ── 異常匯入資料待審核（見 migration 010_add_pending_alarm_
-    // imports.sql）：跟 semantic-review 不同，這裡的 API 不帶
+    // imports.sql）：這裡的 API 不帶
     // department 路徑段（GET/PUT /api/admin/pending-alarm-imports），
     // 後端走 scope_department() 自動判斷範圍，不用像 writeDept() 那樣
     // 明確指定單一部門——超管跨部門檢視時可以看到所有部門的待審資料。
-    // 用資料庫自增 id（row.id）定位單筆，不是像 semantic-review 那樣
-    // 用陣列 index（那份清單本身是陣列型態的 JSON/JsonStore 資料，這
-    // 份清單走真正的 DB 表，有自己的主鍵）。
     async loadPendingImports() {
       this.pendingImports.loading = true; this.pendingImports.error = '';
       try {

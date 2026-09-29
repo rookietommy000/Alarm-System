@@ -103,7 +103,6 @@ ROUTE_CASES = [
     ("/api/admin/import/{}/inspect", "POST", 0),
     ("/api/admin/import/{}/split", "POST", 0),
     ("/api/admin/import/{}/snapshots", "GET", 0),
-    ("/api/admin/semantic-review/{}", "GET", 0),
     ("/api/alarms/{}/{}/{}/local", "PUT", 0),
     ("/api/alarms/{}/{}/{}/local", "PUT", 1),
     ("/api/alarms/{}/{}/{}/local", "PUT", 2),
@@ -201,7 +200,6 @@ def test_no_route_collapse_collisions(app):
         ("GET", "/<path:filename>", "root_redirect"),
         ("GET", "/api/alarms/<department>/<device_model>/<code>", "static"),
         ("GET", "/api/devices/<department>/<device_model>", "static"),
-        ("GET", "/api/admin/semantic-review/<department>", "static"),
         # 缺部門僅命中不存在的靜態檔案；test_report_read_missing_department_returns_404 驗證。
         ("GET", "/api/admin/data-issue-reports/<department>", "static"),
         ("GET", "/api/admin/import/<department>/snapshots", "static"),

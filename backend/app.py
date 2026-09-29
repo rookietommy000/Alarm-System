@@ -36,7 +36,6 @@ from alarm_ingest import (
     COMPLETENESS_WARN_THRESHOLD as INGEST_COMPLETENESS_WARN_THRESHOLD,
     read_grid as ingest_read_grid,
     detect_columns as ingest_detect_columns,
-    apply_semantic_fix as ingest_apply_semantic_fix,
 )
 from alarm_ingest.detect import _cell_to_str as ingest_cell_to_str
 from alarm_ingest.split import split_texts as ingest_split_texts, MAX_BATCH_SIZE as INGEST_SPLIT_MAX_BATCH
@@ -775,8 +774,7 @@ def create_app() -> Flask:
     @app.put("/api/devices/<department>/<device_model>")
     @admin_required
     def update_device(department: str, device_model: str):
-        """改名只更新 devices 表本身，不會連帶更新 alarms.device_model 或
-        semantic_review_findings 的機種字串副本。已有關聯警報資料時，
+        """改名只更新 devices 表本身，不會連帶更新 alarms.device_model。已有關聯警報資料時，
         改名前應確認是否需要額外處理；這是已知架構限制，批次同步
         不在本次改名 409 修復範圍內。
         """
@@ -1292,126 +1290,11 @@ def create_app() -> Flask:
 
         return jsonify({"results": results})
 
-    # ── 全庫語意品質審核（規劃第 1c 項）──────────────────────────────
-    # tools/variant/scan_semantic_quality.py + suggest_semantic_fixes.py
-    # 離線產出的疑慮清單（含 AI 建議修正文字），一次性工具的產物、不是
-    # 常駐掃描——這裡只提供讀取/審核/採用三個動作，不重新觸發掃描。
-    #
-    # 清單存放（2026-09-02 改）：本機/測試模式仍讀 data/semantic_scan_
-    # fixes.json（data/ 整層被 .gitignore 排除，正式環境永遠讀不到這個
-    # 檔案），production 走 Supabase 的 semantic_review_findings 表
-    # （見 migration 009/011）。讀寫皆限定部門，index 對應該部門完整
-    # 清單（包含已處理項目）；Supabase 以 department/device_model/code upsert。
-
-    def _load_semantic_review(department: str) -> list:
-        from storage import semantic_review_store
-        return semantic_review_store.load_all(department=department)
-
-    def _save_semantic_review(findings: list, department: str) -> None:
-        from storage import semantic_review_store
-        semantic_review_store.save_all(findings, department=department)
-
     @app.get("/api/admin/data-issue-reports/<department>")
     @admin_required
     def list_data_issue_reports(department: str):
         target = resolve_target_department(department)
         return jsonify({"reports": data_issue_report_store.load(target)})
-
-    @app.get("/api/admin/semantic-review/<department>")
-    @admin_required
-    def list_semantic_review(department: str):
-        target = resolve_target_department(department)
-        return jsonify({"findings": _load_semantic_review(target)})
-
-    @app.put("/api/admin/semantic-review/<department>/<int:index>")
-    @admin_required
-    def update_semantic_review(department: str, index: int):
-        """action: "accept"（採用修正並寫入 alarms 正式表）/ "reject"（略過，
-        不寫入）。採用時可帶 final_zh 覆蓋 AI 的 suggested_zh——審核者
-        看過原文後可能要自己微調文字，不強制照抄 AI 的建議。"""
-        target = resolve_target_department(department)  # URL path 決定目標部門，同 inspect/split 端點的規則
-
-        findings = _load_semantic_review(target)
-        if index < 0 or index >= len(findings):
-            abort(404, "找不到這筆審核項目")
-
-        body = request.get_json(silent=True) or {}
-        action = body.get("action")
-        if action not in ("accept", "reject"):
-            abort(400, 'action 必須為 "accept" 或 "reject"')
-
-        item = findings[index]
-        if item.get("department") != target:
-            raise AssertionError("語意審核項目的 department 與目標部門不符")
-        if item.get("status") != "pending":
-            abort(409, f"這筆已經處理過（{item['status']}），不可重複處理")
-
-        if action == "reject":
-            item["status"] = "rejected"
-            _save_semantic_review(findings, target)
-            return jsonify(item)
-
-        final_zh = (body.get("final_zh") or item.get("suggested_zh") or "").strip()
-        if not final_zh:
-            abort(400, "採用時必須提供修正後的中文文字（final_zh 或 AI 的 suggested_zh）")
-
-        # 防呆（2026-09-02 補）：復原快照機制（import_snapshots 表，
-        # migration 007）尚未在正式環境執行完成前，303 筆語意修正暫緩
-        # 套用是業務層面的共識，但原本程式碼完全沒有技術層面的阻擋——
-        # save_snapshot() 是 fail-open 設計，表不存在時靜默回傳 None，
-        # 這裡若不主動檢查，會在沒有復原保護的情況下直接寫入 alarms
-        # 正式表且無法 undo。改成先探測表是否真的存在，不存在就擋下來，
-        # 不能讓「暫緩」這個決策只靠人記得不去點按鈕來維持。
-        # 只在 Supabase 模式檢查：JsonStore（本機/測試）模式下
-        # import_snapshot_store 本來就不支援復原（見 ImportSnapshotStore
-        # 類別說明），這是既有且有意的行為，不是這次防呆要擋的對象，
-        # 擋下去只會讓既有測試全部誤判成「快照機制未就緒」。
-        if _use_supabase() and not import_snapshot_store.is_available():
-            abort(409, "復原快照機制尚未就緒（migration 007 待執行），暫不開放採用並寫入")
-
-        device_model = item["device_model"]
-        code = item["code"]
-        variant = ""
-
-        # 語意審核採用時的字串組裝邏輯跟 tools/variant/suggest_semantic_fixes.py
-        # 的離線建議工具共用同一份實作（backend/alarm_ingest/quality.py 的
-        # apply_semantic_fix()），避免兩處分岔造成現場審核跟離線建議結果不一致。
-        new_description = ingest_apply_semantic_fix(item["description"], final_zh)
-
-        existing = alarms_store.get_one(
-            department=target,
-            match={"device_model": device_model, "code": code, "variant": variant},
-        )
-        if existing is None:
-            abort(404, f"資料庫中找不到 {device_model}/{code}，可能已被刪除")
-
-        # 採用前先存一筆復原快照（同批次匯入用的 ImportSnapshotStore，
-        # 見 storage.py）——這批是現場人員正在使用的既有正式資料，跟
-        # 批次匯入寫入全新資料的風險不同：改壞了沒有「重新匯入補齊」
-        # 這條退路，只能逐筆對 alarm_history 撈舊值手動改回來。外部
-        # 審查明確指出這個缺口：303 筆逐筆採用途中若發現 AI 建議的用詞
-        # 風格不符合現場慣用語，需要能整批退回，不是簽名式地一筆筆修。
-        # Supabase 模式下才有效，JsonStore fallback 回 None（同批次匯入
-        # 的既有行為，不中斷本次寫入）。
-        snapshot_id = import_snapshot_store.save_snapshot(
-            department=target,
-            device_models=[device_model],
-            rows_before=[{"device_model": device_model, "code": code, "variant": variant, "before_data": existing}],
-            total_rows=1,
-            import_mode="semantic_review_accept",
-        )
-
-        row = alarms_store.upsert_one(
-            {**existing, "description": new_description},
-            department=target, on_conflict="department,device_model,code,variant",
-        )
-        audit_logger.log("UPDATE", department=target, new_data=row, old_data=existing)
-
-        item["status"] = "accepted"
-        item["final_zh"] = final_zh
-        item["snapshot_id"] = snapshot_id
-        _save_semantic_review(findings, target)
-        return jsonify(item)
 
     # ── 整批復原（批次匯入 UI 規劃第 5 階段）────────────────────────
     # 跟 AI 無關的保底機制：commit 時已把每筆寫入前的值存進
@@ -1589,15 +1472,6 @@ def create_app() -> Flask:
             items.extend(
                 {**row, "source_type": source_type}
                 for row in store.list_pending(department=department)
-            )
-        # 每個部門各自編 index，再篩 pending，與審核端點的清單契約一致。
-        semantic_departments = ([department] if department is not None else
-                                [row["id"] for row in department_store.list()])
-        for target in semantic_departments:
-            items.extend(
-                {**row, "source_type": "semantic_review", "review_index": index}
-                for index, row in enumerate(_load_semantic_review(target))
-                if row.get("status") == "pending"
             )
         return jsonify({"items": items})
 
