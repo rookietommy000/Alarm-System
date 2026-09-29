@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""全庫語意品質掃描（規劃第 1c 項）——一次性工具，不進 Flask 路由。
+"""mf4d 語意品質掃描（規劃第 1c 項）——一次性工具，不進 Flask 路由。
 
 跟 alarm_ingest/split.py 的差異：split 做「切分」，輸出必然是輸入的
 字元子集，可以程式化驗證（verify_no_generation()）。這裡做「審核」，
@@ -17,9 +17,10 @@ DI RETE → 曼坎薩緊張迪雷特、ARRESTO MANUALE → 逮捕手冊），這
     python scan_semantic_quality.py -o report.json  # 指定報告輸出路徑
 
 輸出：JSON 報告，每筆疑慮包含 code/device_model/欄位/AI 的判斷理由。
-不寫入資料庫，不修改任何檔案。
+不寫入資料庫；JSON 報告供第二階段使用。
 """
 import argparse
+from collections import Counter
 import json
 import os
 import pathlib
@@ -28,7 +29,7 @@ import sys
 import time
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
-ALARMS_PATH = ROOT / "data" / "backup" / "alarms.json"
+sys.path.insert(0, str(ROOT / "backend"))
 
 BATCH_SIZE = 30
 
@@ -76,6 +77,41 @@ confidence 只能是 "high"（幾乎確定是錯的）或 "medium"（懷疑但�
 - 不要因為用詞不夠精確或不夠通順就標記——只標記語意錯誤（意思不對），
   不是文筆問題
 """
+
+
+def load_storage():
+    # 必須先載入設定再 import storage，避免 store 在 import 時選到 JSON。
+    from dotenv import load_dotenv
+    load_dotenv(ROOT / ".env")
+    import storage
+    if not storage._use_supabase() or not isinstance(storage.alarms_store, storage.SupabaseStore):
+        raise RuntimeError("需要 Supabase 憑證且不可設定 ALARM_DATA_DIR；不使用本機備份")
+    return storage
+
+
+def check_variants(alarms):
+    if not __debug__:
+        raise RuntimeError("不可使用 python -O：variant 斷言必須啟用")
+    non_empty_variant = [a for a in alarms if a.get("variant")]
+    assert not non_empty_variant, (
+        f"mf4d部門出現{len(non_empty_variant)}筆非空variant的警報，"
+        "semantic_review_findings表的(device_model,code)兩欄唯一鍵無法區分variant，"
+        "這個掃描腳本的前提假設不成立，停止執行，需要人工重新評估schema設計"
+    )
+    dup = {k: v for k, v in Counter((a["device_model"], a["code"]) for a in alarms).items() if v > 1}
+    assert not dup, (
+        f"mf4d部門出現{len(dup)}組(device_model,code)重複，"
+        f"停止執行，需要人工重新評估schema設計，範例：{list(dup.items())[:3]}"
+    )
+
+
+def load_alarms(storage):
+    # 第二階段寫入前的檢查也必須取得即時資料，不沿用 60 秒快取。
+    storage.alarms_store._invalidate_cache("mf4d")
+    alarms = storage.alarms_store.load(department="mf4d")
+    check_variants(alarms)
+    print(f"mf4d：讀取 {len(alarms)} 筆警報，variant 唯一性檢查通過", file=sys.stderr)
+    return alarms
 
 
 def _load_client():
@@ -139,7 +175,7 @@ def main():
     ap.add_argument("-o", "--output", default=None, help="報告輸出路徑（預設印到 stdout）")
     args = ap.parse_args()
 
-    rows = json.loads(ALARMS_PATH.read_text(encoding="utf-8"))
+    rows = load_alarms(load_storage())
     if args.limit:
         rows = rows[: args.limit]
 
@@ -169,6 +205,7 @@ def main():
 
     scanned_count = len(rows) - sum(len(fb["codes"]) for fb in failed_batches)
     report = {
+        "department": "mf4d",
         "total_scanned": len(rows),
         "total_findings": len(all_findings),
         "failed_batches": failed_batches,
