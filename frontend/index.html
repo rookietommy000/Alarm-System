@@ -745,7 +745,19 @@
        （動畫、backdrop、ESC 關閉），沒有引入 bootstrap.min.css，這裡
        自己補上骨架必要的樣式，跟本頁其他元件共用 --primary/--surface
        等既有 CSS 變數，維持視覺一致，範圍限定在 .issue-report-modal
-       底下，不影響其他頁面元件。 */
+       底下，不影響其他頁面元件。
+
+       ⚠️ .modal { display:none } 這條規則本身是 bootstrap.min.css
+       提供的基礎樣式，選項A刻意不引入那個檔案，這裡必須自己補上，
+       否則 .issue-report-modal 這個 <div> 只是普通 div，沒有任何
+       display:none 的預設值——2026-09-29 實際發生過的正式環境
+       regression：對話框一進入 DOM（v-if="selected" 變 true，使用者
+       點開任一筆警報詳情時）就是可見狀態，看起來像「自動彈出」，
+       且 Bootstrap 的 show()/hide() 是透過 JS 切換 .show class + 這裡
+       的 display 屬性協同運作，兩者缺一都會壞（有 JS 沒有這條 CSS
+       →渲染就可見；有這條 CSS 沒有正確呼叫 hide()→卡在可見狀態關不掉）。 */
+    .issue-report-modal { display: none; }
+    .issue-report-modal.show { display: block; }
     .issue-report-modal .modal-dialog {
       max-width: 440px;
       margin: 1.75rem auto;
@@ -1461,11 +1473,6 @@
         },
       },
       mounted() {
-        // 只借 Bootstrap Modal 的行為（動畫、backdrop、ESC 關閉），視覺
-        // 樣式不套用 bootstrap.min.css（避免全域 reset 影響本頁其他既有
-        // 元件），改在本檔 <style> 內為 .issue-report-modal 範圍寫 scoped
-        // 樣式，跟 admin-login.html 完整引入 Bootstrap CSS 的作法不同。
-        this.dataIssueModal = new bootstrap.Modal(this.$refs.dataIssueModalEl);
         // whoami() 有內建快取（api.js 的 whoamiCache/whoamiPromise），
         // 這裡再呼叫一次不會重打 API。department namespace 要等這個
         // resolve 後才能正確讀取——this.whoami.department 在此之前
@@ -1586,10 +1593,33 @@
           this.issueContent = '';
           this.issueError = '';
           this.issueSent = false;
+          // 延遲到真正要開啟時才建構 bootstrap.Modal（不是 mounted()
+          // 就建構）：dataIssueModalEl 巢狀在外層 v-if="selected" 底下，
+          // 頁面剛載入、使用者還沒點開任何警報時 selected 是 null，
+          // 該區塊完全沒有渲染進 DOM，這時候 $refs.dataIssueModalEl
+          // 會是 undefined，傳給 new bootstrap.Modal(undefined) 會在
+          // 內部存取 backdrop 設定時直接拋錯。openDataIssueReport() 只
+          // 有在按下「這筆資料不對」時才會呼叫，此時 selected 必然
+          // 有值、外層 DOM 已經渲染，$refs 保證存在，第一次呼叫時才
+          // new 一次、之後重複使用同一個實例。
+          //
+          // 這條路徑不會自動讓對話框可見：.issue-report-modal 本身
+          // 的 display:none/.show 才是可見與否的真正開關（見上方
+          // <style> 註解），show()/hide() 只負責切換那個 class，不是
+          // 「呼叫過 new bootstrap.Modal() 就會顯示」。
+          if (!this.dataIssueModal) {
+            this.dataIssueModal = new bootstrap.Modal(this.$refs.dataIssueModalEl);
+          }
           this.dataIssueModal.show();
         },
         closeDataIssueModal() {
-          this.dataIssueModal.hide();
+          // dataIssueModal 可能還是 null（使用者從沒點過「這筆資料
+          // 不對」按鈕，openDataIssueReport() 從未執行過、Modal 實例
+          // 還沒建構）——2026-09-29 regression 的直接成因：對話框
+          // 因為缺 display:none CSS 而意外可見時，使用者點的「取消」
+          // 按鈕呼叫這個方法，若沒有這層防呆會對 null 呼叫 .hide()
+          // 直接拋錯、Vue 事件處理中斷，畫面卡死關不掉。
+          if (this.dataIssueModal) this.dataIssueModal.hide();
           this.issueError = '';
         },
         async submitDataIssueReport() {
@@ -1612,7 +1642,7 @@
               throw new Error(body.error || '回報儲存失敗，請稍後再試');
             }
             this.issueSent = true;
-            setTimeout(() => { if (this.issueSent) this.dataIssueModal.hide(); }, 1500);
+            setTimeout(() => { if (this.issueSent && this.dataIssueModal) this.dataIssueModal.hide(); }, 1500);
           } catch (e) {
             this.issueError = e.message || '回報儲存失敗，請稍後再試';
           } finally {
