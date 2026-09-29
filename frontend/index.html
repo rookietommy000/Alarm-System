@@ -1461,11 +1461,6 @@
         },
       },
       mounted() {
-        // 只借 Bootstrap Modal 的行為（動畫、backdrop、ESC 關閉），視覺
-        // 樣式不套用 bootstrap.min.css（避免全域 reset 影響本頁其他既有
-        // 元件），改在本檔 <style> 內為 .issue-report-modal 範圍寫 scoped
-        // 樣式，跟 admin-login.html 完整引入 Bootstrap CSS 的作法不同。
-        this.dataIssueModal = new bootstrap.Modal(this.$refs.dataIssueModalEl);
         // whoami() 有內建快取（api.js 的 whoamiCache/whoamiPromise），
         // 這裡再呼叫一次不會重打 API。department namespace 要等這個
         // resolve 後才能正確讀取——this.whoami.department 在此之前
@@ -1586,6 +1581,19 @@
           this.issueContent = '';
           this.issueError = '';
           this.issueSent = false;
+          // 延遲到真正要開啟時才建構 bootstrap.Modal（不是 mounted()
+          // 就建構）：dataIssueModalEl 巢狀在外層 v-if="selected" 底下，
+          // 頁面剛載入、使用者還沒點開任何警報時 selected 是 null，
+          // 該區塊完全沒有渲染進 DOM，這時候 $refs.dataIssueModalEl
+          // 會是 undefined，傳給 new bootstrap.Modal(undefined) 會在
+          // 內部存取 backdrop 設定時直接拋錯（實際案例：使用者一開
+          // 頁面 Console 就報 TypeError，整頁查詢功能連帶壞掉）。
+          // openDataIssueReport() 只有在按下「這筆資料不對」時才會
+          // 呼叫，此時 selected 必然有值、外層 DOM 已經渲染，$refs
+          // 保證存在，第一次呼叫時才 new 一次、之後重複使用同一個實例。
+          if (!this.dataIssueModal) {
+            this.dataIssueModal = new bootstrap.Modal(this.$refs.dataIssueModalEl);
+          }
           this.dataIssueModal.show();
         },
         closeDataIssueModal() {

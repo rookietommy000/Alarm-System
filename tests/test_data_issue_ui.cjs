@@ -92,3 +92,77 @@ test('modal only borrows bootstrap.bundle.min.js behaviour, not the full bootstr
   assert.ok(!/<link[^>]*bootstrap\.min\.css/.test(html),
     'index.html 不應引入 bootstrap.min.css 的 <link>，避免全域樣式污染既有頁面（設計理由可以出現在註解裡，不代表真的引入）');
 });
+// 以下兩個測試不用 page() fixture（它為了其他測試方便直接塞假
+// dataIssueModal，繞過了真正的 new bootstrap.Modal(...) 呼叫路徑）。
+// 這裡改用真的 mounted()，並用一個會在建構時丟例外的假 bootstrap.Modal
+// 模擬「el 是 undefined 時 Bootstrap 內部會炸」的真實情況（實際案例：
+// dataIssueModalEl 巢狀在外層 v-if="selected" 底下，頁面剛載入、使用者
+// 還沒點開任何警報時 selected 是 null，該區塊沒有渲染進 DOM，
+// $refs.dataIssueModalEl 是 undefined，2026-09-29 造成正式環境
+// TypeError: Cannot read properties of undefined (reading 'backdrop')，
+// 整頁查詢功能連帶壞掉，已用headless Chrome實際重現、修復後複測零錯誤，
+// 見對話紀錄）。
+function pageWithRealMount(post, {modalCtor, refsAtMount} = {}) {
+  let component;
+  const app = {directive() {return app;}, mount() {}};
+  // dataIssueModalEl 巢狀在 v-if="selected" 底下，selected 初始值是
+  // null，所以 mounted() 執行的當下這個 ref 本來就該是 undefined
+  // （不是某個現成的 DOM element）——這才是真實情況，不是為了測試
+  // 方便而簡化。呼叫端可透過 refsAtMount 覆寫來測「DOM 已渲染」的情境。
+  const refs = refsAtMount !== undefined ? refsAtMount : {dataIssueModalEl: undefined};
+  const ModalCtor = modalCtor || class {
+    constructor(el) {
+      if (!el) throw new TypeError("Cannot read properties of undefined (reading 'backdrop')");
+      this.el = el; this.shown = false;
+    }
+    show() { this.shown = true; }
+    hide() { this.shown = false; }
+  };
+  const context = {Vue: {createApp(c) {component = c; return app;}}, navigator: {},
+    document: {addEventListener() {}}, window: {}, localStorage: {getItem() {return null;}},
+    AlarmApi: {post, whoami: async () => ({auth:false, department:null}), get: async () => ({ok:true, json: async () => ([])})},
+    bootstrap: {Modal: ModalCtor}, console, setTimeout: () => {}, clearTimeout};
+  for (const m of html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)) {
+    if (m[1].trim()) vm.runInNewContext(m[1], context);
+  }
+  const s = component.data();
+  for (const [k, v] of Object.entries(component.methods)) s[k] = v.bind(s);
+  s.$refs = refs;
+  s.selected = {department:'line 3', device_model:'M', code:'E', variant:'variant A'};
+  s.whoami = {department:null};
+  return {s, mounted: component.mounted ? component.mounted.bind(s) : null, ModalCtor};
+}
+test('mounted() does not construct bootstrap.Modal while el is still undefined (regression repro)', () => {
+  // refs.dataIssueModalEl 是 undefined（模擬 v-if="selected" 為 false
+  // 時該區塊沒有渲染進 DOM），如果 mounted() 呼叫 new bootstrap.Modal
+  // 一定會炸出跟正式環境同樣的 TypeError。
+  const {s, mounted} = pageWithRealMount(async () => ({ok:true}));
+  assert.doesNotThrow(() => mounted && mounted(),
+    'mounted() 不該在 el 還是 undefined 時就建構 bootstrap.Modal');
+  assert.equal(s.dataIssueModal, null);
+});
+test('openDataIssueReport() constructs the modal lazily on first call, using the real ref (now populated), and reuses it on later calls', () => {
+  let constructCount = 0;
+  class CountingModal {
+    constructor(el) {
+      if (!el) throw new TypeError("Cannot read properties of undefined (reading 'backdrop')");
+      constructCount++; this.el = el; this.shown = false;
+    }
+    show() { this.shown = true; }
+    hide() { this.shown = false; }
+  }
+  // openDataIssueReport() 只會在使用者已經選取一筆警報（v-if="selected"
+  // 為 true）之後才可能被呼叫，這時候 dataIssueModalEl 已經渲染進 DOM，
+  // 所以這裡的 fixture 給一個真實存在的 ref，跟上一個測試的「mounted
+  // 時還沒渲染」情境刻意不同。
+  const {s} = pageWithRealMount(async () => ({ok:true}),
+    {modalCtor: CountingModal, refsAtMount: {dataIssueModalEl: {tagName: 'DIV'}}});
+  s.dataIssueModal = null;
+  s.openDataIssueReport();
+  assert.equal(constructCount, 1);
+  assert.equal(s.dataIssueModal.shown, true);
+  s.closeDataIssueModal();
+  s.openDataIssueReport();
+  assert.equal(constructCount, 1, '第二次開啟不該重新 new，應該重用同一個實例');
+  assert.equal(s.dataIssueModal.shown, true);
+});
