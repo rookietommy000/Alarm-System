@@ -63,3 +63,14 @@ test('missing department, empty content, duplicate submit do not send', async ()
   await s.submitDataIssueReport();
   assert.equal(count, 0);
 });
+test('report button requires login, matching other gated actions', () => {
+  const fragment = html.match(/<button[^>]*@click="openDataIssueReport"[^>]*>/)[0];
+  assert.match(fragment, /v-if="whoami\.auth && whoami\.department"/);
+});
+test('expired session on submit surfaces a login-specific message, not a generic failure', async () => {
+  const s = page(async () => ({ok:false, status:401, json:async () => ({error:'未授權'})}));
+  s.openDataIssueReport(); s.issueContent = 'wrong cause';
+  await s.submitDataIssueReport();
+  assert.equal(s.issueSent, false);
+  assert.match(s.issueError, /登入/);
+});

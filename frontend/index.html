@@ -1227,7 +1227,7 @@
           </template>
           <dt>關鍵字</dt><dd>{{ (selected.keywords || []).join('、') || '—' }}</dd>
         </dl>
-        <button class="feedback-btn" @click="openDataIssueReport">這筆資料不對</button>
+        <button v-if="whoami.auth && whoami.department" class="feedback-btn" @click="openDataIssueReport">這筆資料不對</button>
         <dialog ref="dataIssueDialog" @cancel="issueError = ''">
           <form @submit.prevent="submitDataIssueReport">
             <h3>回報資料異常</h3>
@@ -1504,6 +1504,9 @@
             const r = await AlarmApi.post(`/api/data-issue-reports/${encodeURIComponent(dept)}`, {
               device_model: a.device_model, code: a.code, variant: a.variant || '', content: this.issueContent.trim()
             });
+            if (r.status === 401) {
+              throw new Error('登入狀態已失效，請重新整理頁面並登入後再回報');
+            }
             if (!r.ok) {
               const body = await r.json();
               throw new Error(body.error || '回報儲存失敗，請稍後再試');
