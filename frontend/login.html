@@ -135,6 +135,7 @@
       margin-bottom: 12px;
     }
 
+    #deptField,
     input[type=password] {
       width: 100%;
       padding: 14px 16px;
@@ -147,6 +148,8 @@
       outline: none;
       transition: border-color 0.15s;
     }
+    #deptField { margin-bottom: 12px; }
+    #deptField:focus,
     input[type=password]:focus { border-color: #4ddbc4; }
     input[type=password]::placeholder { color: #64748b; }
     input[type=password]:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -245,9 +248,9 @@
 
     <form method="post" action="/login" id="loginForm">
       <input type="hidden" name="next" id="nextField" value="" />
-      <input type="hidden" name="department" id="deptField" value="" />
 
-      <span class="field-label">部門</span>
+      <label class="field-label" for="deptField">部門</label>
+      <input type="text" name="department" id="deptField" value="" readonly autocomplete="username" />
       <div class="dept-list" id="deptList">
         <div class="dept-empty" id="deptLoading">載入部門清單中…</div>
       </div>
