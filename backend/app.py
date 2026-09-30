@@ -201,6 +201,7 @@ def create_app() -> Flask:
     app.config["SESSION_COOKIE_SECURE"] = bool(os.environ.get("RENDER_EXTERNAL_URL"))
     app.config["SESSION_COOKIE_HTTPONLY"] = True
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+    app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=30)
     CORS(app)
 
     # ── 靜態路徑保護 ────────────────────────────────────────────────
@@ -590,6 +591,8 @@ def create_app() -> Flask:
             department=dept["id"],
             dept_session_version=dept["session_version"],
         )
+        if not admin:
+            session.permanent = True
         return "admin" if admin else "user"
 
     @app.get("/admin/login")
