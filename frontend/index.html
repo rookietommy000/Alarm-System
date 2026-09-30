@@ -1861,17 +1861,39 @@
         },
         confClass(v) { return v >= 90 ? 'conf-high' : v >= 70 ? 'conf-mid' : 'conf-low'; },
 
+        // 相機原始解析度縮放到長邊 MAX_EDGE 以內用的尺寸計算，純數學、
+        // 不碰 DOM，拆出來讓 takePhoto() 之外也能單獨測試這段邏輯本身
+        // 對不對（node --test 的沙箱沒有真實 canvas，縮放算式錯了的話
+        // 光看 takePhoto() 整體測不出來）。srcW/srcH 已經小於等於
+        // MAX_EDGE 時 scale 是 1，不會被放大（Math.min(1, ...) 這個
+        // 上限），避免桌面測試用的假解析度或本來就小的影像被意外放大。
+        scaledPhotoSize(srcW, srcH, maxEdge = 1280) {
+          const scale = Math.min(1, maxEdge / Math.max(srcW, srcH));
+          return { width: Math.round(srcW * scale), height: Math.round(srcH * scale) };
+        },
+
         async takePhoto() {
-          // 擷取影像，進機種選擇
+          // 擷取影像，進機種選擇。canvas 尺寸原本直接等於相機原始解析度
+          // （現代手機常見 4000px 以上長邊、3-5MB），完全沒有縮放，只靠
+          // JPEG 品質壓縮（0.85）省下的傳輸量有限——長邊限制在 1280px
+          // 後，3-5MB 通常降到 150-300KB，同時解掉 /api/analyze 已知的
+          // OOM 風險（見 CLAUDE.md，大圖片 base64 全部塞進記憶體再送
+          // Gemini），不是單純的效能優化，也是穩定性修復。裁切辨識用途
+          // 不需要保留原始解析度——現場人員拍的是警報面板的文字/代碼，
+          // 縮到 1280px 長邊仍然清楚可辨識，跟需要保留照片細節的攝影
+          // 用途不同。
           let imageB64 = null;
           try {
             const video = this.$refs.videoEl;
             if (video && video.readyState >= 2) {
+              const srcW = video.videoWidth || 640;
+              const srcH = video.videoHeight || 480;
+              const { width, height } = this.scaledPhotoSize(srcW, srcH);
               const canvas = document.createElement('canvas');
-              canvas.width = video.videoWidth || 640;
-              canvas.height = video.videoHeight || 480;
-              canvas.getContext('2d').drawImage(video, 0, 0);
-              const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+              canvas.width = width;
+              canvas.height = height;
+              canvas.getContext('2d').drawImage(video, 0, 0, width, height);
+              const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
               imageB64 = dataUrl.split(',')[1];
             }
           } catch {}
