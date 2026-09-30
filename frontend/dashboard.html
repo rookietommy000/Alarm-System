@@ -14,6 +14,7 @@
 <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
 <script src="/js/api.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
@@ -22,27 +23,27 @@
   --color-bg: #f2f2f3;
   --color-surface: #e9e9ea;
   --color-text: #1d1f20;
-  --color-accent: #5980a6;
+  --color-accent: #04805a;
   --color-divider: color-mix(in srgb, #1d1f20 16%, transparent);
 
   --color-neutral-100: #f5f5f8;
   --color-neutral-200: #e7e7ea;
   --color-neutral-800: #424244;
 
-  --color-accent-100: #eef6ff;
-  --color-accent-400: #94bce3;
-  --color-accent-600: #597ea3;
-  --color-accent-700: #416180;
-  --color-accent-800: #2c455d;
-  --color-accent-900: #1d2d3d;
+  --color-accent-100: #e7f8f3;
+  --color-accent-400: #30e8af;
+  --color-accent-600: #04805a;
+  --color-accent-700: #046c4c;
+  --color-accent-800: #044531;
+  --color-accent-900: #042118;
 
   --font-heading: "Barlow Condensed", system-ui, sans-serif;
   --font-body: "Barlow", system-ui, sans-serif;
 
   --space-1: 3.4px; --space-2: 6.8px; --space-3: 10.2px; --space-4: 13.6px;
-  --radius-md: 4px; --radius-lg: 7px;
-  --shadow-md: 0 3px 10px color-mix(in srgb, #2b2b2d 16%, transparent);
-  --shadow-lg: 0 12px 32px color-mix(in srgb, #2b2b2d 22%, transparent);
+  --radius-md: 14px; --radius-lg: 22px;
+  --shadow-md: 0 6px 20px color-mix(in srgb, #2b2b2d 32%, transparent);
+  --shadow-lg: 0 20px 48px color-mix(in srgb, #2b2b2d 36%, transparent);
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--color-bg); color: var(--color-text); font-family: var(--font-body); font-size: 15px; line-height: 1.55; }
@@ -50,7 +51,7 @@ h1, h2, h3 { font-family: var(--font-heading); font-weight: 600; line-height: 1.
 a { color: var(--color-accent); text-underline-offset: 3px; }
 .hr { height: 1px; border: 0; margin: var(--space-4) 0; background: var(--color-divider); }
 
-.blueprint { position: relative; border: 1px solid var(--color-divider); border-radius: 0; }
+.blueprint { position: relative; border: 1px solid var(--color-divider); border-radius: var(--radius-md); }
 .blueprint > .corner { position: absolute; width: 11px; height: 11px; color: color-mix(in srgb, var(--color-text) 55%, transparent); }
 .blueprint > .corner::before, .blueprint > .corner::after { content: ""; position: absolute; background: currentColor; }
 .blueprint > .corner::before { left: 5px; top: 0; width: 1px; height: 100%; }
@@ -66,7 +67,7 @@ a { color: var(--color-accent); text-underline-offset: 3px; }
   font-family: var(--font-heading); font-weight: 600; font-size: 14px; line-height: 1.2; color: var(--color-text);
   background: transparent; border: 1px solid var(--color-divider);
   padding: var(--space-2) calc(var(--space-3) * 1.2);
-  border-radius: 0;
+  border-radius: var(--radius-md);
 }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .btn-primary { background: var(--color-accent); color: var(--color-bg); border-color: var(--color-accent); }
@@ -90,8 +91,11 @@ a { color: var(--color-accent); text-underline-offset: 3px; }
 .input:focus-visible { border-color: var(--color-accent); outline: none; }
 textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
 
-.card { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3); border-radius: 0; background: transparent; border: 1px solid var(--color-divider); }
+.card { box-shadow: var(--shadow-md); display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3); border-radius: var(--radius-md); background: var(--color-surface); border: 1px solid var(--color-divider); }
 .card-kicker { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-accent); }
+.kpi-card { position: relative; overflow: hidden; }
+.kpi-card::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 5px; background: linear-gradient(90deg, var(--color-accent-400), var(--color-accent)); }
+.kpi-number { font-family: var(--font-heading); font-weight: 700; font-size: clamp(28px, 6vw, 40px); line-height: 1; color: var(--color-accent-700); }
 
 .tag { display: inline-flex; align-items: center; font-size: 11px; letter-spacing: 0.02em; padding: 3px 10px; border-radius: 3px; white-space: nowrap; }
 .tag-accent { background: var(--color-accent-100); color: var(--color-accent-800); }
@@ -115,6 +119,18 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
 .gfilters { display: grid; grid-template-columns: repeat(5, 1fr) auto; gap: 12px; align-items: end; }
 .fgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 
+.dashboard-trend { position: relative; height: 220px; min-width: 0; }
+.dashboard-gauge { position: relative; height: 100px; width: 180px; max-width: 100%; margin-inline: auto; }
+.dashboard-gauge-value { position: absolute; inset: auto 0 0; text-align: center; font: 600 30px/1 var(--font-heading); pointer-events: none; }
+.chart-status { font-size: 12px; color: var(--color-neutral-800); margin: 0; }
+.admin-bottom-nav { display: none; position: fixed; inset: auto 0 0; z-index: 800; background: var(--color-bg); border-top: 1px solid var(--color-divider); box-shadow: var(--shadow-lg); padding: 6px 8px calc(6px + env(safe-area-inset-bottom)); gap: 4px; }
+.admin-bottom-nav button { flex: 1; min-width: 0; min-height: 58px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 4px; border: 0; border-radius: var(--radius-md); background: transparent; color: var(--color-text); font: 12px/1.3 var(--font-body); cursor: pointer; }
+.admin-bottom-nav button.active { background: var(--color-accent-100); color: var(--color-accent-800); }
+.admin-tab-code { font: 600 18px/1 var(--font-heading); color: var(--color-accent); }
+.admin-more-backdrop { display: none; position: fixed; inset: 0; z-index: 900; background: color-mix(in srgb, var(--color-text) 45%, transparent); align-items: flex-end; }
+.admin-more-sheet { width: 100%; max-height: 80dvh; overflow-y: auto; padding: 20px 18px calc(18px + env(safe-area-inset-bottom)); background: var(--color-bg); border-radius: var(--radius-lg) var(--radius-lg) 0 0; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; gap: 10px; }
+.admin-more-sheet .btn { min-height: 44px; }
+
 @media (max-width: 1100px) {
   .g2 { grid-template-columns: 1fr !important; }
   .g4 { grid-template-columns: repeat(2, 1fr) !important; }
@@ -127,8 +143,10 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
   .side > div:first-child { padding: 0 0 0 18px !important; flex: none; white-space: nowrap; }
   .side > div:first-child > div:last-child { display: none; }
   .sidenav { display: none !important; }
-  .navselect-wrap { display: block !important; flex: 1; max-width: 220px; padding: 0 18px 0 0 !important; }
-  .navselect { font-family: var(--font-heading); font-weight: 600; }
+  .admin-bottom-nav { display: flex !important; }
+  .admin-more-backdrop { display: flex !important; }
+  .app { padding-bottom: calc(76px + env(safe-area-inset-bottom)); }
+  .toast { bottom: calc(88px + env(safe-area-inset-bottom)); }
   .side .user { display: flex !important; flex-direction: row !important; margin: 0 18px 0 0 !important; padding: 0 !important; border: none !important; gap: 12px !important; }
   .topbar { flex-direction: column !important; align-items: flex-start !important; gap: 12px; padding: 18px 18px 14px !important; }
   .topbar h1 { font-size: 24px !important; }
@@ -225,11 +243,6 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
           <span style="font-size:10px; letter-spacing:0.08em; opacity:0.6">{{ n.code }}</span>
         </button>
       </nav>
-      <div class="navselect-wrap" style="display:none; padding:0 18px">
-        <select class="input navselect" v-model="page">
-          <option v-for="n in visibleNavItems" :key="n.key" :value="n.key">{{ n.label }}（{{ n.code }}）</option>
-        </select>
-      </div>
       <div class="user" style="margin-top:auto; padding:14px 18px 0; border-top:1px solid var(--color-divider); display:flex; flex-direction:column; gap:4px">
         <a :href="'/admin/pending-review' + deptQuery()" style="font-size:13px">待審核總覽 →</a>
         <a href="/app" style="font-size:13px">← 回到前台查詢</a>
@@ -295,36 +308,31 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
         <!-- ══ Dashboard ══ -->
         <div v-if="page === 'dashboard'" style="display:flex; flex-direction:column; gap:26px">
           <div class="g4">
-            <div class="card blueprint" style="gap:6px; padding:16px">
-              <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+            <div class="card kpi-card" style="gap:6px; padding:16px">
               <div class="card-kicker">D-01</div>
-              <div style="font-family:var(--font-heading); font-weight:600; font-size:clamp(26px,6vw,38px); line-height:1">{{ scanStats.today_count }}</div>
+              <div class="kpi-number">{{ scanStats.today_count }}</div>
               <div style="font-size:13px">今日掃描次數</div>
             </div>
-            <div class="card blueprint" style="gap:6px; padding:16px">
-              <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+            <div class="card kpi-card" style="gap:6px; padding:16px">
               <div class="card-kicker">D-01</div>
-              <div style="font-family:var(--font-heading); font-weight:600; font-size:clamp(26px,6vw,38px); line-height:1">{{ scanStats.week_count }}</div>
+              <div class="kpi-number">{{ scanStats.week_count }}</div>
               <div style="font-size:13px">本週掃描次數</div>
             </div>
-            <div class="card blueprint" style="gap:6px; padding:16px">
-              <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+            <div class="card kpi-card" style="gap:6px; padding:16px">
               <div class="card-kicker">D-02</div>
-              <div style="font-family:var(--font-heading); font-weight:600; font-size:clamp(26px,6vw,38px); line-height:1">{{ scanStats.fail_rate }}%</div>
+              <dashboard-chart kind="gauge" :source="scanStats" :ready="scanStatsReady"></dashboard-chart>
               <div style="font-size:13px">AI 辨識失敗率</div>
               <div style="font-size:11px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">{{ scanStats.fail_count }} / {{ scanStats.total_count }} 筆</div>
             </div>
-            <div class="card blueprint" style="gap:6px; padding:16px">
-              <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+            <div class="card kpi-card" style="gap:6px; padding:16px">
               <div class="card-kicker">M-04</div>
-              <div style="font-family:var(--font-heading); font-weight:600; font-size:clamp(26px,6vw,38px); line-height:1">{{ devices.length }}</div>
+              <div class="kpi-number">{{ devices.length }}</div>
               <div style="font-size:13px">機種總數</div>
             </div>
           </div>
 
           <div class="g2">
-            <section class="card blueprint" style="padding:18px; gap:12px">
-              <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+            <section class="card" style="padding:18px; gap:12px">
               <div style="display:flex; align-items:baseline; justify-content:space-between">
                 <h2 style="font-size:19px">回饋統計</h2>
                 <span style="font-size:11px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">D-06</span>
@@ -352,12 +360,14 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
               </div>
             </section>
 
-            <section class="card blueprint" style="padding:18px; gap:12px">
-              <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+            <section class="card" style="padding:18px; gap:12px">
               <div style="display:flex; align-items:baseline; justify-content:space-between">
                 <h2 style="font-size:19px">最近掃描記錄</h2>
                 <span style="font-size:11px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">D-03</span>
               </div>
+              <h3 style="font-size:16px">近 7 天每日掃描次數</h3>
+              <p class="chart-status">依最新 100 筆記錄、瀏覽器本地日期彙整，可能不含完整每日掃描量。</p>
+              <dashboard-chart kind="trend" :source="scanRecent" :ready="scanRecentReady"></dashboard-chart>
               <div class="table-wrap">
               <table class="table" style="min-width:420px">
                 <thead><tr><th>時間</th><th>機種</th><th>代碼</th><th>是否修正</th></tr></thead>
@@ -376,8 +386,7 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
           </div>
 
           <div class="g2">
-            <section class="card blueprint" style="padding:18px; gap:12px">
-              <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+            <section class="card" style="padding:18px; gap:12px">
               <div style="display:flex; align-items:baseline; justify-content:space-between">
                 <h2 style="font-size:19px">AI 掃描計數排行</h2>
                 <span style="font-size:11px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">D-04</span>
@@ -397,8 +406,7 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
               <p v-if="!scanRanking.length" style="font-size:13px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">尚無掃描資料</p>
             </section>
 
-            <section class="card blueprint" style="padding:18px; gap:12px">
-              <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+            <section class="card" style="padding:18px; gap:12px">
               <div style="display:flex; align-items:baseline; justify-content:space-between">
                 <h2 style="font-size:19px">各警報方案有效率</h2>
                 <span style="font-size:11px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">D-07</span>
@@ -426,8 +434,7 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
               <p v-if="!planRates.length" style="font-size:13px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">尚無回饋資料</p>
             </section>
 
-            <section class="card blueprint" style="padding:18px; gap:12px">
-              <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+            <section class="card" style="padding:18px; gap:12px">
               <div style="display:flex; align-items:baseline; justify-content:space-between">
                 <h2 style="font-size:19px">AI 用量（本月）</h2>
                 <span style="font-size:11px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">D-08</span>
@@ -1310,16 +1317,121 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
     </div>
   </div>
 
+  <nav class="admin-bottom-nav" aria-label="手機後台導覽">
+    <button v-for="n in visibleNavItems.slice(0,4)" :key="n.key" :class="{active: page === n.key}" :aria-current="page === n.key ? 'page' : null" @click="page = n.key; moreMenuOpen = false">
+      <span class="admin-tab-code" aria-hidden="true">{{ n.code }}</span><span>{{ n.label }}</span>
+    </button>
+    <button v-if="visibleNavItems.length > 4" :class="{active: visibleNavItems.slice(4).some(n => n.key === page)}" :aria-expanded="moreMenuOpen" aria-controls="admin-more-menu" @click="moreMenuOpen = !moreMenuOpen">
+      <span class="admin-tab-code" aria-hidden="true">•••</span><span>更多</span>
+    </button>
+  </nav>
+  <div v-if="moreMenuOpen" class="admin-more-backdrop" @click.self="moreMenuOpen = false" @keydown.esc="moreMenuOpen = false">
+    <nav id="admin-more-menu" class="admin-more-sheet" aria-label="更多後台頁面">
+      <h2 style="font-size:20px">更多</h2>
+      <button v-for="n in visibleNavItems.slice(4)" :key="n.key" class="btn btn-secondary" :class="{active: page === n.key}" :aria-current="page === n.key ? 'page' : null" @click="page = n.key; moreMenuOpen = false">{{ n.label }}</button>
+      <button class="btn btn-secondary" @click="moreMenuOpen = false">取消</button>
+    </nav>
+  </div>
   <div class="toast" v-if="toast">{{ toast }}</div>
 </div>
 
 <script>
-const { createApp } = Vue;
+const { createApp, ref, watch, onMounted, onBeforeUnmount } = Vue;
+// Each component owns a non-reactive Chart instance; dashboard v-if unmounts it.
+const DashboardChart = {
+  props: ['kind', 'source', 'ready'],
+  template: `<div>
+    <div :class="kind === 'gauge' ? 'dashboard-gauge' : 'dashboard-trend'">
+      <canvas ref="canvas" role="img" :aria-label="kind === 'gauge' ? 'AI 辨識失敗率 ' + (ready ? source.fail_rate + '%' : '尚未就緒') : summary"></canvas>
+      <div v-if="kind === 'gauge'" class="dashboard-gauge-value">{{ ready ? source.fail_rate + '%' : '—' }}</div>
+    </div>
+    <p v-if="!ready || unavailable" class="chart-status">{{ unavailable ? '圖表元件未載入，請重新整理；原始記錄仍可查閱。' : '圖表資料尚未就緒' }}</p>
+  </div>`,
+  setup(props) {
+    const canvas = ref(null);
+    const unavailable = ref(false);
+    const summary = ref('近 7 天掃描趨勢，資料尚未就緒');
+    let chart = null;
+    function renderChart() {
+      if (!canvas.value) return;
+      if (!props.ready) {
+        // Hide stale plots while changing department or refreshing.
+        canvas.value.style.visibility = 'hidden';
+        return;
+      }
+      unavailable.value = !window.Chart;
+      if (unavailable.value) return;
+      canvas.value.style.visibility = 'visible';
+      const css = getComputedStyle(document.documentElement);
+      const accent = css.getPropertyValue('--color-accent').trim();
+      const neutral = css.getPropertyValue('--color-neutral-200').trim();
+      let labels, values;
+      if (props.kind === 'gauge') {
+        const rate = Math.max(0, Math.min(100, props.source.fail_rate));
+        labels = ['辨識失敗', '其他'];
+        values = [rate, 100 - rate];
+      } else {
+        const key = d => `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+        const days = Array.from({length: 7}, (_, i) => {
+          const d = new Date();
+          d.setHours(0, 0, 0, 0);
+          d.setDate(d.getDate() - 6 + i);
+          return d;
+        });
+        const counts = new Map(days.map(d => [key(d), 0]));
+        props.source.forEach(row => {
+          const d = new Date(row.scanned_at);
+          if (!Number.isNaN(d.getTime()) && counts.has(key(d))) counts.set(key(d), counts.get(key(d)) + 1);
+        });
+        labels = days.map(d => `${d.getMonth() + 1}/${d.getDate()}`);
+        values = [...counts.values()];
+        summary.value = '最新 100 筆中的近 7 天掃描次數：' + labels.map((label, i) => `${label}：${values[i]} 筆`).join('，');
+      }
+      if (chart) {
+        chart.data.labels = labels;
+        chart.data.datasets[0].data = values;
+        chart.update();
+        return;
+      }
+      const gauge = props.kind === 'gauge';
+      chart = new window.Chart(canvas.value, {
+        type: gauge ? 'doughnut' : 'line',
+        data: {labels, datasets: [{
+          label: gauge ? '百分比' : '掃描次數', data: values,
+          borderWidth: gauge ? 0 : 2, borderColor: accent,
+          backgroundColor: gauge ? [accent, neutral] : context => {
+            const {ctx, chartArea} = context.chart;
+            if (!chartArea) return 'transparent';
+            const gradient = ctx.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
+            gradient.addColorStop(0, accent + '66');
+            gradient.addColorStop(1, accent + '00');
+            return gradient;
+          },
+          fill: !gauge, tension: 0.25, pointRadius: 3,
+        }]},
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: false,
+          plugins: {legend: {display: false}, tooltip: {enabled: !gauge}},
+          ...(gauge ? {rotation: -90, circumference: 180, cutout: '78%'} : {
+            scales: {y: {beginAtZero: true, ticks: {precision: 0}}, x: {grid: {display: false}}},
+          }),
+        },
+      });
+    }
+    onMounted(renderChart);
+    watch(() => [props.ready, props.source], renderChart, {deep: true, flush: 'post'});
+    onBeforeUnmount(() => { if (chart) chart.destroy(); });
+    return {canvas, unavailable, summary};
+  },
+};
 createApp({
+  components: {DashboardChart},
   data() {
     return {
       loading: true,
       page: 'dashboard',
+      moreMenuOpen: false,
+      scanStatsReady: false, scanRecentReady: false,
       navItems: [
         { key: 'dashboard', label: 'Dashboard 統計', code: 'D' },
         { key: 'scans', label: '掃描紀錄管理', code: 'S' },
@@ -1668,6 +1780,8 @@ createApp({
     async load() {
       if (this.page === 'data-issue-reports') this.loadDataIssueReports();
       this.loading = true;
+      this.scanStatsReady = false;
+      this.scanRecentReady = false;
       try {
         const primaryOk = await this.loadPrimary();
         if (!primaryOk) return;
@@ -1730,6 +1844,8 @@ createApp({
       this.viewStatsList = viewStats;
       this.scanStats = scanStats;
       this.scanRecent = scanRecent;
+      this.scanStatsReady = results[2].ok && Number.isFinite(scanStats.fail_rate);
+      this.scanRecentReady = results[3].ok && Array.isArray(scanRecent);
       this.allScans = scanRecent;
       this.scanRanking = scanRanking;
       this.usageStats = usageStats;
