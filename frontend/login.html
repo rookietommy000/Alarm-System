@@ -25,17 +25,34 @@
       padding: 24px;
     }
 
-    .card {
+    /* 可獨立移植的登入彈窗樣式；不依賴 Vue 或 Bootstrap。 */
+    #loginModal {
+      position: fixed;
+      inset: 0;
+      z-index: 2000;
+      display: flex;
+      overflow-y: auto;
+      padding: 24px;
+      background: rgba(0, 0, 0, 0.65);
+      font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+      color: #e2e8f0;
+    }
+    #loginModal[hidden] { display: none; }
+    #loginModal, #loginModal * { box-sizing: border-box; }
+    #loginModal p { margin-top: 0; }
+    #loginModal .card {
       background: #192330;
       border: 1px solid rgba(255,255,255,0.07);
       border-radius: 16px;
-      padding: 48px 40px 40px;
+      padding: 36px clamp(20px, 5vw, 40px);
+      margin: auto;
+      flex-shrink: 0;
       width: 100%;
       max-width: 420px;
-      box-shadow: 0 4px 32px rgba(0,0,0,0.5);
+      box-shadow: 0 24px 80px rgba(0,0,0,0.65);
     }
 
-    .title {
+    #loginModal .title {
       font-size: 22px;
       font-weight: 600;
       color: #e2e8f0;
@@ -43,14 +60,14 @@
       margin-bottom: 6px;
       text-align: center;
     }
-    .subtitle {
+    #loginModal .subtitle {
       font-size: 13px;
       color: #64748b;
       text-align: center;
       margin-bottom: 28px;
     }
 
-    .error-msg {
+    #loginModal .error-msg {
       background: rgba(248,113,113,0.12);
       color: #f87171;
       font-size: 13px;
@@ -60,7 +77,7 @@
       text-align: center;
       border: 1px solid rgba(248,113,113,0.25);
     }
-    .notice-msg {
+    #loginModal .notice-msg {
       background: rgba(251,191,36,0.1);
       color: #fbbf24;
       font-size: 13px;
@@ -71,13 +88,13 @@
       border: 1px solid rgba(251,191,36,0.25);
       line-height: 1.6;
     }
-    .notice-msg .count {
+    #loginModal .notice-msg .count {
       font-variant-numeric: tabular-nums;
       font-weight: 700;
       font-size: 15px;
     }
 
-    .field-label {
+    #loginModal .field-label {
       font-size: 12px;
       letter-spacing: 0.08em;
       text-transform: uppercase;
@@ -86,7 +103,7 @@
       display: block;
     }
 
-    .dept-list {
+    #loginModal .dept-list {
       display: flex;
       flex-direction: column;
       gap: 6px;
@@ -94,7 +111,7 @@
       max-height: 244px; /* 約 4 張卡片高度，超過才出現捲軸，不牽動整頁高度 */
       overflow-y: auto;
     }
-    .dept-option {
+    #loginModal .dept-option {
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -111,32 +128,32 @@
       font-family: inherit;
       transition: border-color 0.15s, background 0.15s;
     }
-    .dept-option:hover { border-color: rgba(77,219,196,0.4); }
-    .dept-option.selected {
+    #loginModal .dept-option:hover { border-color: rgba(77,219,196,0.4); }
+    #loginModal .dept-option.selected {
       border-color: #4ddbc4;
       background: rgba(77,219,196,0.08);
     }
-    .dept-option .name { font-size: 16px; font-weight: 600; }
-    .dept-option .code {
+    #loginModal .dept-option .name { font-size: 16px; font-weight: 600; }
+    #loginModal .dept-option .code {
       font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
       font-size: 11px;
       letter-spacing: 0.06em;
       color: #64748b;
     }
-    .dept-empty {
+    #loginModal .dept-empty {
       font-size: 13px;
       color: #64748b;
       padding: 12px 0;
       text-align: center;
     }
 
-    .input-wrap {
+    #loginModal .input-wrap {
       position: relative;
       margin-bottom: 12px;
     }
 
-    #deptField,
-    input[type=password] {
+    #loginModal #deptField,
+    #loginModal input[type=password] {
       width: 100%;
       padding: 14px 16px;
       font-size: 15px;
@@ -148,13 +165,13 @@
       outline: none;
       transition: border-color 0.15s;
     }
-    #deptField { margin-bottom: 12px; }
-    #deptField:focus,
-    input[type=password]:focus { border-color: #4ddbc4; }
-    input[type=password]::placeholder { color: #64748b; }
-    input[type=password]:disabled { opacity: 0.5; cursor: not-allowed; }
+    #loginModal #deptField { margin-bottom: 12px; }
+    #loginModal #deptField:focus,
+    #loginModal input[type=password]:focus { border-color: #4ddbc4; }
+    #loginModal input[type=password]::placeholder { color: #64748b; }
+    #loginModal input[type=password]:disabled { opacity: 0.5; cursor: not-allowed; }
 
-    button[type=submit] {
+    #loginModal button[type=submit] {
       width: 100%;
       padding: 14px;
       background: #4ddbc4;
@@ -168,15 +185,15 @@
       transition: background 0.15s;
       margin-top: 4px;
     }
-    button[type=submit]:hover { background: #3cc9b0; }
-    button[type=submit]:active { background: #2bb8a0; }
-    button[type=submit]:disabled {
+    #loginModal button[type=submit]:hover { background: #3cc9b0; }
+    #loginModal button[type=submit]:active { background: #2bb8a0; }
+    #loginModal button[type=submit]:disabled {
       background: rgba(255,255,255,0.1);
       color: #64748b;
       cursor: not-allowed;
     }
 
-    .back-btn {
+    #loginModal .back-btn {
       font-family: inherit;
       font-size: 13px;
       color: #64748b;
@@ -189,60 +206,57 @@
       cursor: pointer;
       transition: background 0.15s, color 0.15s;
     }
-    .back-btn:hover { background: rgba(255,255,255,0.05); color: #e2e8f0; }
+    #loginModal .back-btn:hover { background: rgba(255,255,255,0.05); color: #e2e8f0; }
 
-    .divider {
+    #loginModal .divider {
       display: flex;
       align-items: center;
       gap: 12px;
       margin: 28px 0;
     }
-    .divider::before, .divider::after {
+    #loginModal .divider::before, #loginModal .divider::after {
       content: '';
       flex: 1;
       height: 1px;
       background: rgba(255,255,255,0.08);
     }
-    .divider span {
+    #loginModal .divider span {
       font-size: 12px;
       color: #64748b;
       white-space: nowrap;
     }
 
-    .qr-wrap {
+    #loginModal .qr-wrap {
       display: flex;
       flex-direction: column;
       align-items: center;
       gap: 10px;
     }
-    .qr-wrap canvas {
+    #loginModal .qr-wrap canvas {
       border-radius: 10px;
       display: block;
       background: #fff;
       padding: 8px;
     }
-    .qr-hint {
+    #loginModal .qr-hint {
       font-size: 12px;
       color: #64748b;
     }
   </style>
 </head>
 <body>
+  <!-- 登入彈窗獨立區塊：連同 #loginModal 樣式可移植至查詢頁。 -->
+  <div id="loginModal" role="dialog" aria-modal="true" aria-labelledby="loginTitle">
   <div class="card">
-    <p class="title">設備警報查詢系統</p>
+    <p class="title" id="loginTitle">設備警報查詢系統</p>
     <p class="subtitle">共用平板 · 請確認選擇的是你所在的部門</p>
 
-    <div class="error-msg" id="errMsg" style="display:none">
+    <div class="error-msg" id="errMsg" role="alert" style="display:none">
       密碼錯誤，請確認選擇的部門與密碼是否正確
     </div>
 
-    <!--
-      節流提示：預設可見的靜態說明，JS 掛掉時留在原地不會消失。
-      JS 正常時會被 startThrottleCountdown() 換成即時倒數文字。
-      伺服器每次表單提交都會重新驗證節流狀態，這段文字只是說明，
-      不是攔截本身——沒有它，節流一樣生效，只是使用者看不懂發生了什麼事。
-    -->
-    <div class="notice-msg" id="throttleHint" style="display:none">
+    <!-- 節流由伺服器驗證；JS 將提示換成倒數，無 JS 時由下方 noscript 說明。 -->
+    <div class="notice-msg" id="throttleHint" role="status" style="display:none">
       若剛才輸入太多次密碼，系統會暫時暫停登入約 1 分鐘，請稍候再送出一次。
     </div>
 
@@ -255,7 +269,9 @@
         <div class="dept-empty" id="deptLoading">載入部門清單中…</div>
       </div>
 
-      <span class="field-label">密碼</span>
+      <noscript><p class="notice-msg">請啟用 JavaScript 以選擇部門。連續登入失敗後，請稍候約 1 分鐘再試。</p></noscript>
+
+      <label class="field-label" for="pw">密碼</label>
       <div class="input-wrap">
         <input
           type="password"
@@ -283,12 +299,15 @@
     </div>
   </div>
 
+  </div>
+
   <script>
+    (() => {
     const p = new URLSearchParams(window.location.search);
     if (p.get('next')) document.getElementById('nextField').value = p.get('next');
     if (p.get('error')) document.getElementById('errMsg').style.display = 'block';
 
-    window.QRCode.toCanvas(document.getElementById('qrCanvas'), window.location.origin + '/', {
+    if (window.QRCode) window.QRCode.toCanvas(document.getElementById('qrCanvas'), window.location.origin + '/', {
       width: 148, margin: 1,
       color: { dark: '#111111', light: '#ffffff' }
     }, () => {});
@@ -349,21 +368,37 @@
       deptList.innerHTML = '<div class="dept-empty">部門清單載入失敗，請重新整理頁面</div>';
     });
 
-    // 送出前記住這次選的部門——原生表單送出會整頁跳轉，必須在跳轉前寫入。
-    // 登入密碼是否正確跟這個記錄無關：就算密碼錯誤重新導回登入頁，記住的
-    // 仍是使用者「想登入」的部門，下次還是幫他置頂，這是預期行為。
-    //
-    // 送出中的按鈕狀態（UI/UX 檢查發現：正常送出路徑完全沒有 loading
-    // 回饋，只有 429 節流分支才有 UI 狀態，使用者反映過乾等、感覺卡卡
-    // 的）。不 preventDefault()——原生表單照常送出整頁導航，這裡只是
-    // 在導航發生前的短暫時間窗把按鈕 disable+換文字，讓使用者不會誤以
-    // 為沒反應而重複點擊；頁面卸載後這個狀態自然隨舊頁面一起消失，不
-    // 需要額外收尾。
-    document.getElementById('loginForm').addEventListener('submit', () => {
-      if (selectedDept) localStorage.setItem(LAST_DEPT_KEY, selectedDept);
+    // fetch 漸進增強；網路或回應解析失敗時仍走原生 POST。
+    document.getElementById('loginForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const form = e.target;
       const btn = document.getElementById('submitBtn');
+      if (btn.disabled) return;
       btn.disabled = true;
       btn.textContent = '登入中…';
+      document.getElementById('errMsg').style.display = 'none';
+      try {
+        if (selectedDept) localStorage.setItem(LAST_DEPT_KEY, selectedDept);
+        const res = await fetch('/login', {
+          method: 'POST',
+          headers: { 'X-Requested-With': 'XMLHttpRequest' },
+          body: new FormData(form),
+        });
+        const data = await res.json();
+        if (res.ok && data.ok) {
+          window.location.href = data.next;
+          return;
+        }
+        btn.textContent = '進入系統';
+        if (res.status === 429) {
+          startThrottleCountdown(data.throttled);
+        } else {
+          document.getElementById('errMsg').style.display = 'block';
+          btn.disabled = false;
+        }
+      } catch (err) {
+        form.submit();
+      }
     });
 
     // 「重新選擇部門」：舊版單部門系統遺留的「返回入口」按鈕原本連到 /，
@@ -377,24 +412,31 @@
       document.getElementById('pw').focus();
     });
 
-    // ── 429 節流倒數（漸進增強：JS 掛掉時上面的靜態說明留著不動）───────
-    const throttled = parseInt(p.get('throttled') || '0', 10);
-    if (throttled > 0) {
+    // ── 429 節流倒數：URL 與 fetch 回應共用 ────────────────────────
+    let throttleTimer;
+    function startThrottleCountdown(seconds) {
+      clearInterval(throttleTimer);
+      const throttled = Math.ceil(Number(seconds));
+      if (!Number.isFinite(throttled) || throttled <= 0) {
+        throw new Error('Invalid throttle delay');
+      }
       const hint = document.getElementById('throttleHint');
       const pw = document.getElementById('pw');
       const btn = document.getElementById('submitBtn');
       hint.style.display = 'block';
       pw.disabled = true;
       btn.disabled = true;
+      btn.textContent = '進入系統';
+      document.getElementById('errMsg').style.display = 'none';
       let remain = throttled;
       const render = () => {
         hint.innerHTML = `密碼錯誤次數過多，已暫停登入。剩餘 <span class="count">${remain}</span> 秒後可再試一次。`;
       };
       render();
-      const timer = setInterval(() => {
+      throttleTimer = setInterval(() => {
         remain -= 1;
         if (remain <= 0) {
-          clearInterval(timer);
+          clearInterval(throttleTimer);
           hint.style.display = 'none';
           pw.disabled = false;
           btn.disabled = false;
@@ -403,12 +445,17 @@
           render();
         }
       }, 1000);
+    }
 
+    const throttled = parseInt(p.get('throttled') || '0', 10);
+    if (throttled > 0) {
+      startThrottleCountdown(throttled);
       // 避免使用者之後因 session 失效被導回登入頁時，殘留舊的倒數參數
       const cleanUrl = new URL(window.location.href);
       cleanUrl.searchParams.delete('throttled');
       window.history.replaceState({}, '', cleanUrl);
     }
+    })();
   </script>
 </body>
 </html>

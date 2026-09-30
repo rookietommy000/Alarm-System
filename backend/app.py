@@ -399,6 +399,7 @@ def create_app() -> Flask:
     @app.post("/login")
     @public_endpoint
     def login_submit():
+        wants_json = request.headers.get("X-Requested-With") == "XMLHttpRequest"
         pw = (request.form.get("password") or "").strip()
         form_department = (request.form.get("department") or "").strip()
 
@@ -407,18 +408,33 @@ def create_app() -> Flask:
         # 與雜湊比對，變成一個無節流、無稽核紀錄的密碼預言機（外部審查發現）。
         if _use_supabase():
             if not form_department:
+                if wants_json:
+                    return jsonify({"ok": False, "error": "密碼錯誤，請確認選擇的部門與密碼是否正確"}), 401
                 return redirect(url_for("login_page", error=1))
             # 一般部門登入一律需要 get_by_id（沒有 super admin 分岔），
             # 格式合法才查（同 _do_login 情況 1 的既有規則）。
             precheck = _fetch_login_precheck(form_department, need_dept_lookup=bool(DEPT_ID_RE.match(form_department)))
-            throttled = _check_login_throttle(precheck, login_page_endpoint="login_page")
-            if throttled is not None:
-                return throttled
+            if wants_json:
+                delay = max(
+                    _remaining_delay(precheck["n_fine"], precheck["last_fine"], n_threshold=1, n_offset=0),
+                    _remaining_delay(precheck["n_coarse"], precheck["last_coarse"], n_threshold=20, n_offset=19),
+                )
+                if delay > 0:
+                    return jsonify({"ok": False, "throttled": delay}), 429
+            else:
+                throttled = _check_login_throttle(precheck, login_page_endpoint="login_page")
+                if throttled is not None:
+                    return throttled
             role = _do_login(form_department, pw, admin=False, precheck=precheck)
             if role is None:
+                if wants_json:
+                    return jsonify({"ok": False, "error": "密碼錯誤，請確認選擇的部門與密碼是否正確"}), 401
                 return redirect(url_for("login_page", error=1))
             next_url = request.form.get("next") or request.args.get("next", "/app")
-            return redirect(next_url if next_url.startswith("/") else "/app")
+            next_url = next_url if next_url.startswith("/") else "/app"
+            if wants_json:
+                return jsonify({"ok": True, "next": next_url})
+            return redirect(next_url)
 
         # 本機/測試模式 fallback：.env 明文比對（只有 _use_supabase()=False 才會到這裡）
         if pw == os.environ.get("LOGIN_PASSWORD", ""):
@@ -426,7 +442,12 @@ def create_app() -> Flask:
             session["auth"] = True
             session["department"] = "local"
             next_url = request.form.get("next") or request.args.get("next", "/app")
-            return redirect(next_url if next_url.startswith("/") else "/app")
+            next_url = next_url if next_url.startswith("/") else "/app"
+            if wants_json:
+                return jsonify({"ok": True, "next": next_url})
+            return redirect(next_url)
+        if wants_json:
+            return jsonify({"ok": False, "error": "密碼錯誤，請確認選擇的部門與密碼是否正確"}), 401
         return redirect(url_for("login_page", error=1))
 
     @app.get("/logout")
