@@ -15,6 +15,7 @@
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
 <script src="/js/api.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="https://cdn.tailwindcss.com"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
@@ -530,8 +531,7 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
 
         <!-- ══ 警報管理 ══ -->
         <div v-if="page === 'alarms'" style="display:flex; flex-direction:column; gap:20px">
-          <section class="card blueprint" style="padding:16px; gap:12px">
-            <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+          <section class="card rounded-2xl shadow-lg ring-1 ring-black/5" style="padding:16px; gap:12px">
             <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px">
               <h2 style="font-size:18px">警報主檔 <span style="font-size:11px; font-family:var(--font-body); color:color-mix(in srgb, var(--color-text) 55%, transparent)">A-01</span></h2>
               <div class="alarm-toolbar" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
@@ -552,14 +552,13 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
                   <option :value="20">每頁 20 筆</option>
                   <option :value="50">每頁 50 筆</option>
                 </select>
-                <button v-if="!isAll" class="btn btn-primary blueprint toolbar-field" @click="newAlarm">
-                  <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+                <button v-if="!isAll" class="btn btn-primary toolbar-field rounded-full shadow-md hover:scale-105 transition-transform px-6 font-semibold" @click="newAlarm">
                   ＋ 新增警報
                 </button>
-                <button v-if="!isAll" class="btn btn-secondary toolbar-field" @click="openBulkImport">
+                <button v-if="!isAll" class="btn btn-secondary toolbar-field rounded-full" @click="openBulkImport">
                   批次匯入
                 </button>
-                <button v-if="!isAll" class="btn btn-secondary toolbar-field" @click="openVendorImport">
+                <button v-if="!isAll" class="btn btn-secondary toolbar-field rounded-full" @click="openVendorImport">
                   原廠檔案匯入
                 </button>
               </div>
@@ -584,8 +583,8 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
                     <span v-else style="color:color-mix(in srgb, var(--color-text) 50%, transparent)">—</span>
                   </td>
                   <td style="text-align:right; white-space:nowrap">
-                    <button class="btn btn-ghost" @click="openLocalEdit(a)">現場方案</button>
-                    <button class="btn btn-ghost" @click="editAlarm(a)">編輯</button>
+                    <button class="btn btn-ghost rounded-full" @click="openLocalEdit(a)">現場方案</button>
+                    <button class="btn btn-ghost rounded-full" @click="editAlarm(a)">編輯</button>
                   </td>
                 </tr>
               </tbody>
@@ -595,24 +594,23 @@ textarea.input { min-height: 90px; resize: vertical; font-family: inherit; }
             <div v-if="filteredAlarms.length" style="display:flex; align-items:center; justify-content:space-between; padding-top:6px">
               <span style="font-size:12px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">第 {{ alarmPageIdx+1 }} / {{ alarmTotalPages }} 頁 · 共 {{ filteredAlarms.length }} 筆 · 每頁 {{ alarmPageSize }} 筆</span>
               <div style="display:flex; gap:8px">
-                <button class="btn btn-secondary" @click="alarmPageIdx = Math.max(0, alarmPageIdx-1)" :disabled="alarmPageIdx===0">上一頁</button>
-                <button class="btn btn-secondary" @click="alarmPageIdx = Math.min(alarmTotalPages-1, alarmPageIdx+1)" :disabled="alarmPageIdx>=alarmTotalPages-1">下一頁</button>
+                <button class="btn btn-secondary rounded-full" @click="alarmPageIdx = Math.max(0, alarmPageIdx-1)" :disabled="alarmPageIdx===0">上一頁</button>
+                <button class="btn btn-secondary rounded-full" @click="alarmPageIdx = Math.min(alarmTotalPages-1, alarmPageIdx+1)" :disabled="alarmPageIdx>=alarmTotalPages-1">下一頁</button>
               </div>
             </div>
           </section>
 
-          <section class="card blueprint" style="padding:16px; gap:10px">
-            <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+          <section class="card rounded-2xl shadow-lg ring-1 ring-black/5" style="padding:16px; gap:10px">
             <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px">
               <h2 style="font-size:18px">操作歷史紀錄</h2>
               <span style="font-size:11px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">A-05</span>
             </div>
             <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
               <div style="display:flex; gap:4px">
-                <button class="btn btn-secondary" :class="{active: auditQuickKey==='today'}" @click="setAuditQuickRange('today'); loadAudit()">今天</button>
-                <button class="btn btn-secondary" :class="{active: auditQuickKey==='week'}" @click="setAuditQuickRange('week'); loadAudit()">本週</button>
-                <button class="btn btn-secondary" :class="{active: auditQuickKey==='month'}" @click="setAuditQuickRange('month'); loadAudit()">本月</button>
-                <button class="btn btn-secondary" :class="{active: auditQuickKey==='all'}" @click="setAuditQuickRange('all'); loadAudit()">全部</button>
+                <button class="btn btn-secondary rounded-full" :class="{active: auditQuickKey==='today'}" @click="setAuditQuickRange('today'); loadAudit()">今天</button>
+                <button class="btn btn-secondary rounded-full" :class="{active: auditQuickKey==='week'}" @click="setAuditQuickRange('week'); loadAudit()">本週</button>
+                <button class="btn btn-secondary rounded-full" :class="{active: auditQuickKey==='month'}" @click="setAuditQuickRange('month'); loadAudit()">本月</button>
+                <button class="btn btn-secondary rounded-full" :class="{active: auditQuickKey==='all'}" @click="setAuditQuickRange('all'); loadAudit()">全部</button>
               </div>
               <input class="input toolbar-field" type="date" style="width:150px" v-model="auditFilter.from" @change="auditQuickKey=''; loadAudit()">
               <span style="font-size:13px; color:color-mix(in srgb, var(--color-text) 55%, transparent)">~</span>
