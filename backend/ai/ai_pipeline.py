@@ -122,7 +122,7 @@ def _codes_only(items: list) -> list:
 
 
 def run_pipeline(image_b64: str, mime_type: str = "image/jpeg", known_model: str = None,
-                  *, department: Optional[str]) -> dict:
+                  *, department: Optional[str], upload_ms: Optional[float] = None) -> dict:
     """
     執行完整 AI 分析流程。
 
@@ -130,6 +130,12 @@ def run_pipeline(image_b64: str, mime_type: str = "image/jpeg", known_model: str
     部門範圍內（PLAN 3.5 節：不限縮會讓 A 部門的辨識歷史混進 B 部門候選建議
     清單，同時是正確性問題與資料洩漏問題）。None 為明確選擇，非預設值
     （PLAN 3.6/4.8 節）。
+
+    upload_ms: 呼叫端（app.py）量測的「端到端上傳」耗時（收到 request 到
+    解析出 image_b64 為止），純觀測用途，隨其餘分段計時一併寫進 ai_logs
+    的 extra.timings（29 秒拍照辨識延遲問題：先量出真實分佈，不要沒有
+    數據就猜優化方向）。None 代表呼叫端未提供（例如測試直接呼叫
+    run_pipeline 不經過 app.py 路由層），不計入 timings。
 
     回傳：
       {
@@ -173,6 +179,11 @@ def run_pipeline(image_b64: str, mime_type: str = "image/jpeg", known_model: str
         },
         "usage_with_outcome": None,
         "logged": False,  # 正常路徑（步驟 6）已經寫過 LOG 就不再重複補寫
+        # 29 秒拍照辨識延遲問題的分段計時，隨 log_scan() 的 extra.timings
+        # 一併寫進 ai_logs（不再只印 stderr）：純觀測，這個 dict 本身不影響
+        # 任何判斷分支。upload 段（app.py 量測，經 upload_ms 參數傳入）先
+        # 放進來，其餘段落由 _log_timing() 陸續補上。
+        "timings": ({"upload": round(upload_ms, 1)} if upload_ms is not None else {}),
     }
 
     def _write_failure_record(exc: Exception) -> dict:
@@ -204,7 +215,7 @@ def run_pipeline(image_b64: str, mime_type: str = "image/jpeg", known_model: str
             needs_model_selection=True,
             analyzer=_state["analyzer_meta"],
             usage=_state["usage_with_outcome"],
-            extra={"pipeline_error": str(exc), "scan_id": scan_id},
+            extra={"pipeline_error": str(exc), "scan_id": scan_id, "timings": _state["timings"]},
         )
         _state["logged"] = True
         return {
@@ -225,10 +236,13 @@ def run_pipeline(image_b64: str, mime_type: str = "image/jpeg", known_model: str
 
     def _log_timing(segment: str, elapsed_ms: float) -> None:
         # 比照 storage.py 的 throttle_timing 格式（同一套可觀測性慣例）。
-        # 純觀測用，不影響任何行為邏輯——29 秒的拍照辨識耗時目前完全
-        # 沒有分段數據，只能靠推測，這裡先量出五段真實分佈再決定要不要
-        # 動手優化（PLAN 拍照辨識效能優化：先量測，不要沒有數據就猜）。
+        # 純觀測用，不影響任何行為邏輯——29 秒的拍照辨識耗時原本完全沒有
+        # 分段數據只能靠推測，這裡量出各段真實分佈才能判斷優化方向
+        # （PLAN 拍照辨識效能優化：先量測，不要沒有數據就猜）。stderr
+        # 這行是既有的本機除錯輸出保留，timings dict 才是真正寫進
+        # ai_logs、供之後查詢分析用的資料。
         print(f"pipeline_timing[{segment}]: {elapsed_ms:.0f}ms", file=sys.stderr)
+        _state["timings"][segment] = round(elapsed_ms, 1)
 
     try:
         # 1. Analyzer 辨識
@@ -256,7 +270,9 @@ def run_pipeline(image_b64: str, mime_type: str = "image/jpeg", known_model: str
         )
 
         # 2. POST 層（若操作員已選機種，覆蓋 AI 辨識結果）
+        t0 = time.monotonic()
         valid_models = load_valid_models()
+        _log_timing("valid_models", (time.monotonic() - t0) * 1000)
         if known_model:
             raw["model"] = known_model
             raw["model_conf"] = 100
@@ -308,7 +324,7 @@ def run_pipeline(image_b64: str, mime_type: str = "image/jpeg", known_model: str
             needs_model_selection=result.get("needs_model_selection", False),
             analyzer=analyzer_meta,
             usage=_state["usage_with_outcome"],
-            extra={"scan_id": scan_record["scan_id"], "alerts": [a["code"] for a in alerts], "val_triggered": val["needs_reconfirm"]},
+            extra={"scan_id": scan_record["scan_id"], "alerts": [a["code"] for a in alerts], "val_triggered": val["needs_reconfirm"], "timings": _state["timings"]},
         )
         _log_timing("log", (time.monotonic() - t0) * 1000)
         _state["logged"] = True

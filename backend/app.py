@@ -1773,6 +1773,14 @@ def create_app() -> Flask:
     @app.post("/api/analyze")
     @login_required
     def analyze_image():
+        # 29 秒拍照辨識延遲問題的「端到端上傳」計時起點：進入視圖函式當下
+        # WSGI 已經在背景接收 request body，這裡量到的是「body 已在記憶體
+        # 、解析成 JSON 完成」為止，不是真正的網路傳輸時間（那段 Flask
+        # 視圖函式本身觀察不到，現有系統也沒有量測整條 wall-clock 的基礎
+        # 設施）——但這是目前能量到的、最接近「上傳」意涵的一段，純觀測
+        # 用途，隨其餘分段計時一併寫進 ai_logs（見 run_pipeline 的
+        # upload_ms 參數）。
+        _upload_t0 = time.monotonic()
         if is_superadmin():
             abort(400, "請以部門帳號操作")
         department = session.get("department")
@@ -1791,10 +1799,11 @@ def create_app() -> Flask:
         known_model = (body.get("model") or "").strip() or None
         if not image_b64:
             abort(400, "image (base64) 為必填")
+        upload_ms = (time.monotonic() - _upload_t0) * 1000
         try:
             from ai import run_pipeline, ValidModelsUnavailable
             return jsonify(run_pipeline(image_b64, mime_type, known_model=known_model,
-                                        department=department))
+                                        department=department, upload_ms=upload_ms))
         except ImportError:
             app.logger.exception("AI 模組未安裝")
             abort(503, "AI 模組未安裝")

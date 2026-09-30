@@ -727,10 +727,12 @@ class TestRunPipelineFailureRecording:
         logs = log_mod.load_logs(limit=50, event="scan")
         assert len(logs) == 1
 
-    def test_success_path_logs_all_five_timing_segments(self, pipeline_mem, monkeypatch, tmp_path, capsys):
+    def test_success_path_logs_all_timing_segments(self, pipeline_mem, monkeypatch, tmp_path, capsys):
         """效能優化前置：先量測、不要沒有數據就猜（PLAN 拍照辨識效能
-        優化）。這裡驗證五段計時 log 真的有輸出，不驗證數字本身（純觀測
-        用途，不影響行為邏輯，測太細反而在鎖死格式字串）。"""
+        優化）。這裡驗證各段計時 log 真的有輸出，不驗證數字本身（純觀測
+        用途，不影響行為邏輯，測太細反而在鎖死格式字串）。resolve/
+        valid_models 是這次（B2）補上的兩段，跟原本既有的五段一起驗證，
+        避免退化成只測舊有段落、漏了新段落的假陽性。"""
         tmp_path_mem, mem_mod, log_mod, pipeline_mod = pipeline_mem
         monkeypatch.setattr(pipeline_mod, "get_analyzer", lambda: _FakeAnalyzer())
 
@@ -740,8 +742,69 @@ class TestRunPipelineFailureRecording:
 
         pipeline_mod.run_pipeline("ZmFrZQ==", department="test_dept")
         stderr = capsys.readouterr().err
-        for segment in ("analyzer", "val", "mem", "alert", "log"):
+        for segment in ("analyzer", "valid_models", "resolve", "val", "mem", "alert", "log"):
             assert f"pipeline_timing[{segment}]:" in stderr, f"缺少 {segment} 段的計時 log"
+
+    def test_success_path_writes_timings_dict_into_ai_logs(self, pipeline_mem, monkeypatch, tmp_path):
+        """B2：分段計時不能只印 stderr（重啟服務就沒了），要能被查詢
+        分析，所以驗證重點是 ai_logs 裡的記錄本身帶著 timings 資料，
+        而不是只驗證 stderr 有沒有印出來（上面那條測試已經測過 stderr）。
+        upload_ms 是 app.py 路由層量的，run_pipeline() 直接呼叫時（這裡
+        的測試情境）沒有經過那層，所以不帶 upload 這個 key——這個測試
+        故意驗證這個「未提供時不硬塞一個假值」的行為，跟 upload_ms
+        參數本身 Optional 的設計對得上。"""
+        tmp_path_mem, mem_mod, log_mod, pipeline_mod = pipeline_mem
+        monkeypatch.setattr(pipeline_mod, "get_analyzer", lambda: _FakeAnalyzer())
+
+        devices_dir = tmp_path / "devices_data"
+        self._write_devices(devices_dir, [{"model": "PILM004", "active": True}])
+        monkeypatch.setenv("ALARM_DATA_DIR", str(devices_dir))
+
+        pipeline_mod.run_pipeline("ZmFrZQ==", department="test_dept")
+        logs = log_mod.load_logs(limit=50, event="scan")
+        assert len(logs) == 1
+        timings = logs[0]["timings"]
+        for segment in ("analyzer", "valid_models", "resolve", "val", "mem", "alert"):
+            assert segment in timings, f"ai_logs 的 timings 缺少 {segment} 段"
+            assert isinstance(timings[segment], (int, float))
+        assert "upload" not in timings, "run_pipeline() 未收到 upload_ms 時不該憑空出現 upload 這個 key"
+
+    def test_upload_ms_is_recorded_when_provided(self, pipeline_mem, monkeypatch, tmp_path):
+        """app.py 的 /api/analyze 會把量到的上傳耗時透過 upload_ms 傳進來，
+        這裡直接模擬那個呼叫慣例（不經過完整 Flask request，只驗證
+        run_pipeline() 這一端有沒有正確把值收進 timings）。"""
+        tmp_path_mem, mem_mod, log_mod, pipeline_mod = pipeline_mem
+        monkeypatch.setattr(pipeline_mod, "get_analyzer", lambda: _FakeAnalyzer())
+
+        devices_dir = tmp_path / "devices_data"
+        self._write_devices(devices_dir, [{"model": "PILM004", "active": True}])
+        monkeypatch.setenv("ALARM_DATA_DIR", str(devices_dir))
+
+        pipeline_mod.run_pipeline("ZmFrZQ==", department="test_dept", upload_ms=123.456)
+        logs = log_mod.load_logs(limit=50, event="scan")
+        assert logs[0]["timings"]["upload"] == 123.5  # round(123.456, 1)
+
+    def test_failure_path_also_writes_timings_dict(self, pipeline_mem, monkeypatch, tmp_path):
+        """失敗路徑（_write_failure_record）走的是另一個 log_scan() 呼叫點，
+        容易在改動時漏改其中一邊——這裡確保失敗路徑的 timings 也有寫入，
+        不是只有成功路徑有。"""
+        tmp_path_mem, mem_mod, log_mod, pipeline_mod = pipeline_mem
+
+        def _boom_analyze(self, image_b64, mime_type="image/jpeg"):
+            raise RuntimeError("模擬 analyzer 失敗")
+        monkeypatch.setattr(_FakeAnalyzer, "analyze", _boom_analyze)
+        monkeypatch.setattr(pipeline_mod, "get_analyzer", lambda: _FakeAnalyzer())
+
+        devices_dir = tmp_path / "devices_data"
+        self._write_devices(devices_dir, [{"model": "PILM004", "active": True}])
+        monkeypatch.setenv("ALARM_DATA_DIR", str(devices_dir))
+
+        pipeline_mod.run_pipeline("ZmFrZQ==", department="test_dept", upload_ms=50.0)
+        logs = log_mod.load_logs(limit=50, event="scan")
+        assert len(logs) == 1
+        timings = logs[0]["timings"]
+        assert timings["upload"] == 50.0
+        assert "analyzer" in timings, "analyzer 失敗前的計時（本身耗時）仍應被記錄"
 
 
 class TestRunConfirmation:
