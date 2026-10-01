@@ -153,7 +153,7 @@
     }
 
     #loginModal #deptField,
-    #loginModal input[type=password] {
+    #loginModal #pw {
       width: 100%;
       padding: 14px 16px;
       font-size: 15px;
@@ -167,9 +167,36 @@
     }
     #loginModal #deptField { margin-bottom: 12px; }
     #loginModal #deptField:focus,
-    #loginModal input[type=password]:focus { border-color: #4ddbc4; }
-    #loginModal input[type=password]::placeholder { color: #64748b; }
-    #loginModal input[type=password]:disabled { opacity: 0.5; cursor: not-allowed; }
+    #loginModal #pw:focus { border-color: #4ddbc4; }
+    #loginModal #pw::placeholder { color: #64748b; }
+    #loginModal #pw:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    #loginModal .password-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    #loginModal .password-toggle {
+      min-height: 44px;
+      padding: 8px 12px;
+      font: inherit;
+      font-size: 13px;
+      color: #e2e8f0;
+      background: #0f1923;
+      border: 1px solid rgba(255,255,255,0.25);
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    #loginModal .password-toggle[aria-pressed=true] {
+      color: #4ddbc4;
+      border-color: #4ddbc4;
+      background: rgba(77,219,196,0.12);
+    }
+    #loginModal .password-toggle:focus-visible {
+      outline: 2px solid #4ddbc4;
+      outline-offset: 2px;
+    }
 
     #loginModal button[type=submit] {
       width: 100%;
@@ -281,6 +308,10 @@
           placeholder="輸入部門密碼"
           required
         />
+        <div class="password-controls">
+          <button type="button" class="password-toggle" id="numericKeyboardBtn" aria-controls="pw" aria-pressed="false">數字鍵盤：關</button>
+          <button type="button" class="password-toggle" id="showPasswordBtn" aria-controls="pw" aria-pressed="false">顯示密碼：關</button>
+        </div>
       </div>
 
       <button type="submit" id="submitBtn">進入系統</button>
@@ -303,6 +334,27 @@
 
   <script>
     (() => {
+    const passwordInput = document.getElementById('pw');
+    const numericKeyboardBtn = document.getElementById('numericKeyboardBtn');
+    const showPasswordBtn = document.getElementById('showPasswordBtn');
+
+    numericKeyboardBtn.addEventListener('click', () => {
+      const enabled = passwordInput.getAttribute('inputmode') !== 'numeric';
+      if (enabled) passwordInput.setAttribute('inputmode', 'numeric');
+      else passwordInput.removeAttribute('inputmode');
+      numericKeyboardBtn.setAttribute('aria-pressed', String(enabled));
+      numericKeyboardBtn.textContent = enabled ? '數字鍵盤：開' : '數字鍵盤：關';
+      passwordInput.focus();
+    });
+
+    showPasswordBtn.addEventListener('click', () => {
+      const visible = passwordInput.type === 'password';
+      passwordInput.type = visible ? 'text' : 'password';
+      showPasswordBtn.setAttribute('aria-pressed', String(visible));
+      showPasswordBtn.textContent = visible ? '顯示密碼：開' : '顯示密碼：關';
+      passwordInput.focus();
+    });
+
     const p = new URLSearchParams(window.location.search);
     if (p.get('next')) document.getElementById('nextField').value = p.get('next');
     if (p.get('error')) document.getElementById('errMsg').style.display = 'block';
