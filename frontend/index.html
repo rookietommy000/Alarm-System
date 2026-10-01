@@ -1815,6 +1815,9 @@
   </script>
 
   <script>
+    const PHOTO_MAX_EDGE = 1280;
+    const PHOTO_JPEG_QUALITY = 0.7;
+
     const { createApp } = Vue;
     createApp({
       data() {
@@ -2304,8 +2307,8 @@
         // 光看 takePhoto() 整體測不出來）。srcW/srcH 已經小於等於
         // MAX_EDGE 時 scale 是 1，不會被放大（Math.min(1, ...) 這個
         // 上限），避免桌面測試用的假解析度或本來就小的影像被意外放大。
-        scaledPhotoSize(srcW, srcH, maxEdge = 1280) {
-          const scale = Math.min(1, maxEdge / Math.max(srcW, srcH));
+        scaledPhotoSize(srcW, srcH) {
+          const scale = Math.min(1, PHOTO_MAX_EDGE / Math.max(srcW, srcH));
           return { width: Math.round(srcW * scale), height: Math.round(srcH * scale) };
         },
 
@@ -2330,7 +2333,7 @@
               canvas.width = width;
               canvas.height = height;
               canvas.getContext('2d').drawImage(video, 0, 0, width, height);
-              const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+              const dataUrl = canvas.toDataURL('image/jpeg', PHOTO_JPEG_QUALITY);
               imageB64 = dataUrl.split(',')[1];
             }
           } catch {}

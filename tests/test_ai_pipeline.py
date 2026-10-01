@@ -743,7 +743,7 @@ class TestRunPipelineFailureRecording:
 
         pipeline_mod.run_pipeline("ZmFrZQ==", department="test_dept")
         stderr = capsys.readouterr().err
-        for segment in ("analyzer", "valid_models", "resolve", "val", "mem", "alert", "log"):
+        for segment in ("analyzer_init", "analyzer", "valid_models", "post_rules", "resolve", "val", "mem", "alert", "log"):
             assert f"pipeline_timing[{segment}]:" in stderr, f"缺少 {segment} 段的計時 log"
 
     def test_success_path_writes_timings_dict_into_ai_logs(self, pipeline_mem, monkeypatch, tmp_path):
@@ -765,10 +765,60 @@ class TestRunPipelineFailureRecording:
         logs = log_mod.load_logs(limit=50, event="scan")
         assert len(logs) == 1
         timings = logs[0]["timings"]
-        for segment in ("analyzer", "valid_models", "resolve", "val", "mem", "alert"):
+        for segment in ("analyzer_init", "analyzer", "valid_models", "post_rules", "resolve", "val", "mem", "alert"):
             assert segment in timings, f"ai_logs 的 timings 缺少 {segment} 段"
             assert isinstance(timings[segment], (int, float))
         assert "upload" not in timings, "run_pipeline() 未收到 upload_ms 時不該憑空出現 upload 這個 key"
+
+    @pytest.mark.parametrize("match_count", [0, 1, 2])
+    def test_translation_timing_only_for_multiple_candidates(self, pipeline_mem, monkeypatch, tmp_path, match_count):
+        _, _, log_mod, pipeline_mod = pipeline_mem
+        import storage
+        from types import SimpleNamespace
+
+        devices_dir = tmp_path / "devices_data"
+        self._write_devices(devices_dir, [{"model": "PILM004", "active": True}])
+        monkeypatch.setenv("ALARM_DATA_DIR", str(devices_dir))
+        clock = [0.0]
+        monkeypatch.setattr(pipeline_mod, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+
+        def get_analyzer():
+            clock[0] += 0.012
+            analyzer = _FakeAnalyzer()
+            raw = analyzer.analyze("")
+            raw["alarms"].append({"code": "0002", "conf": 92})
+            analyzer.analyze = lambda *args: raw
+            return analyzer
+
+        original_post_rules = pipeline_mod.apply_post_rules
+
+        def post_rules(*args, **kwargs):
+            clock[0] += 0.023
+            return original_post_rules(*args, **kwargs)
+
+        def load_translations():
+            clock[0] += 0.005
+            return {}
+
+        loader = Mock(side_effect=load_translations)
+        monkeypatch.setattr(pipeline_mod, "get_analyzer", get_analyzer)
+        monkeypatch.setattr(pipeline_mod, "apply_post_rules", post_rules)
+        monkeypatch.setattr(pipeline_mod, "_load_variant_translations", loader)
+        monkeypatch.setattr(storage.alarms_store, "find_by_code", lambda dept, model, code: [
+            {"code": code, "variant": str(i)} for i in range(match_count)
+        ])
+        result = pipeline_mod.run_pipeline("ZmFrZQ==", department="test_dept")
+        assert len(result["alarms"]) == 2
+        timings = log_mod.load_logs(limit=50, event="scan")[0]["timings"]
+        assert timings["analyzer_init"] == 12.0
+        assert timings["post_rules"] == 23.0
+        if match_count > 1:
+            assert loader.call_count == 2
+            assert timings["translations"] == 10.0
+            assert timings["resolve"] >= timings["translations"]
+        else:
+            loader.assert_not_called()
+            assert "translations" not in timings
 
     def test_upload_ms_is_recorded_when_provided(self, pipeline_mem, monkeypatch, tmp_path):
         """app.py 的 /api/analyze 會把量到的上傳耗時透過 upload_ms 傳進來，

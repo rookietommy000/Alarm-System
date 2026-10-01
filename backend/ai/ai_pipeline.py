@@ -18,7 +18,7 @@ AI 分析主流程（Pipeline）。
 
 import sys
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 from .ai_analyzer import get_analyzer
 from .ai_rules import apply_post_rules, load_valid_models
@@ -59,7 +59,8 @@ def _load_variant_translations() -> dict:
     return _variant_translations_cache
 
 
-def _resolve_alarm_codes(alarms: list, department: Optional[str], model: Optional[str]) -> list:
+def _resolve_alarm_codes(alarms: list, department: Optional[str], model: Optional[str],
+                         *, on_timing: Optional[Callable[[str, float], None]] = None) -> list:
     """拍照辨識故障修復（Q2）：AI 辨識+正規化後的 code 只是猜測值，且
     完全不知道 variant 概念（圖片辨識看不出閥門位置這類差異）。這裡用
     正規化過的 code 反查 DB 實際存在的紀錄，把猜測值換成資料庫裡真正
@@ -86,6 +87,8 @@ def _resolve_alarm_codes(alarms: list, department: Optional[str], model: Optiona
 
     from storage import alarms_store
 
+    # 多筆候選可能出現多次；回報累計耗時，resolve 仍包含這段時間。
+    translations_ms = 0.0
     resolved = []
     for alarm in alarms:
         rows = alarms_store.find_by_code(department, model, alarm["code"])
@@ -96,7 +99,11 @@ def _resolve_alarm_codes(alarms: list, department: Optional[str], model: Optiona
                 **alarm, **rows[0], "db_matched": True, "candidates": None,
             })
         else:
+            t_trans = time.monotonic()
             translations = _load_variant_translations()
+            translations_ms += (time.monotonic() - t_trans) * 1000
+            if on_timing is not None:
+                on_timing("translations", translations_ms)
 
             def _with_translation(row: dict) -> dict:
                 variant_text = row.get("variant") or ""
@@ -171,7 +178,9 @@ def run_pipeline(image_b64: str, mime_type: str = "image/jpeg", known_model: str
     忘記改另一邊。只有 analyzer/usage 這些「已經確定拿到、不隨後續步驟
     成敗而變動」的追溯資訊才保留下來一併記錄。
     """
+    t_init = time.monotonic()
     analyzer = get_analyzer()
+    analyzer_init_ms = (time.monotonic() - t_init) * 1000
     _state = {
         "analyzer_meta": {
             "name": getattr(analyzer, "analyzer_name", "unknown"),
@@ -245,6 +254,8 @@ def run_pipeline(image_b64: str, mime_type: str = "image/jpeg", known_model: str
         print(f"pipeline_timing[{segment}]: {elapsed_ms:.0f}ms", file=sys.stderr)
         _state["timings"][segment] = round(elapsed_ms, 1)
 
+    _log_timing("analyzer_init", analyzer_init_ms)
+
     try:
         # 1. Analyzer 辨識
         t0 = time.monotonic()
@@ -277,14 +288,18 @@ def run_pipeline(image_b64: str, mime_type: str = "image/jpeg", known_model: str
         if known_model:
             raw["model"] = known_model
             raw["model_conf"] = 100
+        t0 = time.monotonic()
         result = apply_post_rules(raw, valid_models, department=department)
+        _log_timing("post_rules", (time.monotonic() - t0) * 1000)
 
         # 2.5 DB 比對層（拍照辨識故障修復 Q2）：把 POST 層正規化過的
         # code 反查 DB 實際存在的紀錄，換成真正的 code/variant，前端
         # 不用再自己查一次 DB、自己做一次容易碰撞的 normalize 比對。
         t0 = time.monotonic()
         model = result.get("model")
-        result["alarms"] = _resolve_alarm_codes(result.get("alarms", []), department, model)
+        result["alarms"] = _resolve_alarm_codes(
+            result.get("alarms", []), department, model, on_timing=_log_timing,
+        )
         _log_timing("resolve", (time.monotonic() - t0) * 1000)
 
         # 3. VAL 層
