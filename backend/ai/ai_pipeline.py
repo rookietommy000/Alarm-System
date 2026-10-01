@@ -85,16 +85,6 @@ def _resolve_alarm_codes(alarms: list, department: Optional[str], model: Optiona
         return [{**a, "db_matched": False, "variant": None, "candidates": None} for a in alarms]
 
     from storage import alarms_store
-    translations = _load_variant_translations()
-
-    def _with_translation(row: dict) -> dict:
-        variant_text = row.get("variant") or ""
-        entry = translations.get(variant_text)
-        return {
-            **row,
-            "variant_zh": entry["zh"] if entry else None,
-            "translation_status": entry["status"] if entry else None,
-        }
 
     resolved = []
     for alarm in alarms:
@@ -106,6 +96,17 @@ def _resolve_alarm_codes(alarms: list, department: Optional[str], model: Optiona
                 **alarm, **rows[0], "db_matched": True, "candidates": None,
             })
         else:
+            translations = _load_variant_translations()
+
+            def _with_translation(row: dict) -> dict:
+                variant_text = row.get("variant") or ""
+                entry = translations.get(variant_text)
+                return {
+                    **row,
+                    "variant_zh": entry["zh"] if entry else None,
+                    "translation_status": entry["status"] if entry else None,
+                }
+
             resolved.append({
                 **alarm, "db_matched": True, "variant": None,
                 "candidates": [_with_translation(r) for r in rows],

@@ -13,6 +13,7 @@ import sys
 import tempfile
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -902,15 +903,24 @@ class TestResolveAlarmCodes:
         # 這個雙重 sys.path 的落差）。
         import storage as storage_mod
         from ai.ai_pipeline import _resolve_alarm_codes
+        import ai.ai_pipeline as pipeline_mod
+
+        load_translations = Mock()
+        monkeypatch.setattr(pipeline_mod, "_load_variant_translations", load_translations)
 
         monkeypatch.setattr(storage_mod.alarms_store, "find_by_code", lambda dept, model, code: [])
         result = _resolve_alarm_codes([{"code": "9999", "conf": 90}], "mf4d", "PILM004")
 
         assert result == [{"code": "9999", "conf": 90, "db_matched": False, "variant": None, "candidates": None}]
+        load_translations.assert_not_called()
 
     def test_single_match_replaces_code_and_fills_variant(self, monkeypatch):
         import storage as storage_mod
         from ai.ai_pipeline import _resolve_alarm_codes
+        import ai.ai_pipeline as pipeline_mod
+
+        load_translations = Mock()
+        monkeypatch.setattr(pipeline_mod, "_load_variant_translations", load_translations)
 
         monkeypatch.setattr(
             storage_mod.alarms_store, "find_by_code",
@@ -926,6 +936,7 @@ class TestResolveAlarmCodes:
             "code": "0001", "conf": 90, "variant": "V46403", "device_model": "PILM004",
             "db_matched": True, "candidates": None,
         }]
+        load_translations.assert_not_called()
 
     def test_multiple_matches_returns_candidates_with_translation_lookup(self, monkeypatch):
         """同 code 多 variant：不能隨便挑一筆當作正確答案，必須把全部
