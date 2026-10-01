@@ -19,6 +19,7 @@
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script src="/js/api.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
   <link rel="stylesheet" href="style.css" />
   <style>
     /* Topbar nav links */
@@ -830,6 +831,223 @@
     }
     .issue-report-modal .issue-alert-danger { background: var(--danger-soft-bg); color: var(--danger); }
     .issue-report-modal .issue-alert-success { background: rgba(52,211,153,0.12); color: var(--success); }
+    /* 可獨立移植的登入彈窗樣式；不依賴 Vue 或 Bootstrap。 */
+    #loginModal {
+      position: fixed;
+      inset: 0;
+      z-index: 2000;
+      display: flex;
+      overflow-y: auto;
+      padding: 24px;
+      background: rgba(0, 0, 0, 0.65);
+      font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+      color: #e2e8f0;
+    }
+    #loginModal[hidden] { display: none; }
+    #loginModal, #loginModal * { box-sizing: border-box; }
+    #loginModal p { margin-top: 0; }
+    #loginModal .card {
+      background: #192330;
+      border: 1px solid rgba(255,255,255,0.07);
+      border-radius: 16px;
+      padding: 36px clamp(20px, 5vw, 40px);
+      margin: auto;
+      flex-shrink: 0;
+      width: 100%;
+      max-width: 420px;
+      box-shadow: 0 24px 80px rgba(0,0,0,0.65);
+    }
+
+    #loginModal .title {
+      font-size: 22px;
+      font-weight: 600;
+      color: #e2e8f0;
+      letter-spacing: -0.3px;
+      margin-bottom: 6px;
+      text-align: center;
+    }
+    #loginModal .subtitle {
+      font-size: 13px;
+      color: #64748b;
+      text-align: center;
+      margin-bottom: 28px;
+    }
+
+    #loginModal .error-msg {
+      background: rgba(248,113,113,0.12);
+      color: #f87171;
+      font-size: 13px;
+      padding: 10px 14px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      text-align: center;
+      border: 1px solid rgba(248,113,113,0.25);
+    }
+    #loginModal .notice-msg {
+      background: rgba(251,191,36,0.1);
+      color: #fbbf24;
+      font-size: 13px;
+      padding: 12px 14px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      text-align: center;
+      border: 1px solid rgba(251,191,36,0.25);
+      line-height: 1.6;
+    }
+    #loginModal .notice-msg .count {
+      font-variant-numeric: tabular-nums;
+      font-weight: 700;
+      font-size: 15px;
+    }
+
+    #loginModal .field-label {
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #64748b;
+      margin-bottom: 8px;
+      display: block;
+    }
+
+    #loginModal .dept-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-bottom: 20px;
+      max-height: 244px; /* 約 4 張卡片高度，超過才出現捲軸，不牽動整頁高度 */
+      overflow-y: auto;
+    }
+    #loginModal .dept-option {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      width: 100%;
+      min-height: 52px;
+      padding: 10px 16px;
+      cursor: pointer;
+      text-align: left;
+      border: 1.5px solid rgba(255,255,255,0.14);
+      border-radius: 10px;
+      background: #0f1923;
+      color: #e2e8f0;
+      font-family: inherit;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    #loginModal .dept-option:hover { border-color: rgba(77,219,196,0.4); }
+    #loginModal .dept-option.selected {
+      border-color: #4ddbc4;
+      background: rgba(77,219,196,0.08);
+    }
+    #loginModal .dept-option .name { font-size: 16px; font-weight: 600; }
+    #loginModal .dept-option .code {
+      font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      color: #64748b;
+    }
+    #loginModal .dept-empty {
+      font-size: 13px;
+      color: #64748b;
+      padding: 12px 0;
+      text-align: center;
+    }
+
+    #loginModal .input-wrap {
+      position: relative;
+      margin-bottom: 12px;
+    }
+
+    #loginModal #deptField,
+    #loginModal input[type=password] {
+      width: 100%;
+      padding: 14px 16px;
+      font-size: 15px;
+      font-family: inherit;
+      border: 1.5px solid rgba(255,255,255,0.14);
+      border-radius: 10px;
+      background: #0f1923;
+      color: #e2e8f0;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    #loginModal #deptField { margin-bottom: 12px; }
+    #loginModal #deptField:focus,
+    #loginModal input[type=password]:focus { border-color: #4ddbc4; }
+    #loginModal input[type=password]::placeholder { color: #64748b; }
+    #loginModal input[type=password]:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    #loginModal button[type=submit] {
+      width: 100%;
+      padding: 14px;
+      background: #4ddbc4;
+      color: #0a1118;
+      font-size: 15px;
+      font-weight: 600;
+      font-family: inherit;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      transition: background 0.15s;
+      margin-top: 4px;
+    }
+    #loginModal button[type=submit]:hover { background: #3cc9b0; }
+    #loginModal button[type=submit]:active { background: #2bb8a0; }
+    #loginModal button[type=submit]:disabled {
+      background: rgba(255,255,255,0.1);
+      color: #64748b;
+      cursor: not-allowed;
+    }
+
+    #loginModal .back-btn {
+      font-family: inherit;
+      font-size: 13px;
+      color: #64748b;
+      text-decoration: none;
+      background: none;
+      border: 1px solid rgba(255,255,255,0.14);
+      border-radius: 8px;
+      padding: 8px 20px;
+      display: inline-block;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+    #loginModal .back-btn:hover { background: rgba(255,255,255,0.05); color: #e2e8f0; }
+
+    #loginModal .divider {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin: 28px 0;
+    }
+    #loginModal .divider::before, #loginModal .divider::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: rgba(255,255,255,0.08);
+    }
+    #loginModal .divider span {
+      font-size: 12px;
+      color: #64748b;
+      white-space: nowrap;
+    }
+
+    #loginModal .qr-wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+    }
+    #loginModal .qr-wrap canvas {
+      border-radius: 10px;
+      display: block;
+      background: #fff;
+      padding: 8px;
+    }
+    #loginModal .qr-hint {
+      font-size: 12px;
+      color: #64748b;
+    }
   </style>
 </head>
 <body class="has-bottom-nav">
@@ -1376,6 +1594,225 @@
       </div>
     </div>
   </div>
+
+  <!-- 登入彈窗獨立區塊：連同 #loginModal 樣式可移植至查詢頁。 -->
+  <div id="loginModal" hidden role="dialog" aria-modal="true" aria-labelledby="loginTitle">
+  <div class="card">
+    <p class="title" id="loginTitle">設備警報查詢系統</p>
+    <p class="subtitle">共用平板 · 請確認選擇的是你所在的部門</p>
+
+    <div class="error-msg" id="errMsg" role="alert" style="display:none">
+      密碼錯誤，請確認選擇的部門與密碼是否正確
+    </div>
+
+    <!-- 節流由伺服器驗證；JS 將提示換成倒數，無 JS 時由下方 noscript 說明。 -->
+    <div class="notice-msg" id="throttleHint" role="status" style="display:none">
+      若剛才輸入太多次密碼，系統會暫時暫停登入約 1 分鐘，請稍候再送出一次。
+    </div>
+
+    <form method="post" action="/login" id="loginForm">
+
+      <label class="field-label" for="deptField">部門</label>
+      <input type="text" name="department" id="deptField" value="" readonly autocomplete="username" />
+      <div class="dept-list" id="deptList">
+        <div class="dept-empty" id="deptLoading">載入部門清單中…</div>
+      </div>
+
+      <noscript><p class="notice-msg">請啟用 JavaScript 以選擇部門。連續登入失敗後，請稍候約 1 分鐘再試。</p></noscript>
+
+      <label class="field-label" for="pw">密碼</label>
+      <div class="input-wrap">
+        <input
+          type="password"
+          name="password"
+          id="pw"
+          autocomplete="current-password"
+          placeholder="輸入部門密碼"
+          required
+        />
+      </div>
+
+      <button type="submit" id="submitBtn">進入系統</button>
+    </form>
+
+    <div style="text-align:center; margin-top:16px; display:flex; gap:10px; justify-content:center;">
+      <button type="button" class="back-btn" id="resetDeptBtn">← 重新選擇部門</button>
+      <a href="/admin/login/__super__" class="back-btn">Super-Adim →</a>
+    </div>
+
+    <div class="divider"><span>或掃碼開啟</span></div>
+
+    <div class="qr-wrap">
+      <canvas id="qrCanvas" width="148" height="148"></canvas>
+      <span class="qr-hint">手機掃碼直接進入</span>
+    </div>
+  </div>
+
+  </div>
+
+  <script>
+    (() => {
+    const modal = document.getElementById('loginModal');
+    let pendingRetries = [];
+    AlarmApi.configure({
+      on401: (retryRequest) => new Promise((resolve, reject) => {
+        pendingRetries.push(() => retryRequest().then(resolve, reject));
+        if (modal.hidden) {
+          modal.hidden = false;
+          document.getElementById('pw').focus();
+        }
+      }),
+    });
+
+    if (window.QRCode) window.QRCode.toCanvas(document.getElementById('qrCanvas'), window.location.origin + '/', {
+      width: 148, margin: 1,
+      color: { dark: '#111111', light: '#ffffff' }
+    }, () => {});
+
+    // ── 部門清單載入 ──────────────────────────────────────────────
+    let selectedDept = '';
+    const deptField = document.getElementById('deptField');
+    const deptList = document.getElementById('deptList');
+
+    function selectDept(code, el) {
+      selectedDept = code;
+      deptField.value = code;
+      deptList.querySelectorAll('.dept-option').forEach(n => n.classList.remove('selected'));
+      el.classList.add('selected');
+    }
+
+    // 事件委派：綁在容器上、不逐一綁在動態按鈕上（見 admin-login.html 同樣的修正）。
+    deptList.addEventListener('click', (e) => {
+      const btn = e.target.closest('.dept-option');
+      if (!btn) return;
+      selectDept(btn.dataset.deptCode, btn);
+    });
+
+    // 記住這台裝置上次成功登入的部門，下次自動置頂＋預選——共用平板場景下
+    // 同一台裝置通常每天登入同一個部門，這比清單排序或搜尋框更貼近實際
+    // 使用模式（外部審查建議，見 PLAN）。純前端排序提示，不影響安全性：
+    // 密碼仍要輸入，且完整清單依然在下方，換部門一樣點得到。
+    const LAST_DEPT_KEY = 'alarmSystem.lastDept';
+
+    fetch('/api/departments/public').then(r => r.ok ? r.json() : []).then(depts => {
+      deptList.innerHTML = '';
+      if (!depts.length) {
+        deptList.innerHTML = '<div class="dept-empty">目前沒有可用的部門，請聯絡系統管理員</div>';
+        return;
+      }
+      const lastId = localStorage.getItem(LAST_DEPT_KEY);
+      if (lastId) {
+        const idx = depts.findIndex(d => d.id === lastId);
+        if (idx > 0) depts.unshift(depts.splice(idx, 1)[0]);
+      }
+      depts.forEach((d, i) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'dept-option';
+        btn.dataset.deptCode = d.id;
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'name';
+        nameSpan.textContent = d.name;
+        const codeSpan = document.createElement('span');
+        codeSpan.className = 'code';
+        codeSpan.textContent = d.id;
+        btn.appendChild(nameSpan);
+        btn.appendChild(codeSpan);
+        deptList.appendChild(btn);
+        if (i === 0) selectDept(d.id, btn);
+      });
+    }).catch(() => {
+      deptList.innerHTML = '<div class="dept-empty">部門清單載入失敗，請重新整理頁面</div>';
+    });
+
+    // fetch 漸進增強；網路或回應解析失敗時仍走原生 POST。
+    document.getElementById('loginForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const form = e.target;
+      const btn = document.getElementById('submitBtn');
+      if (btn.disabled) return;
+      btn.disabled = true;
+      btn.textContent = '登入中…';
+      document.getElementById('errMsg').style.display = 'none';
+      try {
+        if (selectedDept) localStorage.setItem(LAST_DEPT_KEY, selectedDept);
+        const res = await fetch('/login', {
+          method: 'POST',
+          headers: { 'X-Requested-With': 'XMLHttpRequest' },
+          body: new FormData(form),
+        });
+        const data = await res.json();
+        if (res.ok && data.ok) {
+          modal.hidden = true;
+          document.getElementById('pw').value = '';
+          btn.disabled = false;
+          btn.textContent = '進入系統';
+          // 先清空佇列，重送若再次遇到 401，仍可等待下一次登入。
+          const retries = pendingRetries;
+          pendingRetries = [];
+          retries.forEach(retry => retry());
+          return;
+        }
+        btn.textContent = '進入系統';
+        if (res.status === 429) {
+          startThrottleCountdown(data.throttled);
+        } else {
+          document.getElementById('errMsg').style.display = 'block';
+          btn.disabled = false;
+        }
+      } catch (err) {
+        form.submit();
+      }
+    });
+
+    // 「重新選擇部門」：舊版單部門系統遺留的「返回入口」按鈕原本連到 /，
+    // 但多部門改造後 / 只會重導到未登入時查不到資料的前台首頁，不是有意義
+    // 的返回點。改為清空目前選取狀態＋密碼欄，留在登入頁本身。
+    document.getElementById('resetDeptBtn').addEventListener('click', () => {
+      deptList.querySelectorAll('.dept-option').forEach(n => n.classList.remove('selected'));
+      selectedDept = '';
+      deptField.value = '';
+      document.getElementById('pw').value = '';
+      document.getElementById('pw').focus();
+    });
+
+    // ── 429 節流倒數：URL 與 fetch 回應共用 ────────────────────────
+    let throttleTimer;
+    function startThrottleCountdown(seconds) {
+      clearInterval(throttleTimer);
+      const throttled = Math.ceil(Number(seconds));
+      if (!Number.isFinite(throttled) || throttled <= 0) {
+        throw new Error('Invalid throttle delay');
+      }
+      const hint = document.getElementById('throttleHint');
+      const pw = document.getElementById('pw');
+      const btn = document.getElementById('submitBtn');
+      hint.style.display = 'block';
+      pw.disabled = true;
+      btn.disabled = true;
+      btn.textContent = '進入系統';
+      document.getElementById('errMsg').style.display = 'none';
+      let remain = throttled;
+      const render = () => {
+        hint.innerHTML = `密碼錯誤次數過多，已暫停登入。剩餘 <span class="count">${remain}</span> 秒後可再試一次。`;
+      };
+      render();
+      throttleTimer = setInterval(() => {
+        remain -= 1;
+        if (remain <= 0) {
+          clearInterval(throttleTimer);
+          hint.style.display = 'none';
+          pw.disabled = false;
+          btn.disabled = false;
+          // 倒數結束不自動送出——使用者可能已離開，或密碼欄是別人剛才留下的內容
+        } else {
+          render();
+        }
+      }, 1000);
+    }
+
+    })();
+  </script>
 
   <script>
     const { createApp } = Vue;

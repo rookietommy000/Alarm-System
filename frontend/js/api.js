@@ -5,6 +5,11 @@
 (function () {
   let whoamiCache = null;
   let whoamiPromise = null;
+  let on401Handler = null;
+
+  function configure(opts) {
+    if (opts && typeof opts.on401 === 'function') on401Handler = opts.on401;
+  }
 
   function loginUrlFor(path) {
     const admin = path.startsWith('/admin');
@@ -13,7 +18,7 @@
   }
 
   /**
-   * 統一 fetch：401 直接導向對應登入頁；429 回傳結構化的剩餘秒數，
+   * 統一 fetch：401 預設導向對應登入頁，可由頁面設定覆寫；429 回傳結構化的剩餘秒數，
    * 呼叫端自行決定怎麼顯示倒數，不在這裡耦合 UI。網路層失敗（斷網、
    * DNS 失敗、逾時等 fetch() 本身 reject 的情況，跟 HTTP 層回應
    * 4xx/5xx 是不同層級）統一包成 err.isNetworkError = true，呼叫端
@@ -34,6 +39,7 @@
       throw err;
     }
     if (r.status === 401) {
+      if (on401Handler) return on401Handler(() => apiFetch(url, options));
       location.href = loginUrlFor(location.pathname);
       // 導頁是非同步的，讓呼叫端的 await 停在這裡不再往下執行
       return new Promise(() => {});
@@ -90,5 +96,5 @@
     return whoamiPromise;
   }
 
-  window.AlarmApi = { get, post, put, delete: del, postForm, whoami };
+  window.AlarmApi = { get, post, put, delete: del, postForm, whoami, configure };
 })();

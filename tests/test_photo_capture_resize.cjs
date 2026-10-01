@@ -10,7 +10,8 @@ function page() {
     document: {addEventListener() {}}, window: {}, localStorage: {getItem() {return null;}},
     AlarmApi: {}, console, setTimeout: () => {}, clearTimeout: () => {}};
   for (const m of html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)) {
-    if (m[1].trim()) vm.runInNewContext(m[1], context);
+    // Vue 單元測試只載入應用；獨立登入 modal 由 test_deferred_auth_modal.cjs 覆蓋。
+    if (m[1].includes('createApp')) vm.runInNewContext(m[1], context);
   }
   const s = component.data();
   for (const [k, v] of Object.entries(component.methods)) s[k] = v.bind(s);
