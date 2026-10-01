@@ -309,7 +309,6 @@
           required
         />
         <div class="password-controls">
-          <button type="button" class="password-toggle" id="numericKeyboardBtn" aria-controls="pw" aria-pressed="false">數字鍵盤：關</button>
           <button type="button" class="password-toggle" id="showPasswordBtn" aria-controls="pw" aria-pressed="false">顯示密碼：關</button>
         </div>
       </div>
@@ -335,17 +334,7 @@
   <script>
     (() => {
     const passwordInput = document.getElementById('pw');
-    const numericKeyboardBtn = document.getElementById('numericKeyboardBtn');
     const showPasswordBtn = document.getElementById('showPasswordBtn');
-
-    numericKeyboardBtn.addEventListener('click', () => {
-      const enabled = passwordInput.getAttribute('inputmode') !== 'numeric';
-      if (enabled) passwordInput.setAttribute('inputmode', 'numeric');
-      else passwordInput.removeAttribute('inputmode');
-      numericKeyboardBtn.setAttribute('aria-pressed', String(enabled));
-      numericKeyboardBtn.textContent = enabled ? '數字鍵盤：開' : '數字鍵盤：關';
-      passwordInput.focus();
-    });
 
     showPasswordBtn.addEventListener('click', () => {
       const visible = passwordInput.type === 'password';
