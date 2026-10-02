@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>語音辨識準確率測試</title>
+<style>
+:root { color-scheme: light; font-family: system-ui, sans-serif; color: #182b40; background: #f1f5f9; }
+body { max-width: 1050px; margin: auto; padding: 24px 16px; }
+h1 { font-size: 1.8rem; } h2 { font-size: 1.2rem; }
+section { background: white; border: 1px solid #cad5e2; border-radius: 12px; padding: 20px; margin: 18px 0; }
+.notice { background: #fff2cd; border: 2px solid #986700; font-size: 1.1rem; }
+label { display: inline-block; margin: 8px 16px 8px 0; }
+input, select, button { font: inherit; padding: 10px; border: 1px solid #64748b; border-radius: 6px; max-width: 100%; box-sizing: border-box; }
+button { background: #174b7c; color: white; cursor: pointer; margin: 6px 6px 6px 0; }
+button:disabled { opacity: .45; cursor: default; }
+button.secondary { background: white; color: #174b7c; }
+#code { font: bold clamp(2.5rem, 10vw, 4rem) monospace; letter-spacing: .15em; margin: 16px 0; }
+.scroll { overflow-x: auto; } table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; border-bottom: 1px solid #d5dee8; padding: 10px; vertical-align: top; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; } .muted { color: #495e73; }
+:focus-visible { outline: 3px solid #bd6800; outline-offset: 3px; }
+</style>
+</head>
+<body>
+<h1>語音辨識準確率測試</h1>
+<section class="notice"><strong>本功能目前僅支援純數字格式的警報代碼，無法辨識含英文字母的代碼。</strong><p>例如 ZZS004、ZZA001 不適用。這是獨立測試工具，不會查詢或修改警報資料，也不是打字查詢的完整替代品。</p></section>
+<p>請在 HTTPS 或 localhost 開啟本頁。依畫面逐字唸出代碼，等到「聆聽中」再說話。語言固定 zh-TW，要求 3 個候選，每次只辨識一句。</p>
+<p>每題只有一次計分嘗試；只有自己唸錯或受到雜訊干擾才能作廢。每題最多作廢一次，重排到隊尾後不得再作廢。權限拒絕不計分，也不自動重試；調整權限後可另開一輪。</p>
+<p class="muted">結果僅留在本頁記憶體，重新整理會遺失；請先匯出。只暫存測試者與裝置名稱，儲存失敗不影響測試。</p>
+<p id="storage-note" role="status"></p>
+<section>
+<h2>測試條件</h2>
+<form id="setup">
+<label>測試者名稱 / ID <input id="tester" required maxlength="80" autocomplete="off"></label>
+<label>裝置型號 / 系統 / 瀏覽器版本 <input id="device" required maxlength="160" placeholder="例如 iPhone 15 / iOS / Safari"></label>
+<button id="begin" type="submit">建立測試輪次</button>
+</form>
+<p id="support" role="status"></p>
+<p class="muted">啟動期限 3 秒；onstart 後辨識期限 15 秒。補零寬度採本題預期代碼長度，是已知寬度的測試條件。</p>
+</section>
+<section aria-labelledby="question-title">
+<h2 id="question-title">目前題目</h2>
+<p id="progress">請先建立測試輪次。</p>
+<div id="code">—</div>
+<button id="record" disabled>開始錄音</button>
+<p id="status" role="status" aria-live="polite">尚未開始</p>
+<pre id="result"></pre>
+<label>作廢原因 <select id="void-reason"><option value="misread">我唸錯題目</option><option value="noise">環境雜訊干擾</option></select></label>
+<button id="void" class="secondary" disabled>作廢這次嘗試（我講錯了 / 有雜訊）</button>
+<button id="next" disabled>保留結果，下一題</button>
+</section>
+<section>
+<h2>統計摘要（依測試者、裝置及 UA 分組）</h2>
+<p>分母為所有非作廢、非權限拒絕的已結束嘗試，包含逾時與其他辨識失敗。無候選算未命中。Top-3 只看實際回傳的前三個候選，不補造候選。</p>
+<p>原始層直接比對引擎文字；正規化層比對 digits 與預期數字字串（保留前導零）；補零層比對完整代碼。平均候選數以未作廢且有回傳結果的嘗試計算。</p>
+<div id="summary"></div>
+<button id="json" disabled>匯出 JSON</button><button id="csv" disabled>匯出 CSV（Excel）</button>
+<p class="muted">匯出包含所有輪次、作廢及未計分記錄。CSV 每個候選一列，attempt_id 相同的是同一次嘗試，請勿以 CSV 列數作分母。文字欄位加單引號保護前導零及避免公式執行；JSON 保留未加工原文。</p>
+</section>
+<script src="voice-normalize.js"></script>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const CODES = ['0001', '0290', '30016', '0100', '0110', '0000', '12345', '0099'];
+const SETTINGS = { lang: 'zh-TW', maxAlternatives: 3, continuous: false, interimResults: false, start_timeout_ms: 3000, overall_timeout_ms: 15000, max_voids_per_question: 1 };
+const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+const normalizer = window.VoiceNormalize;
+const sessions = [];
+const attempts = [];
+let session = null, queue = [], pending = null, active = null;
+const labels = { result: '收到辨識結果', permission_denied: '權限拒絕 / 語音服務不允許', timeout: '逾時', error: '辨識錯誤', no_result: '結束但沒有結果', start_exception: '啟動拋出例外' };
+function storageFailure(error) {
+  console.warn('語音測試：無法暫存測試者資料', error);
+  $('storage-note').textContent = '無法使用本機儲存；仍可測試及匯出，重新整理後請重新填寫測試條件。';
+}
+try {
+  const saved = JSON.parse(localStorage.getItem('voice-test-profile-v1') || 'null');
+  if (saved && typeof saved.tester === 'string' && typeof saved.device === 'string') {
+    $('tester').value = saved.tester; $('device').value = saved.device;
+  }
+} catch (error) { storageFailure(error); }
+$('support').textContent = !normalizer ? '共用 voice-normalize.js 載入失敗，無法測試。' : !Recognition ? '此瀏覽器沒有 SpeechRecognition，無法測試。' : '已找到辨識 API；是否能實際啟動仍需按下錄音驗證。';
+$('begin').disabled = !Recognition || !normalizer;
+function eligible(a) { return !a.voided && a.status !== 'permission_denied'; }
+function score(candidates, expected) {
+  const values = {
+    raw: c => c.raw === expected,
+    normalized: c => c.normalized.digits === expected,
+    padded: c => c.padded.ok && c.padded.code === expected
+  };
+  return Object.fromEntries(Object.entries(values).map(([layer, hit]) => [layer, {
+    top1: candidates.length > 0 && hit(candidates[0]), top3: candidates.slice(0, 3).some(hit)
+  }]));
+}
+function summarize(records) {
+  const counted = records.filter(eligible);
+  const results = records.filter(a => !a.voided && a.status === 'result');
+  const scores = {};
+  for (const layer of ['raw', 'normalized', 'padded']) {
+    scores[layer] = {};
+    for (const top of ['top1', 'top3']) {
+      const hits = counted.filter(a => a.scores[layer][top]).length;
+      scores[layer][top] = { hits, denominator: counted.length, accuracy: counted.length ? hits / counted.length : null };
+    }
+  }
+  return { attempts: records.length, scored: counted.length, voided: records.filter(a => a.voided).length,
+    permission_denied: records.filter(a => a.status === 'permission_denied').length,
+    start_timeouts: records.filter(a => a.timeout_type === 'start').length,
+    overall_timeouts: records.filter(a => a.timeout_type === 'overall').length,
+    other_failures: records.filter(a => !a.voided && ['error', 'no_result', 'start_exception'].includes(a.status)).length,
+    result_attempts: results.length,
+    average_candidates: results.length ? results.reduce((n, a) => n + a.candidate_count, 0) / results.length : null, scores };
+}
+function groups() {
+  const map = new Map();
+  for (const a of attempts) {
+    const key = JSON.stringify([a.tester, a.device, a.user_agent]);
+    if (!map.has(key)) map.set(key, { tester: a.tester, device: a.device, user_agent: a.user_agent, records: [] });
+    map.get(key).records.push(a);
+  }
+  return [...map.values()].map(g => ({ tester: g.tester, device: g.device, user_agent: g.user_agent, ...summarize(g.records) }));
+}
+function renderSummary() {
+  $('summary').replaceChildren();
+  for (const g of groups()) {
+    const title = document.createElement('h3'); title.textContent = `${g.tester} · ${g.device}`;
+    const ua = document.createElement('p'); ua.textContent = g.user_agent;
+    const counts = document.createElement('p');
+    counts.textContent = `嘗試 ${g.attempts}，計分 ${g.scored}，作廢 ${g.voided}，權限拒絕 ${g.permission_denied}，啟動逾時 ${g.start_timeouts}，整體逾時 ${g.overall_timeouts}，其他失敗 ${g.other_failures}；平均候選數 ${g.average_candidates === null ? '—' : g.average_candidates.toFixed(2)}（${g.result_attempts} 次結果）。逾時與權限次數含作廢記錄。`;
+    const table = document.createElement('table');
+    const header = table.insertRow();
+    for (const label of ['比對層', 'Top-1', 'Top-3']) { const th = document.createElement('th'); th.textContent = label; header.append(th); }
+    for (const [layer, label] of [['raw', '原始文字'], ['normalized', '正規化'], ['padded', '補零後']]) {
+      const row = table.insertRow(); row.insertCell().textContent = label;
+      for (const top of ['top1', 'top3']) {
+        const s = g.scores[layer][top];
+        row.insertCell().textContent = s.accuracy === null ? '—（0 / 0）' : `${(s.accuracy * 100).toFixed(1)}%（${s.hits} / ${s.denominator}）`;
+      }
+    }
+    $('summary').append(title, ua, counts, table);
+  }
+  $('json').disabled = $('csv').disabled = !attempts.length || !!active;
+}
+function renderQuestion() {
+  $('record').disabled = !session || !queue.length || !!active || !!pending;
+  $('next').disabled = !pending;
+  $('void').disabled = !pending || pending.voided || queue[0].voids >= SETTINGS.max_voids_per_question;
+  $('begin').disabled = !Recognition || !normalizer || !!active || !!pending || queue.length > 0;
+  $('tester').disabled = $('device').disabled = $('begin').disabled;
+  $('code').textContent = queue.length ? queue[0].code : '—';
+  $('progress').textContent = session ? (queue.length ? `輪次 ${session.id}：剩餘 ${queue.length} 題（含目前題目）；本題已作廢 ${queue[0].voids} 次。` : '本輪已完成，可匯出結果或更換測試條件建立新輪次。') : '請先建立測試輪次。';
+}
+$('setup').onsubmit = event => {
+  event.preventDefault();
+  if (active || pending || queue.length || !Recognition || !normalizer) return;
+  const tester = $('tester').value.trim(), device = $('device').value.trim();
+  if (!tester || !device) { $('support').textContent = '請填寫測試者與裝置資料。'; return; }
+  session = { id: `${Date.now()}-${sessions.length + 1}`, tester, device, user_agent: navigator.userAgent,
+    started_at: new Date().toISOString(), completed_at: null, settings: { ...SETTINGS }, codes: [...CODES], normalizer_version: normalizer.VERSION };
+  sessions.push(session);
+  queue = CODES.map((code, i) => ({ id: i + 1, code, voids: 0 }));
+  try { localStorage.setItem('voice-test-profile-v1', JSON.stringify({ tester, device })); } catch (error) { storageFailure(error); }
+  $('status').textContent = '準備好了，請點擊開始錄音。'; $('result').textContent = '';
+  renderQuestion();
+};
+// Keep start() in this synchronous click stack: no await, promise, timer, or permission preflight.
+$('record').onclick = () => {
+  if (active || pending || !queue.length) return;
+  const question = queue[0];
+  const a = { attempt_id: `${session.id}-${attempts.length + 1}`, session_id: session.id,
+    tester: session.tester, device: session.device, user_agent: session.user_agent,
+    question_id: question.id, expected: question.code, expected_digits: question.code, width: question.code.length,
+    attempt_number: question.voids + 1, clicked_at: new Date().toISOString(), started_at: null, ended_at: null,
+    status: null, timeout_type: null, error: null, error_message: null, candidate_count: 0, candidates: [],
+    voided: false, void_reason: null, voided_at: null, scores: score([], question.code) };
+  let rec, startTimer, overallTimer, done = false;
+  active = a; $('result').textContent = ''; $('status').textContent = '等待引擎啟動…'; renderQuestion(); renderSummary();
+  function finish(status, details = {}) {
+    if (done) return;
+    done = true; clearTimeout(startTimer); clearTimeout(overallTimer);
+    Object.assign(a, details, { status, ended_at: new Date().toISOString() });
+    a.scores = score(a.candidates, a.expected);
+    attempts.push(a); pending = a; active = null;
+    // Detach before abort: abort/end callbacks must never count a second attempt.
+    if (rec) {
+      rec.onstart = rec.onresult = rec.onerror = rec.onend = rec.onnomatch = null;
+      try { rec.abort(); } catch (error) { console.warn('語音測試：停止引擎失敗', error); }
+    }
+    $('status').textContent = `${labels[status]}${a.timeout_type ? (a.timeout_type === 'start' ? '：引擎未啟動' : '：引擎啟動後未回應') : ''}${a.error ? `（${a.error}）` : ''}。請保留結果，或明確標記作廢。`;
+    $('result').textContent = JSON.stringify({ expected: a.expected, candidate_count: a.candidate_count, candidates: a.candidates, scores: a.scores, error: a.error, error_message: a.error_message }, null, 2);
+    renderQuestion(); renderSummary();
+  }
+  try {
+    rec = new Recognition();
+    rec.lang = SETTINGS.lang; rec.maxAlternatives = SETTINGS.maxAlternatives;
+    rec.continuous = false; rec.interimResults = false;
+    rec.onstart = () => {
+      if (done || a.started_at) return;
+      clearTimeout(startTimer); a.started_at = new Date().toISOString();
+      $('status').textContent = '聆聽中，請唸出畫面代碼…';
+      overallTimer = setTimeout(() => finish('timeout', { timeout_type: 'overall' }), SETTINGS.overall_timeout_ms);
+    };
+    rec.onresult = event => {
+      if (done) return;
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const result = event.results[i];
+        if (!result.isFinal) continue;
+        const candidates = Array.from(result, (candidate, rank) => {
+          const normalized = normalizer.normalizeSpokenCode(candidate.transcript);
+          return { rank: rank + 1, raw: candidate.transcript, confidence: candidate.confidence,
+            normalized, padded: normalizer.padToWidth(normalized.digits, a.width) };
+        });
+        finish('result', { candidates, candidate_count: result.length }); return;
+      }
+    };
+    rec.onerror = event => finish(['not-allowed', 'service-not-allowed'].includes(event.error) ? 'permission_denied' : 'error', { error: event.error, error_message: event.message || null });
+    rec.onnomatch = () => finish('no_result');
+    rec.onend = () => {
+      // Without onstart, retain the startup watchdog to diagnose silent startup failure.
+      if (a.started_at) finish('no_result');
+    };
+    startTimer = setTimeout(() => finish('timeout', { timeout_type: 'start' }), SETTINGS.start_timeout_ms);
+    rec.start();
+  } catch (error) {
+    finish(['NotAllowedError', 'SecurityError'].includes(error.name) ? 'permission_denied' : 'start_exception', { error: error.name, error_message: error.message });
+  }
+};
+function advance(voided) {
+  if (!pending || active) return;
+  const question = queue[0];
+  if (voided && question.voids >= SETTINGS.max_voids_per_question) return;
+  queue.shift();
+  if (voided) {
+    pending.voided = true; pending.void_reason = $('void-reason').value; pending.voided_at = new Date().toISOString();
+    question.voids++; queue.push(question);
+  }
+  pending = null;
+  if (!queue.length) session.completed_at = new Date().toISOString();
+  $('status').textContent = queue.length ? '下一題已準備好。' : '本輪測試完成。'; $('result').textContent = '';
+  renderQuestion(); renderSummary();
+}
+$('next').onclick = () => advance(false);
+$('void').onclick = () => advance(true);
+function payload() {
+  return { schema_version: 1, exported_at: new Date().toISOString(), settings: SETTINGS,
+    scoring_policy: 'Exact string matches; normalized expected retains leading zeros; padding width is expected length. Exclude voided and permission_denied; other failures count as misses.',
+    sessions, attempts: attempts.map(a => ({ ...a, included_in_accuracy: eligible(a) })), groups: groups(),
+    current: { session_id: session && session.id, pending_attempt_id: pending && pending.attempt_id, remaining_question_ids: queue.map(q => q.id) } };
+}
+function download(content, type, extension) {
+  const url = URL.createObjectURL(new Blob([content], { type }));
+  const link = document.createElement('a'); link.href = url; link.download = `voice-test-${Date.now()}.${extension}`;
+  document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+$('json').onclick = () => download(JSON.stringify(payload(), null, 2), 'application/json;charset=utf-8', 'json');
+function csvCell(value) {
+  // Prefix ALL strings, including user input / transcripts, so Excel never interprets formulas or codes.
+  const text = value == null ? '' : typeof value === 'string' ? "'" + value : String(value);
+  return '"' + text.replace(/"/g, '""') + '"';
+}
+$('csv').onclick = () => {
+  const columns = ['session_id', 'attempt_id', 'tester', 'device', 'user_agent', 'question_id', 'expected', 'expected_digits', 'width', 'attempt_number', 'clicked_at', 'started_at', 'ended_at', 'status', 'timeout_type', 'error', 'error_message', 'voided', 'void_reason', 'voided_at', 'included_in_accuracy', 'candidate_count', 'raw_top1', 'raw_top3', 'normalized_top1', 'normalized_top3', 'padded_top1', 'padded_top3', 'rank', 'raw', 'confidence', 'digits', 'normalize_ok', 'normalize_reason', 'dropped', 'padded_code', 'pad_ok', 'pad_reason', 'normalizer_version', 'lang', 'max_alternatives', 'start_timeout_ms', 'overall_timeout_ms'];
+  const rows = [columns.map(c => '"' + c + '"').join(',')];
+  for (const a of attempts) {
+    for (const c of a.candidates.length ? a.candidates : [null]) {
+      const row = { ...a, included_in_accuracy: eligible(a), rank: c?.rank, raw: c?.raw, confidence: c?.confidence,
+        digits: c?.normalized.digits, normalize_ok: c?.normalized.ok, normalize_reason: c?.normalized.reason,
+        dropped: c?.normalized.dropped, padded_code: c?.padded.code, pad_ok: c?.padded.ok, pad_reason: c?.padded.reason,
+        normalizer_version: normalizer.VERSION, lang: SETTINGS.lang, max_alternatives: SETTINGS.maxAlternatives,
+        start_timeout_ms: SETTINGS.start_timeout_ms, overall_timeout_ms: SETTINGS.overall_timeout_ms };
+      for (const layer of ['raw', 'normalized', 'padded']) for (const top of ['top1', 'top3']) row[`${layer}_${top}`] = a.scores[layer][top];
+      rows.push(columns.map(k => csvCell(row[k])).join(','));
+    }
+  }
+  download('\uFEFF' + rows.join('\r\n'), 'text/csv;charset=utf-8', 'csv');
+};
+window.addEventListener('beforeunload', event => {
+  if (attempts.length || active || queue.length) { event.preventDefault(); event.returnValue = ''; }
+});
+</script>
+</body>
+</html>
