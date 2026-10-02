@@ -63,6 +63,35 @@ def test_search_by_keyword(client):
     assert len(client.get("/api/alarms?q=不存在").get_json()) == 0
 
 
+@pytest.mark.parametrize("field", ["code", "description", "cause", "solution", "keywords"])
+@pytest.mark.parametrize("query,text,expected", [
+    ("arm", "Prealarm", False),
+    ("arm", "Alarm", False),
+    ("arm", "armature", False),
+    ("arm", "robotic arm failure", True),
+    (" ARM ", "robotic Arm failure", True),
+    ("0095", "00950", False),
+    ("0095", "0095", True),
+    ("e-514", "error e-514 detected", True),
+    ("e.514", "error ex514 detected", False),
+    ("e.514", "error e.514 detected", True),
+    ("預警", "端部成型材料預警", True),
+    ("arm預警", "prearm預警通知", True),
+    ("arm預警", "arm故障預警", False),
+])
+def test_search_query_boundaries(client, field, query, text, expected):
+    # 使用 fixture 的本機 JSON 資料，逐一確認所有搜尋欄位套用相同規則。
+    row = {"code": "E002", "device_model": "CNC-A100"}
+    row[field] = [text] if field == "keywords" else text
+    data_path = Path(os.environ["ALARM_DATA_DIR"]) / "alarms.json"
+    data_path.write_text(json.dumps([row], ensure_ascii=False), encoding="utf-8")
+
+    response = client.get("/api/alarms", query_string={"q": query})
+
+    assert response.status_code == 200
+    assert response.get_json() == ([row] if expected else [])
+
+
 def test_filter_by_device_and_severity(client):
     assert len(client.get("/api/alarms?device=CNC-A100").get_json()) == 1
     assert len(client.get("/api/alarms?device=OTHER").get_json()) == 0

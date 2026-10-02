@@ -51,6 +51,7 @@ ALARM_FIELDS = [
     "sol_steps", "variant",
 ]
 SEVERITIES = {"嚴重", "警告", "資訊"}
+_CJK_RE = re.compile(r"[一-鿿]")
 
 # 批次匯入上傳限制（PLAN 批次匯入 UI）：2MB 涵蓋單一機種的正常匯入量，
 # 超過這個大小的來源檔本身就該懷疑格式跑掉或混入非預期資料。刻意只在
@@ -730,8 +731,14 @@ def create_app() -> Flask:
                     a.get("cause", ""), a.get("solution", ""),
                     " ".join(a.get("keywords", [])),
                 ]).lower()
-                if q not in hay:
-                    return False
+                if _CJK_RE.search(q):
+                    # 中文或中英混合查詢維持 substring，避免 word boundary 破壞中文搜尋。
+                    if q not in hay:
+                        return False
+                else:
+                    # 英數／符號查詢採全詞匹配，排除子字串命中。
+                    if not re.search(r"\b" + re.escape(q) + r"\b", hay):
+                        return False
             return True
 
         return jsonify([a for a in items if match(a)])
