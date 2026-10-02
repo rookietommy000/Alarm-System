@@ -9,9 +9,14 @@ import base64
 import json
 import os
 import re
+import warnings
+
+import httpx
+from google import genai
+from google.genai import errors, types
 
 # prompt 版本號，改動 prompt 時遞增，讓歷史記錄可回溯比較
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v2"
 
 
 # ── 抽象介面 ────────────────────────────────────────────────────────────────
@@ -28,13 +33,13 @@ class BaseAnalyzer:
             "model": "PILM004",          # 辨識到的機種，None 表示無法辨識
             "model_conf": 85,            # 0-100，None 表示模型未回信心度
             "alarms": [
-                { "code": "E-514", "conf": 92, "note": "清晰可見" }
+                { "code": "E-514", "conf": 92 }
             ],
             "raw": "...",                # 原始 AI 回應，供 debug
             "analyzer": {
                 "name": "gemini",        # 追溯用：哪個 analyzer
                 "model": "gemini-flash-latest",
-                "prompt_version": "v1",
+                "prompt_version": "v2",
             }
         }
         """
@@ -51,7 +56,7 @@ _ALARM_PROMPT = """你是工廠設備警報辨識系統。請分析這張圖片�
   "model": "機種型號或null",
   "model_conf": 0到100的整數,
   "alarms": [
-    {"code": "警報代碼", "conf": 0到100的整數, "note": "簡短說明"}
+    {"code": "警報代碼", "conf": 0到100的整數}
   ]
 }
 
@@ -61,7 +66,6 @@ _ALARM_PROMPT = """你是工廠設備警報辨識系統。請分析這張圖片�
 - alarms: 圖片中所有可見的警報代碼，可能有多個
 - code: 原始警報代碼，保留原始格式（不要自行修改）
 - conf: 對該代碼的 OCR 信心度（整數，0~100）
-- note: 一句話說明（中文），描述代碼在圖片中的狀態
 - 若圖片完全沒有警報代碼，alarms 填空陣列 []
 - 校準標準：畫面清晰可完整辨識 → conf 85~100；部分模糊或遮擋 → 50~84；幾乎看不清 → 50 以下
 - 機種型號請精確抄錄，不要猜測或補全"""
@@ -73,8 +77,6 @@ class GeminiAnalyzer(BaseAnalyzer):
     analyzer_name = "gemini"
 
     def __init__(self):
-        import warnings
-        from google import genai
         self._client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
         self.analyzer_model = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash")
         if self.analyzer_model.endswith("-latest"):
@@ -85,9 +87,6 @@ class GeminiAnalyzer(BaseAnalyzer):
             )
 
     def analyze(self, image_b64: str, mime_type: str = "image/jpeg") -> dict:
-        from google.genai import errors, types
-        import httpx
-
         try:
             response = self._client.models.generate_content(
                 model=self.analyzer_model,
@@ -97,7 +96,10 @@ class GeminiAnalyzer(BaseAnalyzer):
                 ],
                 # 比照 LocalAnalyzer 的 timeout=30（秒）；SDK 的 timeout 單位是毫秒。
                 # 原本沒有設定，Gemini API 請求掛住時會無限期卡住整個 worker。
-                config=types.GenerateContentConfig(http_options=types.HttpOptions(timeout=30000)),
+                config=types.GenerateContentConfig(
+                    http_options=types.HttpOptions(timeout=30000),
+                    thinking_config=types.ThinkingConfig(thinking_budget=0),
+                ),
             )
         except httpx.TimeoutException as exc:
             # 我們主動斷線，沒有拿到任何回應——Gemini 那端有沒有處理完、
@@ -108,6 +110,8 @@ class GeminiAnalyzer(BaseAnalyzer):
             raise
         except errors.APIError as exc:
             # Gemini 明確回了 4xx/5xx，同樣沒有 usage_metadata 可讀。
+            if exc.code in (400, 422) and "thinking" in str(exc).lower():
+                exc.args = (f"Gemini 拒絕 thinking_config（thinking_budget=0）：{exc}",)
             exc.usage_outcome = "http_error"
             exc.usage = None
             raise
@@ -221,7 +225,6 @@ def _parse_response(raw: str, analyzer: "BaseAnalyzer | None" = None) -> dict:
         alarms.append({
             "code": str(a["code"]).strip(),
             "conf": alarm_conf,
-            "note": str(a.get("note", "")),
         })
 
     return {

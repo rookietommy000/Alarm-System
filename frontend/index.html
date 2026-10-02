@@ -2388,6 +2388,9 @@
           // 真的沒看到警報」混成同一種「未偵測到警報」畫面（PR-1：後端
           // 500/503 現在保證 /api/* 回合法 JSON，但前端仍要先判斷狀態碼，
           // 不能假設回應一定 ok、也不能對網路層錯誤裸 catch 成 null）。
+          this._lastAnalyzeClientMs = null;
+          const requestId = "client-" + Date.now();
+          const t0 = performance.now();
           const apiPromise = this.isDesktopDev
             ? mockApiResult()
             : (this.pendingImageB64
@@ -2396,12 +2399,20 @@
                     mime_type: this.pendingMimeType,
                     model: this.selectedCorrectModel,
                   }).then(async r => {
+                    this._lastAnalyzeClientMs = performance.now() - t0;
                     if (!r.ok) {
                       const body = await r.json().catch(() => ({}));
+                      console.log('[photo-analyze]', body.scan_id || requestId, 'client_ms=', this._lastAnalyzeClientMs, 'status=', r.status);
                       return { __httpError: true, status: r.status, message: body.error || `伺服器錯誤（${r.status}）` };
                     }
-                    return r.json();
-                  }).catch(() => ({ __httpError: true, status: 0, message: '網路連線失敗，請檢查網路後重試' }))
+                    const result = await r.json();
+                    console.log('[photo-analyze]', result.scan_id || requestId, 'client_ms=', this._lastAnalyzeClientMs, 'status=', r.status);
+                    return result;
+                  }).catch(() => {
+                    this._lastAnalyzeClientMs = performance.now() - t0;
+                    console.log('[photo-analyze]', requestId, 'client_ms=', this._lastAnalyzeClientMs, 'status=', 0);
+                    return { __httpError: true, status: 0, message: '網路連線失敗，請檢查網路後重試' };
+                  })
                 : Promise.resolve(null));
 
           await new Promise(r => setTimeout(r, 700));
