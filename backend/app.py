@@ -706,6 +706,65 @@ def create_app() -> Flask:
             result[k] = v
         return result
 
+    # ── Public read API（僅公開原廠欄位，部門由 path 指定）──────────────
+
+    def _strip_local_fields(row: dict) -> dict:
+        """公開欄位採獨立白名單；新增欄位預設不公開，避免洩漏現場資料。"""
+        public_fields = {
+            "department", "device_model", "code", "variant", "severity",
+            "description", "cause", "solution", "keywords", "sol_steps",
+        }
+        return {k: v for k, v in row.items() if k in public_fields}
+
+    @app.get("/api/public/alarms/<department>")
+    @public_endpoint
+    def list_public_alarms(department: str):
+        """免登入查詢單一啟用部門，不依賴 session 的權限範圍函式。"""
+        dept_row = _dept_cached(department)
+        if dept_row is None or not dept_row.get("active"):
+            abort(404, NOT_FOUND_MSG)
+        q = request.args.get("q", "").strip().lower()
+        device = request.args.get("device", "").strip()
+        severity = request.args.get("severity", "").strip()
+        items = alarms_store.load(department=department)
+
+        def match(a: dict) -> bool:
+            if device and a.get("device_model") != device:
+                return False
+            if severity and a.get("severity") != severity:
+                return False
+            if q:
+                hay = " ".join([
+                    a.get("code", ""), a.get("description", ""),
+                    a.get("cause", ""), a.get("solution", ""),
+                    " ".join(a.get("keywords", [])),
+                ]).lower()
+                if _CJK_RE.search(q):
+                    # 中文或中英混合查詢維持 substring，避免 word boundary 破壞中文搜尋。
+                    if q not in hay:
+                        return False
+                else:
+                    # 英數／符號查詢採全詞匹配，排除子字串命中。
+                    if not re.search(r"\b" + re.escape(q) + r"\b", hay):
+                        return False
+            return True
+
+        return jsonify([_strip_local_fields(a) for a in items if match(a)])
+
+    @app.get("/api/public/alarms/<department>/<device_model>/<code>")
+    @public_endpoint
+    def get_public_alarm(department: str, device_model: str, code: str):
+        dept_row = _dept_cached(department)
+        if dept_row is None or not dept_row.get("active"):
+            abort(404, NOT_FOUND_MSG)
+        variant = normalize_variant(request.args.get("variant", ""))
+        row = alarms_store.get_one(department=department, match={
+            "device_model": device_model, "code": code, "variant": variant,
+        })
+        if row is None:
+            abort(404, "找不到此警報代碼")
+        return jsonify(_strip_local_fields(row))
+
     # ── Read API (一般登入即可) ──────────────────────────────────────
 
     @app.get("/api/alarms")

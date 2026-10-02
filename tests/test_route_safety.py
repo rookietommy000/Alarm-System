@@ -198,6 +198,9 @@ def test_no_route_collapse_collisions(app):
 
     KNOWN_HARMLESS_COLLISIONS = {
         ("GET", "/<path:filename>", "root_redirect"),
+        # A9：缺段只命中 static；test_incomplete_public_paths_return_404 實測回 404。
+        ("GET", "/api/public/alarms/<department>", "static"),
+        ("GET", "/api/public/alarms/<department>/<device_model>/<code>", "static"),
         ("GET", "/api/alarms/<department>/<device_model>/<code>", "static"),
         ("GET", "/api/devices/<department>/<device_model>", "static"),
         # 缺部門僅命中不存在的靜態檔案；test_report_read_missing_department_returns_404 驗證。
