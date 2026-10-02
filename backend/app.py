@@ -93,7 +93,7 @@ def _validate_dept_name(name: str) -> None:
 # 沒對上任何路由規則」還是「部門解析失敗」——這不是放寬安全設計，訊息內容
 # 在四處都完全相同，只是把原本由 Werkzeug 決定的措辭換成我們自己控制的字串。
 NOT_FOUND_MSG = "找不到指定資源"
-_DUMMY_HASH = generate_password_hash("__never_matches__", method="pbkdf2:sha256")
+_DUMMY_HASH = generate_password_hash("__never_matches__", method="pbkdf2:sha256:100000")
 
 _TS_FRAC_RE = re.compile(r"(\.\d+)")
 _TS_SHORT_TZ_RE = re.compile(r"[+-]\d{2}$")
@@ -2123,8 +2123,8 @@ def create_app() -> Flask:
             abort(400, "密碼不可與總管理員密碼相同")
         dept = department_store.create(
             dept_id, name,
-            generate_password_hash(password, method="pbkdf2:sha256"),
-            generate_password_hash(admin_password, method="pbkdf2:sha256"),
+            generate_password_hash(password, method="pbkdf2:sha256:100000"),
+            generate_password_hash(admin_password, method="pbkdf2:sha256:100000"),
             hidden=bool(body.get("hidden", False)),
             purgeable=bool(body.get("purgeable", False)),
         )
@@ -2198,8 +2198,8 @@ def create_app() -> Flask:
                 abort(400, "密碼不可與總管理員密碼相同")
             department_store.update_password(
                 dept_id,
-                pw_hash=generate_password_hash(password, method="pbkdf2:sha256") if password else None,
-                admin_pw_hash=generate_password_hash(admin_password, method="pbkdf2:sha256") if admin_password else None,
+                pw_hash=generate_password_hash(password, method="pbkdf2:sha256:100000") if password else None,
+                admin_pw_hash=generate_password_hash(admin_password, method="pbkdf2:sha256:100000") if admin_password else None,
             )
             # 只記「reset_password 動作發生過」這個粗粒度事實，
             # before_value/after_value 皆不傳——不記是 password 還是
