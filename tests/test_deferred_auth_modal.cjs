@@ -38,10 +38,17 @@ function modal() {
   let timerId = 0;
   let loginResponse = response(200, {ok: true});
   const location = {href: 'http://localhost/'};
+  const windowListeners = {};
   const context = {
     AlarmApi: {configure(options) { configurations.push(options); }},
     document: {getElementById: element},
-    window: {location},
+    window: {
+      location,
+      addEventListener(event, listener) { windowListeners[event] = listener; },
+      removeEventListener(event) { delete windowListeners[event]; },
+      dispatchEvent(evt) { if (windowListeners[evt.type]) windowListeners[evt.type](evt); },
+    },
+    CustomEvent: class { constructor(type) { this.type = type; } },
     localStorage: {getItem() { return null; }, setItem() {}},
     FormData: class {},
     fetch: async url => {

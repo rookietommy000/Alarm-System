@@ -9,7 +9,7 @@ function page(post) {
   const timers = [];
   const fakeSetTimeout = (fn, ms) => {timers.push(fn); return timers.length;};
   const context = {Vue: {createApp(c) {component = c; return app;}}, navigator: {},
-    document: {addEventListener() {}}, window: {}, localStorage: {getItem() {return null;}},
+    document: {addEventListener() {}}, window: {addEventListener() {}, removeEventListener() {}}, localStorage: {getItem() {return null;}},
     AlarmApi: {post}, console, setTimeout: fakeSetTimeout, clearTimeout};
   for (const m of html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)) {
     // Vue 單元測試只載入應用；獨立登入 modal 由 test_deferred_auth_modal.cjs 覆蓋。
@@ -142,7 +142,7 @@ function pageWithRealMount(post, {modalCtor, refsAtMount} = {}) {
     hide() { this.shown = false; }
   };
   const context = {Vue: {createApp(c) {component = c; return app;}}, navigator: {},
-    document: {addEventListener() {}}, window: {}, localStorage: {getItem() {return null;}},
+    document: {addEventListener() {}}, window: {addEventListener() {}, removeEventListener() {}}, localStorage: {getItem() {return null;}},
     AlarmApi: {post, whoami: async () => ({auth:false, department:null}), get: async () => ({ok:true, json: async () => ([])})},
     bootstrap: {Modal: ModalCtor}, console, setTimeout: () => {}, clearTimeout};
   for (const m of html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)) {

@@ -1660,6 +1660,7 @@
         if (modal.hidden) {
           modal.hidden = false;
           document.getElementById('pw').focus();
+          window.dispatchEvent(new CustomEvent('alarm-session-expired'));
         }
       }),
     });
@@ -1913,6 +1914,7 @@
         },
       },
       mounted() {
+        window.addEventListener('alarm-session-expired', this.clearSessionResults);
         // whoami() 有內建快取（api.js 的 whoamiCache/whoamiPromise），
         // 這裡再呼叫一次不會重打 API。department namespace 要等這個
         // resolve 後才能正確讀取——this.whoami.department 在此之前
@@ -1932,6 +1934,9 @@
         }).catch(() => {});
         this.refreshViewStats();
       },
+      beforeUnmount() {
+        window.removeEventListener('alarm-session-expired', this.clearSessionResults);
+      },
       watch: {
         page(val) {
           if (val === 'camera') this.startCamera();
@@ -1939,6 +1944,36 @@
         }
       },
       methods: {
+        clearSessionResults() {
+          // 只重置結果顯示，保留相機、篩選條件、待辨識照片與表單草稿。
+          this.camState = 'live';
+          this.camResults = [];
+          this.aiResult = {
+            scan_id: null, model: '', modelConf: null, alarms: [], rejected_alarms: [],
+            needs_model_selection: false, validation: null, original_model: null, original_analyzer: null,
+          };
+          this.confirmError = '';
+          this.analyzeErrorMsg = '';
+          this.showCorrectionPicker = false;
+          this.items = [];
+          this.searchError = '';
+          this.recentQueries = [];
+          this.closeDataIssueModal();
+          this.selected = null;
+          this.localHistory = [];
+          this.showLocalHistory = false;
+          this.localEdit.show = false;
+          this.modelPicker = { show: false, code: '', candidates: [] };
+          this.feedbackStats = {};
+          this.viewStats = {};
+          this.aiUsageMonthCount = null;
+          // 結果面板卸載後重新接回既有串流，不重新要求相機權限。
+          this.$nextTick(() => {
+            if (this.camStream && this.$refs.videoEl) {
+              this.$refs.videoEl.srcObject = this.camStream;
+            }
+          });
+        },
         // 個人化空狀態引導（裝置端記憶，見 data() 的 recentDeviceModels/
         // recentQueries 說明）。key 用 department 當 namespace，不能只
         // 靠登出時清快取這道防線——查證過既有的登出清快取（見檔案結尾
