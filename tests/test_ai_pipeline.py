@@ -804,10 +804,12 @@ class TestRunPipelineFailureRecording:
         monkeypatch.setattr(pipeline_mod, "get_analyzer", get_analyzer)
         monkeypatch.setattr(pipeline_mod, "apply_post_rules", post_rules)
         monkeypatch.setattr(pipeline_mod, "_load_variant_translations", loader)
-        monkeypatch.setattr(storage.alarms_store, "find_by_code", lambda dept, model, code: [
+        batch_lookup = Mock(side_effect=lambda dept, model, codes: {code: [
             {"code": code, "variant": str(i)} for i in range(match_count)
-        ])
+        ] for code in codes})
+        monkeypatch.setattr(storage.alarms_store, "find_by_codes", batch_lookup)
         result = pipeline_mod.run_pipeline("ZmFrZQ==", department="test_dept")
+        batch_lookup.assert_called_once_with("test_dept", "PILM004", ["0001", "0002"])
         assert len(result["alarms"]) == 2
         timings = log_mod.load_logs(limit=50, event="scan")[0]["timings"]
         assert timings["analyzer_init"] == 12.0
@@ -958,7 +960,7 @@ class TestResolveAlarmCodes:
         load_translations = Mock()
         monkeypatch.setattr(pipeline_mod, "_load_variant_translations", load_translations)
 
-        monkeypatch.setattr(storage_mod.alarms_store, "find_by_code", lambda dept, model, code: [])
+        monkeypatch.setattr(storage_mod.alarms_store, "find_by_codes", lambda dept, model, codes: {code: [] for code in codes})
         result = _resolve_alarm_codes([{"code": "9999", "conf": 90}], "mf4d", "PILM004")
 
         assert result == [{"code": "9999", "conf": 90, "db_matched": False, "variant": None, "candidates": None}]
@@ -973,8 +975,8 @@ class TestResolveAlarmCodes:
         monkeypatch.setattr(pipeline_mod, "_load_variant_translations", load_translations)
 
         monkeypatch.setattr(
-            storage_mod.alarms_store, "find_by_code",
-            lambda dept, model, code: [{"code": "0001", "variant": "V46403", "device_model": model}],
+            storage_mod.alarms_store, "find_by_codes",
+            lambda dept, model, codes: {"0001": [{"code": "0001", "variant": "V46403", "device_model": model}]},
         )
         result = _resolve_alarm_codes([{"code": "0001", "conf": 90}], "mf4d", "PILM004")
 
@@ -1009,7 +1011,7 @@ class TestResolveAlarmCodes:
             {"code": "31033", "variant": "Guard door open CIP/SIP cabinet 1"},
             {"code": "31033", "variant": "沒有翻譯的英文原句"},
         ]
-        monkeypatch.setattr(storage_mod.alarms_store, "find_by_code", lambda dept, model, code: rows)
+        monkeypatch.setattr(storage_mod.alarms_store, "find_by_codes", lambda dept, model, codes: {code: rows for code in codes})
         result = _resolve_alarm_codes([{"code": "31033", "conf": 88}], "mf4c", "FILL203")
 
         assert result[0]["db_matched"] is True

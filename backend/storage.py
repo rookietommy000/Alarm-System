@@ -151,6 +151,11 @@ class JsonStore:
         return [row for row in self.load(department)
                 if row.get("device_model") == device_model and row.get("code") == code]
 
+    def find_by_codes(self, department: Optional[str], device_model: str, codes: list) -> dict:
+        """批次介面：沿用單筆查詢，保序去重並依 code 分組。"""
+        unique_codes = list(dict.fromkeys(codes))
+        return {c: self.find_by_code(department, device_model, c) for c in unique_codes}
+
     def save(self, items: list, department: Optional[str] = None, on_conflict: Optional[str] = None) -> None:
         with self._lock:
             write_items = [_device_payload_to_row(i) for i in items] if self.is_devices else items
@@ -451,6 +456,23 @@ class SupabaseStore:
             f"code=eq.{urllib.parse.quote(code, safe='')}",
         ]
         return self._req("GET", f"{self.table}?{'&'.join(qs_parts)}")
+
+    def find_by_codes(self, department: str, device_model: str, codes: list) -> dict:
+        """一次查詢多個 code，回傳 {code: [rows]}；空列表不發請求。"""
+        if not codes:
+            return {}
+        unique_codes = list(dict.fromkeys(codes))
+        qs_parts = [
+            "select=*",
+            f"department=eq.{urllib.parse.quote(department, safe='')}",
+            f"device_model=eq.{urllib.parse.quote(device_model, safe='')}",
+            f"code=in.({','.join(urllib.parse.quote(c, safe='') for c in unique_codes)})",
+        ]
+        rows = self._req("GET", f"{self.table}?{'&'.join(qs_parts)}")
+        grouped: dict = {c: [] for c in unique_codes}
+        for row in rows:
+            grouped.setdefault(row["code"], []).append(row)
+        return grouped
 
     def _row_key(self, row: dict) -> tuple:
         return tuple(str(row.get(f, "")) for f in self.pk_fields)

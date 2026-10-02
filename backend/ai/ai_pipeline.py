@@ -87,11 +87,14 @@ def _resolve_alarm_codes(alarms: list, department: Optional[str], model: Optiona
 
     from storage import alarms_store
 
+    codes = [alarm["code"] for alarm in alarms]
+    rows_by_code = alarms_store.find_by_codes(department, model, codes)
+
     # 多筆候選可能出現多次；回報累計耗時，resolve 仍包含這段時間。
     translations_ms = 0.0
     resolved = []
     for alarm in alarms:
-        rows = alarms_store.find_by_code(department, model, alarm["code"])
+        rows = rows_by_code.get(alarm["code"], [])
         if not rows:
             resolved.append({**alarm, "db_matched": False, "variant": None, "candidates": None})
         elif len(rows) == 1:
