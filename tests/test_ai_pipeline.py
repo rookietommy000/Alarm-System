@@ -166,6 +166,22 @@ class TestValidateModel:
         r = apply_post_rules(raw, valid_models=["PILM004"])
         assert r["needs_model_selection"] is True
 
+    @pytest.mark.parametrize("guess, expected", [
+        ("UNKNOWN", None), ("PILM004", "PILM004"),
+        ("pilm004", "PILM004"), (None, None),
+    ])
+    def test_model_guess_preserves_raw_value(self, guess, expected):
+        from ai.ai_rules import apply_post_rules
+        result = apply_post_rules(
+            {"model": guess, "model_conf": 80, "alarms": []},
+            valid_models=["PILM004"],
+        )
+        assert result["model"] == expected
+        assert result["model_guess"] == guess
+        assert result["model_valid"] is (expected is not None)
+        if expected is None:
+            assert result["needs_model_selection"] is True
+
     def test_analyzer_forwarded_in_result(self):
         """apply_post_rules 回傳值必須帶 analyzer，VAL 層才能取 profile。"""
         from ai.ai_rules import apply_post_rules
@@ -693,6 +709,7 @@ class TestRunPipelineFailureRecording:
         # 對外回應（PR-1 已保證這些路徑會回合法 JSON 而不是裸 HTML）。
         if failing_step == "analyzer":
             result = pipeline_mod.run_pipeline("ZmFrZQ==", department="test_dept")
+            assert result["model_guess"] is None
             assert result.get("pipeline_error"), "analyzer 失敗時應回傳降級 dict，帶 pipeline_error"
         else:
             with pytest.raises(Exception):
@@ -706,6 +723,36 @@ class TestRunPipelineFailureRecording:
         logs = log_mod.load_logs(limit=50, event="scan")
         assert len(logs) == 1, f"{failing_step} 失敗時 LOG 層應寫入恰好一筆記錄"
         assert logs[0]["level"] == "ERROR"
+
+    def test_unvalidated_guess_never_reaches_storage(self, pipeline_mem, monkeypatch):
+        _, mem_mod, _, pipeline_mod = pipeline_mem
+        analyzer = _FakeAnalyzer()
+        raw = analyzer.analyze("ZmFrZQ==")
+        raw.update(model="UNKNOWN_GUESS", model_conf=50)
+        monkeypatch.setattr(analyzer, "analyze", Mock(return_value=raw))
+        monkeypatch.setattr(pipeline_mod, "get_analyzer", lambda: analyzer)
+        monkeypatch.setattr(pipeline_mod, "load_valid_models", lambda: ["PILM004"])
+        resolve = Mock(wraps=pipeline_mod._resolve_alarm_codes)
+        record = Mock(wraps=pipeline_mod.record_scan)
+        load = Mock(wraps=pipeline_mod._load_records)
+        monkeypatch.setattr(pipeline_mod, "_resolve_alarm_codes", resolve)
+        monkeypatch.setattr(pipeline_mod, "record_scan", record)
+        monkeypatch.setattr(pipeline_mod, "_load_records", load)
+
+        result = pipeline_mod.run_pipeline("ZmFrZQ==", department="test_dept")
+
+        assert result["model"] is None
+        assert result["model_guess"] == "UNKNOWN_GUESS"
+        assert result["needs_model_selection"] is True
+        assert resolve.call_count == 1
+        assert resolve.call_args.args[2] is None
+        assert record.call_count == 1
+        assert record.call_args.kwargs["model"] is None
+        # corrections 查詢仍跳過，history 仍使用既有的 _unknown。
+        load.assert_called_once_with("history", "_unknown", department="test_dept")
+        history = mem_mod._load_records("history", "_unknown", department="test_dept")
+        assert len(history) == 1
+        assert history[0]["model"] is None
 
     def test_success_path_writes_exactly_one_record_not_two(self, pipeline_mem, monkeypatch, tmp_path):
         """正常成功路徑（沒有任何步驟失敗）只能有一筆記錄——這條測試

@@ -151,7 +151,7 @@ def run_pipeline(image_b64: str, mime_type: str = "image/jpeg", known_model: str
     回傳：
       {
         scan_id,
-        model, model_conf, model_valid, model_warning,
+        model, model_guess, model_conf, model_valid, model_warning,
         alarms, rejected_alarms, needs_model_selection,
         validation: { needs_reconfirm, reasons },
         alerts: [{ code, level, message, block }],
@@ -234,6 +234,7 @@ def run_pipeline(image_b64: str, mime_type: str = "image/jpeg", known_model: str
         return {
             "scan_id":             scan_id,
             "model":               None,
+            "model_guess":         None,
             "model_conf":          None,
             "model_valid":         False,
             "model_warning":       None,

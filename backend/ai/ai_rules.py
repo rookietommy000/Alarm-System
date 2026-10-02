@@ -89,6 +89,7 @@ def apply_post_rules(raw: dict, valid_models: list, department: Optional[str] = 
     回傳格式：
       {
         model: str | None,
+        model_guess: str | None,       # 僅供 UI 參考的原始猜測值
         model_conf: int,
         model_valid: bool,
         model_warning: str | None,      # 有警示時說明原因
@@ -98,6 +99,7 @@ def apply_post_rules(raw: dict, valid_models: list, department: Optional[str] = 
       }
     """
     model = raw.get("model") or None
+    model_guess = model  # 僅供顯示；查詢與寫入仍使用驗證後的 model
     raw_conf = raw.get("model_conf")
     # None = 模型未回信心度；沿用 None 語意，不強轉 0，以免掩蓋模型差異
     model_conf = int(raw_conf) if raw_conf is not None else None
@@ -126,6 +128,7 @@ def apply_post_rules(raw: dict, valid_models: list, department: Optional[str] = 
 
     return {
         "model": model,
+        "model_guess": model_guess,
         "model_conf": model_conf,
         "model_valid": model_valid,
         "model_warning": model_warning,

@@ -1182,7 +1182,10 @@
         <template v-else>
           <div class="confirm-header">
             <div class="confirm-title">無法辨識機種</div>
-            <div class="confirm-sub">請先選擇機台型號，再查詢警報代碼</div>
+            <div class="confirm-sub" v-if="aiResult.modelGuess">
+              AI 猜測可能是「{{ aiResult.modelGuess }}」，但不在已知機種清單內，請確認正確機種
+            </div>
+            <div class="confirm-sub" v-else>請先選擇機台型號，再查詢警報代碼</div>
           </div>
 
           <div class="confirm-fields">
@@ -1873,6 +1876,7 @@
             scan_id: null,
             model: '',
             modelConf: null,
+            modelGuess: null,
             alarms: [],
             rejected_alarms: [],
             needs_model_selection: false,
@@ -1949,7 +1953,7 @@
           this.camState = 'live';
           this.camResults = [];
           this.aiResult = {
-            scan_id: null, model: '', modelConf: null, alarms: [], rejected_alarms: [],
+            scan_id: null, model: '', modelConf: null, modelGuess: null, alarms: [], rejected_alarms: [],
             needs_model_selection: false, validation: null, original_model: null, original_analyzer: null,
           };
           this.confirmError = '';
@@ -2483,6 +2487,7 @@
                 scan_id: apiResult.scan_id || null,
                 model,
                 modelConf,
+                modelGuess: apiResult.model_guess || null,
                 alarms,
                 rejected_alarms: (apiResult.rejected_alarms || []).map((a, i) => ({ ...a, _id: i })),
                 needs_model_selection: false,
@@ -2523,7 +2528,7 @@
           this.pendingImageB64 = null;
           this.camResults = [];
           this.aiResult = {
-            scan_id: null, model: '', modelConf: null, alarms: [], rejected_alarms: [],
+            scan_id: null, model: '', modelConf: null, modelGuess: null, alarms: [], rejected_alarms: [],
             needs_model_selection: false, validation: null, original_model: null, original_analyzer: null,
           };
           this.$nextTick(() => {
