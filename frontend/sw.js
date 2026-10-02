@@ -24,7 +24,7 @@ const STATIC_SHELL = [
   '/js/api.js'
 ];
 
-const HTML_PATHS = ['/', '/app', '/admin', '/admin/dashboard', '/login', '/admin/login'];
+const HTML_PATHS = ['/', '/app', '/admin', '/login', '/admin/login'];
 
 self.addEventListener('install', event => {
   event.waitUntil(

@@ -2352,11 +2352,6 @@ def create_app() -> Flask:
     def pending_review_page():
         return _no_cache(send_from_directory(FRONTEND, "pending-review.html"))
 
-    @app.get("/admin/dashboard")
-    @admin_required
-    def admin_dashboard():
-        return redirect("/admin")
-
     # ── Error handlers ──────────────────────────────────────────────
 
     @app.errorhandler(400)
