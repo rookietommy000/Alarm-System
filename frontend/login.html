@@ -15,8 +15,8 @@
 
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
-      background: #0f1923;
-      color: #e2e8f0;
+      background: #f1f5f9;
+      color: #182b40;
       min-height: 100vh;
       display: flex;
       align-items: center;
@@ -32,29 +32,29 @@
       display: flex;
       overflow-y: auto;
       padding: 24px;
-      background: rgba(0, 0, 0, 0.65);
+      background: rgba(241, 245, 249, 0.92);
       font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
-      color: #e2e8f0;
+      color: #182b40;
     }
     #loginModal[hidden] { display: none; }
     #loginModal, #loginModal * { box-sizing: border-box; }
     #loginModal p { margin-top: 0; }
     #loginModal .card {
-      background: #192330;
-      border: 1px solid rgba(255,255,255,0.07);
+      background: #ffffff;
+      border: 1px solid rgba(0,0,0,0.08);
       border-radius: 16px;
       padding: 36px clamp(20px, 5vw, 40px);
       margin: auto;
       flex-shrink: 0;
       width: 100%;
       max-width: 420px;
-      box-shadow: 0 24px 80px rgba(0,0,0,0.65);
+      box-shadow: 0 24px 80px rgba(15,23,42,0.18);
     }
 
     #loginModal .title {
       font-size: 22px;
       font-weight: 600;
-      color: #e2e8f0;
+      color: #182b40;
       letter-spacing: -0.3px;
       margin-bottom: 6px;
       text-align: center;
@@ -120,10 +120,10 @@
       padding: 10px 16px;
       cursor: pointer;
       text-align: left;
-      border: 1.5px solid rgba(255,255,255,0.14);
+      border: 1.5px solid rgba(15,23,42,0.14);
       border-radius: 10px;
-      background: #0f1923;
-      color: #e2e8f0;
+      background: #f1f5f9;
+      color: #182b40;
       font-family: inherit;
       transition: border-color 0.15s, background 0.15s;
     }
@@ -157,10 +157,10 @@
       padding: 14px 16px;
       font-size: 15px;
       font-family: inherit;
-      border: 1.5px solid rgba(255,255,255,0.14);
+      border: 1.5px solid rgba(15,23,42,0.14);
       border-radius: 10px;
-      background: #0f1923;
-      color: #e2e8f0;
+      background: #f1f5f9;
+      color: #182b40;
       outline: none;
       transition: border-color 0.15s;
     }
@@ -192,9 +192,9 @@
       padding: 8px 12px;
       font: inherit;
       font-size: 13px;
-      color: #e2e8f0;
-      background: #0f1923;
-      border: 1px solid rgba(255,255,255,0.25);
+      color: #182b40;
+      background: #f1f5f9;
+      border: 1px solid rgba(15,23,42,0.25);
       border-radius: 8px;
       cursor: pointer;
     }
@@ -225,7 +225,7 @@
     #loginModal button[type=submit]:hover { background: #3cc9b0; }
     #loginModal button[type=submit]:active { background: #2bb8a0; }
     #loginModal button[type=submit]:disabled {
-      background: rgba(255,255,255,0.1);
+      background: rgba(15,23,42,0.1);
       color: #64748b;
       cursor: not-allowed;
     }
@@ -236,14 +236,14 @@
       color: #64748b;
       text-decoration: none;
       background: none;
-      border: 1px solid rgba(255,255,255,0.14);
+      border: 1px solid rgba(15,23,42,0.14);
       border-radius: 8px;
       padding: 8px 20px;
       display: inline-block;
       cursor: pointer;
       transition: background 0.15s, color 0.15s;
     }
-    #loginModal .back-btn:hover { background: rgba(255,255,255,0.05); color: #e2e8f0; }
+    #loginModal .back-btn:hover { background: rgba(15,23,42,0.05); color: #182b40; }
 
     #loginModal .divider {
       display: flex;
@@ -255,7 +255,7 @@
       content: '';
       flex: 1;
       height: 1px;
-      background: rgba(255,255,255,0.08);
+      background: rgba(15,23,42,0.08);
     }
     #loginModal .divider span {
       font-size: 12px;
