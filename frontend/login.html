@@ -10,7 +10,6 @@
   <title>登入 — 設備警報查詢系統</title>
   <link rel="icon" type="image/svg+xml" href="/icon.svg" />
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
-  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -264,22 +263,6 @@
       white-space: nowrap;
     }
 
-    #loginModal .qr-wrap {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 10px;
-    }
-    #loginModal .qr-wrap canvas {
-      border-radius: 10px;
-      display: block;
-      background: #fff;
-      padding: 8px;
-    }
-    #loginModal .qr-hint {
-      font-size: 12px;
-      color: #64748b;
-    }
   </style>
 </head>
 <body>
@@ -332,12 +315,6 @@
       <a href="/admin/login/__super__" class="back-btn">Super-Adim →</a>
     </div>
 
-    <div class="divider"><span>或掃碼開啟</span></div>
-
-    <div class="qr-wrap">
-      <canvas id="qrCanvas" width="148" height="148"></canvas>
-      <span class="qr-hint">手機掃碼直接進入</span>
-    </div>
   </div>
 
   </div>
@@ -358,11 +335,6 @@
     const p = new URLSearchParams(window.location.search);
     if (p.get('next')) document.getElementById('nextField').value = p.get('next');
     if (p.get('error')) document.getElementById('errMsg').style.display = 'block';
-
-    if (window.QRCode) window.QRCode.toCanvas(document.getElementById('qrCanvas'), window.location.origin + '/', {
-      width: 148, margin: 1,
-      color: { dark: '#111111', light: '#ffffff' }
-    }, () => {});
 
     // ── 部門清單載入 ──────────────────────────────────────────────
     let selectedDept = '';
