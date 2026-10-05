@@ -30,7 +30,11 @@ FRONTEND = BASE / "frontend"
 # 檔名 → 保留原因。空字典代表：frontend/ 下不允許任何未被路由服務的 HTML。
 # 新增孤兒檔案時，要嘛刪掉，要嘛在這裡登記原因（例如「刻意保留供未來
 # xxx 使用」），不能讓它安靜地留在目錄裡。
-KNOWN_UNUSED: dict[str, str] = {}
+KNOWN_UNUSED: dict[str, str] = {
+    "voice-test.html": "語音辨識準確率測試工具，刻意不掛路由（見該任務 brief）"
+                        "——獨立量測頁，不是正式查詢功能，用瀏覽器直接開啟"
+                        "本機檔案或部署後的靜態路徑即可使用，不需要 Flask 路由服務。",
+}
 
 
 def _served_html_filenames() -> set[str]:
