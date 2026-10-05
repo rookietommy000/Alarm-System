@@ -11,15 +11,22 @@ h1 { font-size: 1.8rem; } h2 { font-size: 1.2rem; }
 section { background: white; border: 1px solid #cad5e2; border-radius: 12px; padding: 20px; margin: 18px 0; }
 .notice { background: #fff2cd; border: 2px solid #986700; font-size: 1.1rem; }
 label { display: inline-block; margin: 8px 16px 8px 0; }
-input, select, button { font: inherit; padding: 10px; border: 1px solid #64748b; border-radius: 6px; max-width: 100%; box-sizing: border-box; }
-button { background: #174b7c; color: white; cursor: pointer; margin: 6px 6px 6px 0; }
+input, select, button { font: inherit; padding: 14px 16px; border: 1px solid #64748b; border-radius: 6px; max-width: 100%; box-sizing: border-box; min-height: 44px; }
+button { background: #174b7c; color: white; cursor: pointer; margin: 6px 6px 6px 0; min-width: 44px; }
 button:disabled { opacity: .45; cursor: default; }
 button.secondary { background: white; color: #174b7c; }
 #code { font: bold clamp(2.5rem, 10vw, 4rem) monospace; letter-spacing: .15em; margin: 16px 0; }
-.scroll { overflow-x: auto; } table { width: 100%; border-collapse: collapse; }
+.scroll, #summary { overflow-x: auto; } table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; border-bottom: 1px solid #d5dee8; padding: 10px; vertical-align: top; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; } .muted { color: #495e73; }
 :focus-visible { outline: 3px solid #bd6800; outline-offset: 3px; }
+@media (max-width: 480px) {
+  body { padding: 16px 12px; }
+  label { display: block; margin: 8px 0; }
+  label input, label select { display: block; width: 100%; margin-top: 4px; }
+  h1 { font-size: 1.4rem; }
+  button { width: 100%; margin: 6px 0; }
+}
 </style>
 </head>
 <body>
