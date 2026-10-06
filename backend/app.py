@@ -2408,6 +2408,11 @@ def create_app() -> Flask:
     def index():
         return _no_cache(send_from_directory(FRONTEND, "index.html"))
 
+    @app.get("/voice-test")
+    @public_endpoint
+    def voice_test_page():
+        return _no_cache(send_from_directory(FRONTEND, "voice-test.html"))
+
     @app.get("/admin")
     @admin_required
     def admin():
