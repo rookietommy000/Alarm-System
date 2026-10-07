@@ -1,0 +1,24 @@
+{
+  "name": "workspace-progress",
+  "displayName": "Workspace Progress",
+  "description": "Read-only task progress from session_status/events.jsonl",
+  "version": "0.1.0",
+  "publisher": "internal-tools",
+  "private": true,
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [{ "command": "workspaceProgress.openReport", "title": "進度：開啟 PROGRESS.md" }]
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "vscode:prepublish": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "20.11.30",
+    "@types/vscode": "1.85.0",
+    "typescript": "5.4.5"
+  }
+}
