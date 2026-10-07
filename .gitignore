@@ -9,6 +9,7 @@ __pycache__/
 .claude/*
 !.claude/skills/
 !.claude/hooks/
+!.claude/agents/
 .claude/settings.local.json
 Alerm Data/
 

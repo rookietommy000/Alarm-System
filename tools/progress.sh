@@ -76,8 +76,12 @@ def main():
     }
     payload = (json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
     # Descriptor 9 was opened by shell >>, never by truncating/replacing history.
-    with os.fdopen(9, "ab") as output:
+    with os.fdopen(9, "ab", closefd=False) as output:
         output.write(payload)
+    # Flush before unlocking; close the inherited descriptor before spawning.
+    fcntl.flock(9, fcntl.LOCK_UN)
+    os.close(9)
+    os.path.isfile(generator := os.path.join(os.path.dirname(os.path.dirname(path)), "tools", "generate_progress.sh")) and os.spawnl(os.P_WAIT, "/bin/sh", "sh", generator)
 
 
 try:
