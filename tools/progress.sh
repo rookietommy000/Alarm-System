@@ -82,6 +82,7 @@ def main():
     fcntl.flock(9, fcntl.LOCK_UN)
     os.close(9)
     os.path.isfile(generator := os.path.join(os.path.dirname(os.path.dirname(path)), "tools", "generate_progress.sh")) and os.spawnl(os.P_WAIT, "/bin/sh", "sh", generator)
+    os.path.isfile(notifier := os.path.join(os.path.dirname(os.path.dirname(path)), "tools", "notify_progress.sh")) and os.spawnl(os.P_WAIT, "/bin/sh", "sh", notifier, task, stage, title)
 
 
 try:
