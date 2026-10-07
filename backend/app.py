@@ -1,6 +1,7 @@
 import hmac
 import json
 import os
+import posixpath
 import re
 import socket
 import time
@@ -221,11 +222,24 @@ def create_app() -> Flask:
     # 不改 static_url_path 本身：那會牽動所有靜態資源的 URL、sw.js 的
     # STATIC_SHELL 清單、manifest.webmanifest 的 icons 路徑，且讓平板上
     # 既有的 Service Worker 快取全部失效，風險遠高於這裡要解決的問題。
-    # 改為只擋 .html 直接存取，零遷移成本。
+    # 改為依正規化路徑擋 .html 與後台專用 JS 直接存取，零遷移成本。
+    def _normalized_static_path():
+        return posixpath.normpath("/" + request.path.lstrip("/")).casefold()
+
+    # safe_join 會正規化送檔路徑，不能直接比對未正規化的 request.path。
     @app.before_request
     def _block_direct_html_access():
-        if request.path.endswith(".html"):
+        if _normalized_static_path().endswith(".html"):
             abort(404)  # 404 而非 403，不透露檔案是否存在
+
+    # 後台專用 JS 統一放在 frontend/admin-js/，禁止透過靜態路徑直接存取。
+    # 獨立於 HTML 防護；前後台共用的 /js/api.js 仍可公開存取。
+    # safe_join 會正規化送檔路徑，不能直接比對未正規化的 request.path。
+    @app.before_request
+    def _block_direct_admin_js_access():
+        path = _normalized_static_path()
+        if path == "/admin-js" or path.startswith("/admin-js/"):
+            abort(404)  # 不透露後台專用檔案是否存在
 
     # ── 4.2 節：啟動時 fail fast ────────────────────────────────────
     is_production = _is_production
